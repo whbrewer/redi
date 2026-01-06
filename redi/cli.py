@@ -350,6 +350,20 @@ def run_pipeline(
                 print_metric("Val", str(split.get("val_size", "N/A")))
                 print_metric("Test", str(split.get("test_size", "N/A")))
 
+        # Generate and save Data Card
+        print_section("Data Card")
+        try:
+            from .analyze import generate_report
+            report = generate_report(str(input_path))
+            datacard_path = ctx.output_dir / "DATA_CARD.md"
+            datacard_path.write_text(report)
+            if "saved_files" not in ctx.metadata:
+                ctx.metadata["saved_files"] = []
+            ctx.metadata["saved_files"].append(str(datacard_path))
+            print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+        except Exception as e:
+            print(f"    {Colors.YELLOW}⚠ Could not generate Data Card: {e}{Colors.END}")
+
         # Final status
         print()
         if error_count == 0:
