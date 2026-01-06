@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Drossfire Analysis Module
+REDI Analysis Module
 
 Data Card generation, readiness assessment, and pipeline recommendations.
 Based on the DRAI framework paper and Data Cards methodology.
@@ -713,7 +713,7 @@ def generate_report(file_path: str) -> str:
 
     output = []
     output.append("=" * 60)
-    output.append("Drossfire - Data Readiness Analysis")
+    output.append("REDI - Data Readiness Analysis")
     output.append("=" * 60 + "\n")
     output.append(data_card.to_markdown())
     output.append("\n" + "=" * 60 + "\n")

@@ -1,17 +1,12 @@
-# Drossfire
+# REDI - Readiness Engine for Data Integration
 
-**Data Readiness for AI** - A modular pipeline for transforming raw scientific data into AI-ready datasets.
-
-The name "Drossfire" evokes refining metal by burning away impurities (dross) to reveal pure, AI-ready data.
+A modular pipeline for transforming raw scientific data into AI-ready datasets.
 
 ## Installation
 
 ```bash
 # Activate the virtual environment
 source /opt/venvs/drai/bin/activate
-
-# Navigate to drossfire
-cd /home/w1b/drai/drossfire
 ```
 
 ## Quick Start
@@ -156,7 +151,7 @@ ctx = pipeline.execute(ctx)
 ## Project Structure
 
 ```
-drossfire/
+redi/
 ├── cli.py              # Command-line interface
 ├── analyze.py          # Data Card generation and analysis
 ├── pipeline/

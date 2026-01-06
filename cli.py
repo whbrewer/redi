@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Drossfire CLI - Data Readiness for AI Command Line Interface
+REDI CLI - Data Readiness for AI Command Line Interface
 
-Unified entry point for running Drossfire pipelines.
+Unified entry point for running REDI pipelines.
 
 Usage:
     python cli.py <input_file> [options]
@@ -34,7 +34,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("drossfire")
+logger = logging.getLogger("redi")
 
 
 def detect_domain(input_path: Path, columns: Optional[List[str]] = None) -> str:
@@ -75,7 +75,7 @@ def run_pipeline(
     stages: Optional[List[str]] = None,
     config: Optional[dict] = None
 ):
-    """Run the Drossfire pipeline"""
+    """Run the REDI pipeline"""
     from pipeline import Pipeline, PipelineStage, create_context
     from pipeline.ingest import get_ingest_steps
     from pipeline.preprocess import get_preprocess_steps
@@ -179,7 +179,7 @@ def analyze_dataset(input_path: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Drossfire - Data Readiness for AI Pipeline",
+        description="REDI - Data Readiness for AI Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -221,7 +221,7 @@ Examples:
 
     if ctx:
         print("\n" + "=" * 60)
-        print("Drossfire Pipeline Results")
+        print("REDI Pipeline Results")
         print("=" * 60)
         print(f"Input: {ctx.input_path}")
         print(f"Domain: {ctx.domain}")

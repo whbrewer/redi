@@ -1,8 +1,8 @@
-# Drossfire - Data Readiness for AI
+# REDI - Readiness Engine for Data Integration
 
 ## Description
 
-Drossfire transforms raw scientific data into AI-ready datasets. Use when the user wants to:
+REDI transforms raw scientific data into AI-ready datasets. Use when the user wants to:
 - Analyze a dataset for AI/ML readiness
 - Generate a Data Card documenting a dataset
 - Get preprocessing recommendations
@@ -15,7 +15,7 @@ Supports climate, materials science, life sciences, fusion, and HPC domains.
 
 ### Analyze a dataset
 ```bash
-cd /home/w1b/drai/drossfire
+cd /path/to/redis
 source /opt/venvs/drai/bin/activate
 python analyze.py <file_path>
 ```
