@@ -1,1 +1,7 @@
 __pycache__
+
+# Build artifacts
+*.egg-info/
+output/
+*.npz
+*.zarr/

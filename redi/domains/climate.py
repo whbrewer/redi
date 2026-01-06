@@ -298,15 +298,30 @@ def get_structure_steps():
 
                 ds = ctx.data
 
-                # Stack variables into single array [time, var, lat, lon] or [time, lat, lon, var]
-                arrays = []
-                var_names = []
+                # Group variables by shape - only stack variables with matching shapes
+                shape_groups = {}
                 for var in ds.data_vars:
-                    arrays.append(ds[var].values)
-                    var_names.append(var)
+                    shape = ds[var].shape
+                    if shape not in shape_groups:
+                        shape_groups[shape] = []
+                    shape_groups[shape].append(var)
 
-                # Stack along new axis
-                X = np.stack(arrays, axis=-1)  # [..., n_vars]
+                if not shape_groups:
+                    return ctx
+
+                # Use the group with the most variables, or the largest arrays
+                best_group = max(shape_groups.items(),
+                                key=lambda x: (len(x[1]), np.prod(x[0])))
+                target_shape, var_names = best_group
+
+                arrays = [ds[var].values for var in var_names]
+
+                if len(arrays) == 1:
+                    X = arrays[0]
+                    if X.ndim == 1:
+                        X = X.reshape(-1, 1)
+                else:
+                    X = np.stack(arrays, axis=-1)  # [..., n_vars]
 
                 ctx.data = {
                     "X": X.astype(np.float32),
@@ -314,8 +329,13 @@ def get_structure_steps():
                     "dimensions": list(ds.dims.keys())
                 }
 
+                # Note if some variables were excluded
+                excluded = [v for v in ds.data_vars if v not in var_names]
+                if excluded:
+                    logger.info(f"Excluded {len(excluded)} variables with different shapes: {excluded[:3]}...")
+
                 ctx.metadata["array_shape"] = X.shape
-                logger.info(f"Converted to numpy array: shape {X.shape}")
+                logger.info(f"Converted to numpy array: shape {X.shape}, variables: {var_names}")
 
             except Exception as e:
                 ctx.add_error(f"Error converting to numpy: {str(e)}")
@@ -329,33 +349,48 @@ def get_output_steps():
     """Get climate-specific output steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
-    class SaveZarr(PipelineStep):
-        """Save as Zarr store"""
+    class SaveClimateOutput(PipelineStep):
+        """Save climate data as Zarr or NPZ"""
 
-        name = "save_zarr"
+        name = "save_climate"
         stage = PipelineStage.OUTPUT
-        description = "Save climate data as Zarr store"
+        description = "Save climate data (Zarr for xarray, NPZ for numpy)"
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
-                import xarray as xr
+                import numpy as np
 
-                if not hasattr(ctx.data, 'to_zarr'):
-                    return ctx
+                ctx.output_dir.mkdir(parents=True, exist_ok=True)
+                saved_files = []
 
-                output_path = ctx.output_dir / "data.zarr"
-                ctx.data.to_zarr(output_path, mode='w')
+                # Handle xarray Dataset - save as Zarr
+                if hasattr(ctx.data, 'to_zarr'):
+                    output_path = ctx.output_dir / "data.zarr"
+                    ctx.data.to_zarr(output_path, mode='w')
+                    saved_files.append(str(output_path))
+                    ctx.metadata["output_format"] = "zarr"
+                    logger.info(f"Saved Zarr store to {output_path}")
 
-                ctx.metadata["saved_files"] = [str(output_path)]
-                ctx.metadata["output_format"] = "zarr"
-                logger.info(f"Saved Zarr store to {output_path}")
+                # Handle numpy dict - save as NPZ
+                elif isinstance(ctx.data, dict) and "X" in ctx.data:
+                    output_path = ctx.output_dir / "data.npz"
+                    np.savez_compressed(
+                        output_path,
+                        X=ctx.data["X"],
+                        variable_names=ctx.data.get("variable_names", []),
+                    )
+                    saved_files.append(str(output_path))
+                    ctx.metadata["output_format"] = "npz"
+                    logger.info(f"Saved NPZ to {output_path}, shape: {ctx.data['X'].shape}")
+
+                ctx.metadata["saved_files"] = saved_files
 
             except Exception as e:
-                ctx.add_error(f"Error saving Zarr: {str(e)}")
+                ctx.add_error(f"Error saving climate output: {str(e)}")
 
             return ctx
 
-    return [SaveZarr()]
+    return [SaveClimateOutput()]
 
 
 def get_full_pipeline():
