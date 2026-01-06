@@ -192,4 +192,4 @@ python cli.py /home/w1b/drai/hpc/ANL-ALCF-DJC-AURORA_20250127_20251031.csv -o ./
 ## References
 
 - [DRAI Framework Paper](https://doi.org/10.1145/3750720.3757282)
-- [Data Cards Paper](https://doi.org/10.1145/3531146.3533231O)
+- [Data Cards Paper](https://doi.org/10.1145/3531146.3533231)
