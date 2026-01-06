@@ -1,0 +1,351 @@
+"""
+DRAI Pipeline - Preprocess Stage
+
+Handles data cleaning, regridding, alignment, and anonymization.
+Domain-specific preprocessing is delegated to domain modules.
+
+Operations:
+- Handle missing values
+- Remove duplicates
+- Regrid (climate)
+- Align (fusion, life sciences)
+- Anonymize (life sciences)
+- Basic quality checks
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+from . import PipelineStep, PipelineStage, PipelineContext
+
+logger = logging.getLogger(__name__)
+
+
+class HandleMissingValues(PipelineStep):
+    """Handle missing values in tabular data"""
+
+    name = "handle_missing"
+    stage = PipelineStage.PREPROCESS
+    description = "Handle missing values (drop, fill, or impute)"
+
+    def __init__(self, strategy: str = "drop", fill_value: Any = None):
+        super().__init__()
+        self.strategy = strategy  # "drop", "fill", "mean", "median", "mode"
+        self.fill_value = fill_value
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import pandas as pd
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            df = ctx.data
+            missing_before = df.isna().sum().sum()
+
+            if self.strategy == "drop":
+                ctx.data = df.dropna()
+            elif self.strategy == "fill":
+                ctx.data = df.fillna(self.fill_value)
+            elif self.strategy == "mean":
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())
+                ctx.data = df
+            elif self.strategy == "median":
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+                ctx.data = df
+            elif self.strategy == "mode":
+                for col in df.columns:
+                    df[col] = df[col].fillna(df[col].mode().iloc[0] if not df[col].mode().empty else None)
+                ctx.data = df
+
+            missing_after = ctx.data.isna().sum().sum()
+            ctx.metadata["missing_values_handled"] = {
+                "strategy": self.strategy,
+                "before": int(missing_before),
+                "after": int(missing_after)
+            }
+            logger.info(f"Missing values: {missing_before} -> {missing_after} (strategy: {self.strategy})")
+
+        except ImportError:
+            ctx.add_error("pandas not installed")
+        except Exception as e:
+            ctx.add_error(f"Error handling missing values: {str(e)}")
+        return ctx
+
+
+class RemoveDuplicates(PipelineStep):
+    """Remove duplicate rows from tabular data"""
+
+    name = "remove_duplicates"
+    stage = PipelineStage.PREPROCESS
+    description = "Remove duplicate rows"
+
+    def __init__(self, subset: Optional[List[str]] = None, keep: str = "first"):
+        super().__init__()
+        self.subset = subset  # Columns to consider for duplicates
+        self.keep = keep  # "first", "last", or False
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import pandas as pd
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            before_count = len(ctx.data)
+            ctx.data = ctx.data.drop_duplicates(subset=self.subset, keep=self.keep)
+            after_count = len(ctx.data)
+
+            ctx.metadata["duplicates_removed"] = before_count - after_count
+            logger.info(f"Removed {before_count - after_count} duplicate rows")
+
+        except Exception as e:
+            ctx.add_error(f"Error removing duplicates: {str(e)}")
+        return ctx
+
+
+class ValidateDataTypes(PipelineStep):
+    """Validate and convert data types"""
+
+    name = "validate_dtypes"
+    stage = PipelineStage.PREPROCESS
+    description = "Validate and convert data types"
+
+    def __init__(self, type_mapping: Optional[Dict[str, str]] = None):
+        super().__init__()
+        self.type_mapping = type_mapping or {}
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import pandas as pd
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            # Auto-detect datetime columns
+            for col in ctx.data.columns:
+                if ctx.data[col].dtype == 'object':
+                    # Try to parse as datetime
+                    try:
+                        if any(keyword in col.lower() for keyword in ['date', 'time', 'timestamp']):
+                            ctx.data[col] = pd.to_datetime(ctx.data[col], errors='coerce')
+                    except Exception:
+                        pass
+
+            # Apply explicit type mapping
+            for col, dtype in self.type_mapping.items():
+                if col in ctx.data.columns:
+                    try:
+                        ctx.data[col] = ctx.data[col].astype(dtype)
+                    except Exception as e:
+                        logger.warning(f"Could not convert {col} to {dtype}: {e}")
+
+            ctx.metadata["dtypes_after"] = {col: str(dtype) for col, dtype in ctx.data.dtypes.items()}
+            logger.info("Data types validated")
+
+        except Exception as e:
+            ctx.add_error(f"Error validating data types: {str(e)}")
+        return ctx
+
+
+class HandleOutliers(PipelineStep):
+    """Detect and handle outliers using IQR or z-score"""
+
+    name = "handle_outliers"
+    stage = PipelineStage.PREPROCESS
+    description = "Detect and handle statistical outliers"
+
+    def __init__(self, method: str = "iqr", threshold: float = 1.5, action: str = "clip"):
+        super().__init__()
+        self.method = method  # "iqr" or "zscore"
+        self.threshold = threshold  # IQR multiplier or z-score threshold
+        self.action = action  # "clip", "remove", or "flag"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import pandas as pd
+            import numpy as np
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            numeric_cols = ctx.data.select_dtypes(include=['number']).columns
+            outliers_found = {}
+
+            for col in numeric_cols:
+                if self.method == "iqr":
+                    Q1 = ctx.data[col].quantile(0.25)
+                    Q3 = ctx.data[col].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower = Q1 - self.threshold * IQR
+                    upper = Q3 + self.threshold * IQR
+                elif self.method == "zscore":
+                    mean = ctx.data[col].mean()
+                    std = ctx.data[col].std()
+                    lower = mean - self.threshold * std
+                    upper = mean + self.threshold * std
+
+                outlier_mask = (ctx.data[col] < lower) | (ctx.data[col] > upper)
+                outliers_found[col] = int(outlier_mask.sum())
+
+                if self.action == "clip":
+                    ctx.data[col] = ctx.data[col].clip(lower=lower, upper=upper)
+                elif self.action == "remove":
+                    ctx.data = ctx.data[~outlier_mask]
+                elif self.action == "flag":
+                    ctx.data[f"{col}_outlier"] = outlier_mask
+
+            ctx.metadata["outliers"] = {
+                "method": self.method,
+                "threshold": self.threshold,
+                "action": self.action,
+                "found": outliers_found
+            }
+            logger.info(f"Outliers handled with {self.method} method")
+
+        except Exception as e:
+            ctx.add_error(f"Error handling outliers: {str(e)}")
+        return ctx
+
+
+class AnonymizePII(PipelineStep):
+    """Anonymize personally identifiable information"""
+
+    name = "anonymize_pii"
+    stage = PipelineStage.PREPROCESS
+    description = "Anonymize PII columns (hash or remove)"
+
+    PII_KEYWORDS = [
+        'name', 'email', 'phone', 'address', 'ssn', 'social_security',
+        'patient', 'patient_id', 'dob', 'birth', 'ip_address',
+        'credit_card', 'account_number'
+    ]
+
+    def __init__(self, columns: Optional[List[str]] = None, method: str = "hash"):
+        super().__init__()
+        self.columns = columns  # Explicit columns, or None for auto-detect
+        self.method = method  # "hash", "remove", or "mask"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import pandas as pd
+            import hashlib
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            # Auto-detect PII columns if not specified
+            pii_cols = self.columns or []
+            if not pii_cols:
+                for col in ctx.data.columns:
+                    if any(keyword in col.lower() for keyword in self.PII_KEYWORDS):
+                        pii_cols.append(col)
+
+            anonymized = []
+            for col in pii_cols:
+                if col not in ctx.data.columns:
+                    continue
+
+                if self.method == "hash":
+                    ctx.data[col] = ctx.data[col].apply(
+                        lambda x: hashlib.sha256(str(x).encode()).hexdigest()[:16] if pd.notna(x) else None
+                    )
+                elif self.method == "remove":
+                    ctx.data = ctx.data.drop(columns=[col])
+                elif self.method == "mask":
+                    ctx.data[col] = "***MASKED***"
+
+                anonymized.append(col)
+
+            ctx.metadata["pii_anonymized"] = {
+                "columns": anonymized,
+                "method": self.method
+            }
+            logger.info(f"Anonymized {len(anonymized)} PII columns")
+
+        except Exception as e:
+            ctx.add_error(f"Error anonymizing PII: {str(e)}")
+        return ctx
+
+
+class RegridClimate(PipelineStep):
+    """Regrid climate data to uniform resolution"""
+
+    name = "regrid_climate"
+    stage = PipelineStage.PREPROCESS
+    description = "Regrid climate data using xESMF"
+
+    def __init__(self, target_resolution: float = 1.0, method: str = "bilinear"):
+        super().__init__()
+        self.target_resolution = target_resolution  # degrees
+        self.method = method  # "bilinear", "conservative", "nearest_s2d"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        return ctx.domain == "climate" and ctx.metadata.get("file_format") in ["netcdf", "zarr"]
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import xarray as xr
+            import xesmf as xe
+            import numpy as np
+
+            if not hasattr(ctx.data, 'dims'):  # Not an xarray object
+                return ctx
+
+            ds = ctx.data
+
+            # Create target grid
+            lat_out = np.arange(-90, 90 + self.target_resolution, self.target_resolution)
+            lon_out = np.arange(0, 360, self.target_resolution)
+            ds_out = xr.Dataset({
+                'lat': (['lat'], lat_out),
+                'lon': (['lon'], lon_out),
+            })
+
+            # Build regridder
+            regridder = xe.Regridder(ds, ds_out, self.method)
+            ctx.data = regridder(ds)
+
+            ctx.metadata["regridded"] = {
+                "target_resolution": self.target_resolution,
+                "method": self.method
+            }
+            logger.info(f"Regridded to {self.target_resolution}° resolution")
+
+        except ImportError:
+            ctx.add_error("xesmf not installed - required for regridding")
+        except Exception as e:
+            ctx.add_error(f"Error regridding: {str(e)}")
+        return ctx
+
+
+# Convenience function to get standard preprocess steps
+def get_preprocess_steps(
+    domain: str = "general",
+    missing_strategy: str = "drop",
+    handle_outliers: bool = True
+) -> List[PipelineStep]:
+    """Get the standard preprocess pipeline steps"""
+    steps = [
+        HandleMissingValues(strategy=missing_strategy),
+        RemoveDuplicates(),
+        ValidateDataTypes(),
+    ]
+
+    if handle_outliers:
+        steps.append(HandleOutliers())
+
+    # Domain-specific steps
+    if domain == "climate":
+        steps.append(RegridClimate())
+    elif domain == "life_sciences":
+        steps.append(AnonymizePII())
+
+    return steps
+
+
+def preprocess(ctx: PipelineContext, **kwargs) -> PipelineContext:
+    """Run the preprocess stage standalone"""
+    from . import Pipeline
+
+    pipeline = Pipeline(ctx.domain)
+    for step in get_preprocess_steps(ctx.domain, **kwargs):
+        pipeline.add_step(step)
+
+    return pipeline.execute_stage(ctx, PipelineStage.PREPROCESS)
