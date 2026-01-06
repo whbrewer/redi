@@ -348,12 +348,55 @@ def get_output_steps():
     """Get climate-specific output steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
+    class TrainValTestSplit(PipelineStep):
+        """Split data into train/val/test sets"""
+
+        name = "train_val_test_split"
+        stage = PipelineStage.OUTPUT
+        description = "Split climate data into train/validation/test sets"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+                from sklearn.model_selection import train_test_split
+
+                if not isinstance(ctx.data, dict) or "X" not in ctx.data:
+                    return ctx
+
+                X = ctx.data["X"]
+                n_samples = X.shape[0]
+
+                # Split 80/10/10
+                indices = np.arange(n_samples)
+                train_idx, temp_idx = train_test_split(indices, test_size=0.2, random_state=42)
+                val_idx, test_idx = train_test_split(temp_idx, test_size=0.5, random_state=42)
+
+                ctx.data["train_idx"] = train_idx
+                ctx.data["val_idx"] = val_idx
+                ctx.data["test_idx"] = test_idx
+
+                ctx.metadata["split"] = {
+                    "train_size": len(train_idx),
+                    "val_size": len(val_idx),
+                    "test_size": len(test_idx)
+                }
+
+                logger.info(f"Split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
+
+            except ImportError:
+                # No sklearn, just note we didn't split
+                ctx.metadata["split"] = {"note": "sklearn not available"}
+            except Exception as e:
+                ctx.add_error(f"Error splitting data: {str(e)}")
+
+            return ctx
+
     class SaveClimateOutput(PipelineStep):
-        """Save climate data as Zarr or NPZ"""
+        """Save climate data as train/val/test NPZ files"""
 
         name = "save_climate"
         stage = PipelineStage.OUTPUT
-        description = "Save climate data (Zarr for xarray, NPZ for numpy)"
+        description = "Save climate data as train/val/test NPZ files"
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
@@ -370,17 +413,27 @@ def get_output_steps():
                     ctx.metadata["output_format"] = "zarr"
                     logger.info(f"Saved Zarr: {output_path}")
 
-                # Handle numpy dict - save as NPZ
+                # Handle numpy dict with splits - save train/val/test
                 elif isinstance(ctx.data, dict) and "X" in ctx.data:
-                    output_path = ctx.output_dir / "data.npz"
-                    np.savez_compressed(
-                        output_path,
-                        X=ctx.data["X"],
-                        variable_names=ctx.data.get("variable_names", []),
-                    )
-                    saved_files.append(str(output_path))
+                    X = ctx.data["X"]
+                    var_names = ctx.data.get("variable_names", [])
+
+                    if "train_idx" in ctx.data:
+                        # Save split files
+                        for split_name, idx_key in [("train", "train_idx"), ("val", "val_idx"), ("test", "test_idx")]:
+                            idx = ctx.data[idx_key]
+                            output_path = ctx.output_dir / f"{split_name}.npz"
+                            np.savez_compressed(output_path, X=X[idx], variable_names=var_names)
+                            saved_files.append(str(output_path))
+                        logger.info(f"Saved train/val/test NPZ files")
+                    else:
+                        # No split, save single file
+                        output_path = ctx.output_dir / "data.npz"
+                        np.savez_compressed(output_path, X=X, variable_names=var_names)
+                        saved_files.append(str(output_path))
+                        logger.info(f"Saved NPZ: {output_path}, shape: {X.shape}")
+
                     ctx.metadata["output_format"] = "npz"
-                    logger.info(f"Saved NPZ: {output_path}, shape: {ctx.data['X'].shape}")
 
                 ctx.metadata["saved_files"] = saved_files
 
@@ -389,7 +442,7 @@ def get_output_steps():
 
             return ctx
 
-    return [SaveClimateOutput()]
+    return [TrainValTestSplit(), SaveClimateOutput()]
 
 
 def get_full_pipeline():
