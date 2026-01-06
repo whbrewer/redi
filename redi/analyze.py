@@ -464,7 +464,7 @@ class DataAnalyzer:
         elif ext == ".json":
             self._analyze_json()
         elif ext in [".nc", ".nc4"]:
-            self._analyze_netcdf_stub()
+            self._analyze_netcdf()
         else:
             self.data_card.overview.description = f"Binary/specialized format: {ext}"
 
@@ -524,9 +524,102 @@ class DataAnalyzer:
         except Exception as e:
             self.data_card.overview.description = f"Error analyzing JSON: {str(e)}"
 
-    def _analyze_netcdf_stub(self):
-        self.data_card.characteristics.data_types = ["gridded", "multidimensional"]
-        self.data_card.overview.description = "NetCDF file - use xarray for detailed analysis"
+    def _analyze_netcdf(self):
+        """Analyze NetCDF file using xarray"""
+        try:
+            import xarray as xr
+
+            ds = xr.open_dataset(self.file_path)
+
+            # Get dimensions
+            dims = dict(ds.sizes)
+            variables = list(ds.data_vars)
+            coords = list(ds.coords)
+
+            # Calculate total records (product of dimensions or largest dimension)
+            if dims:
+                # Use the largest dimension as record count for display
+                self.data_card.overview.num_records = max(dims.values()) if dims else 0
+
+            # Number of features = number of data variables
+            self.data_card.overview.num_features = len(variables)
+
+            # Set data types
+            self.data_card.characteristics.data_types = ["gridded", "multidimensional", "netcdf"]
+
+            # Build description
+            dim_str = ", ".join(f"{k}={v}" for k, v in dims.items())
+            self.data_card.overview.description = f"NetCDF dataset with {len(variables)} variables, dimensions: {dim_str}"
+
+            # Extract features (variables)
+            features = []
+            for var in variables:
+                da = ds[var]
+                shape_str = str(da.shape)
+                dtype_str = str(da.dtype)
+
+                # Get variable attributes if available
+                desc = da.attrs.get('long_name', da.attrs.get('description', ''))
+                units = da.attrs.get('units', '')
+                if units:
+                    desc = f"{desc} [{units}]" if desc else f"[{units}]"
+
+                features.append({
+                    "name": var,
+                    "type": f"{dtype_str} {shape_str}",
+                    "description": desc
+                })
+
+            self.data_card.characteristics.features = features
+
+            # Extract temporal coverage
+            for time_name in ["time", "t", "TIME"]:
+                if time_name in ds.coords:
+                    time_coord = ds[time_name]
+                    try:
+                        start = str(time_coord.values[0])[:19]
+                        end = str(time_coord.values[-1])[:19]
+                        self.data_card.characteristics.temporal_coverage = f"{start} to {end}"
+                    except (IndexError, TypeError):
+                        pass
+                    break
+
+            # Extract spatial coverage
+            lat_range = None
+            lon_range = None
+
+            for lat_name in ["lat", "latitude", "LAT", "LATITUDE", "grid_center_lat"]:
+                if lat_name in ds.coords or lat_name in ds.data_vars:
+                    lat_data = ds[lat_name]
+                    lat_range = f"{float(lat_data.min()):.2f} to {float(lat_data.max()):.2f}"
+                    break
+
+            for lon_name in ["lon", "longitude", "LON", "LONGITUDE", "grid_center_lon"]:
+                if lon_name in ds.coords or lon_name in ds.data_vars:
+                    lon_data = ds[lon_name]
+                    lon_range = f"{float(lon_data.min()):.2f} to {float(lon_data.max()):.2f}"
+                    break
+
+            if lat_range and lon_range:
+                self.data_card.characteristics.spatial_coverage = f"Lat: {lat_range}, Lon: {lon_range}"
+
+            # Store additional metadata
+            self._netcdf_metadata = {
+                "dimensions": dims,
+                "variables": variables,
+                "coordinates": coords,
+                "global_attrs": dict(ds.attrs)
+            }
+
+            ds.close()
+
+        except ImportError:
+            # Fall back to stub if xarray not available
+            self.data_card.characteristics.data_types = ["gridded", "multidimensional"]
+            self.data_card.overview.description = "NetCDF file - install xarray for detailed analysis"
+        except Exception as e:
+            self.data_card.characteristics.data_types = ["gridded", "multidimensional"]
+            self.data_card.overview.description = f"NetCDF file - error during analysis: {str(e)}"
 
     def _infer_column_type(self, sample_rows: List[List[str]], col_idx: int) -> str:
         if not sample_rows:

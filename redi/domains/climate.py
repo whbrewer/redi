@@ -40,7 +40,15 @@ def get_ingest_steps():
         description = "Load NetCDF/Zarr climate data with xarray"
 
         def validate(self, ctx: PipelineContext) -> bool:
-            return ctx.metadata.get("file_format") in ["netcdf", "zarr", "grib"]
+            # Check metadata or detect from extension
+            fmt = ctx.metadata.get("file_format")
+            if not fmt:
+                ext = ctx.input_path.suffix.lower()
+                fmt = {".nc": "netcdf", ".nc4": "netcdf", ".zarr": "zarr",
+                       ".grib": "grib", ".grib2": "grib"}.get(ext)
+                if fmt:
+                    ctx.metadata["file_format"] = fmt
+            return fmt in ["netcdf", "zarr", "grib"]
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:

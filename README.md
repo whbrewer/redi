@@ -25,6 +25,68 @@ pip install -e ".[hdf5]"         # HDF5 output support
 pip install -e ".[torch]"        # PyTorch tensor support
 ```
 
+### Climate Domain Setup (ESMF/xesmf)
+
+The climate domain uses [xesmf](https://xesmf.readthedocs.io/) for regridding, which requires [ESMF](https://earthsystemmodeling.org/) (Earth System Modeling Framework). ESMF must be built from source and the Python bindings installed manually.
+
+**Option 1: Using Conda (Easiest)**
+
+```bash
+conda create -n redi python=3.12
+conda activate redi
+conda install -c conda-forge esmpy xesmf xarray netcdf4 zarr
+pip install -e .
+```
+
+**Option 2: Build ESMF from Source**
+
+1. Clone and build ESMF:
+
+```bash
+git clone https://github.com/esmf-org/esmf.git
+cd esmf
+make
+```
+
+See the [ESMF User's Guide](http://earthsystemmodeling.org/docs/nightly/develop/ESMF_usrdoc/node10.html) for detailed build instructions and compiler requirements.
+
+2. Install the Python bindings (esmpy):
+
+```bash
+# Set ESMFMKFILE to point to your built ESMF
+export ESMFMKFILE=/path/to/esmf/lib/libO/Linux.gfortran.64.mpiuni.default/esmf.mk
+
+# Install esmpy from the ESMF source tree
+pip install /path/to/esmf/src/addon/esmpy/
+
+# Install xesmf
+pip install xesmf
+```
+
+3. Configure your virtualenv to set ESMFMKFILE automatically:
+
+Add to your venv's `bin/activate` script (before the final `hash -r` line):
+
+```bash
+# ESMF configuration for climate processing (xesmf/esmpy)
+export ESMFMKFILE=/path/to/esmf/lib/libO/Linux.gfortran.64.mpiuni.default/esmf.mk
+```
+
+And add to the `deactivate()` function:
+
+```bash
+unset ESMFMKFILE
+```
+
+Now ESMF will be configured automatically when you activate the venv.
+
+**Verify Installation**
+
+```bash
+source /path/to/venv/bin/activate
+python -c "import esmpy; import xesmf; print('ESMF/xesmf ready!')"
+```
+
 ## Quick Start
 
 ### Run Full Pipeline
