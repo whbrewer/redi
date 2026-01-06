@@ -29,7 +29,7 @@ PII_PATTERNS = [
 
 def get_ingest_steps():
     """Get life sciences-specific ingest steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadFASTA(PipelineStep):
         """Load FASTA sequence file"""
@@ -103,7 +103,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get life sciences-specific preprocess steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class AnonymizePII(PipelineStep):
         """Anonymize personally identifiable information"""
@@ -206,7 +206,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get life sciences-specific transform steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class EncodeSequences(PipelineStep):
         """Encode protein/DNA sequences as integers"""
@@ -304,7 +304,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get life sciences-specific structure steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class PrepareForTransformer(PipelineStep):
         """Prepare sequences for transformer models"""
@@ -338,7 +338,7 @@ def get_structure_steps():
 
 def get_output_steps():
     """Get life sciences-specific output steps"""
-    from pipeline.output import get_output_steps
+    from ..pipeline.output import get_output_steps
     return get_output_steps(output_format="hdf5")
 
 

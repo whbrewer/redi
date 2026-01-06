@@ -28,7 +28,7 @@ PLASMA_PARAMETERS = {
 
 def get_ingest_steps():
     """Get fusion-specific ingest steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadFusionHDF5(PipelineStep):
         """Load fusion HDF5 data files"""
@@ -131,7 +131,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get fusion-specific preprocess steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class AlignSignals(PipelineStep):
         """Align multi-diagnostic signals to common timebase"""
@@ -218,7 +218,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get fusion-specific transform steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class EngineerPlasmaFeatures(PipelineStep):
         """Engineer physics-based plasma features"""
@@ -338,7 +338,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get fusion-specific structure steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CreateSequences(PipelineStep):
         """Create sequences for time series prediction"""
@@ -407,7 +407,7 @@ def get_structure_steps():
 
 def get_output_steps():
     """Get fusion-specific output steps"""
-    from pipeline.output import get_output_steps
+    from ..pipeline.output import get_output_steps
     return get_output_steps(output_format="hdf5")
 
 

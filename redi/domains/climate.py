@@ -30,7 +30,7 @@ CLIMATE_VARIABLES = {
 
 def get_ingest_steps():
     """Get climate-specific ingest steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadClimateData(PipelineStep):
         """Load climate data using xarray"""
@@ -99,7 +99,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get climate-specific preprocess steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class RegridClimate(PipelineStep):
         """Regrid to uniform lat/lon resolution using xESMF"""
@@ -218,7 +218,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get climate-specific transform steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class SelectVariables(PipelineStep):
         """Select specific climate variables"""
@@ -272,7 +272,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get climate-specific structure steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class ToNumpyArrays(PipelineStep):
         """Convert xarray to numpy arrays"""
@@ -319,7 +319,7 @@ def get_structure_steps():
 
 def get_output_steps():
     """Get climate-specific output steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class SaveZarr(PipelineStep):
         """Save as Zarr store"""

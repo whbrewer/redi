@@ -32,8 +32,8 @@ CATEGORICAL_FIELDS = ["user", "project", "queue", "partition", "status", "state"
 
 def get_ingest_steps():
     """Get HPC-specific ingest steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
-    from pipeline.ingest import DetectFormat
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline.ingest import DetectFormat
 
     class LoadHPCData(PipelineStep):
         """Load HPC job accounting data"""
@@ -90,7 +90,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get HPC-specific preprocess steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CleanHPCData(PipelineStep):
         """Clean HPC job data"""
@@ -181,7 +181,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get HPC-specific transform steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class EngineerHPCFeatures(PipelineStep):
         """Engineer HPC-specific features"""
@@ -355,7 +355,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get HPC-specific structure steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class PrepareForML(PipelineStep):
         """Prepare data for ML model training"""
@@ -427,7 +427,7 @@ def get_structure_steps():
 
 def get_output_steps():
     """Get HPC-specific output steps"""
-    from pipeline.output import get_output_steps
+    from ..pipeline.output import get_output_steps
     return get_output_steps(output_format="npz")
 
 

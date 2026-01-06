@@ -5,8 +5,24 @@ A modular pipeline for transforming raw scientific data into AI-ready datasets.
 ## Installation
 
 ```bash
-# Activate the virtual environment
-source /opt/venvs/drai/bin/activate
+# Install from source (editable mode for development)
+cd /path/to/drai
+pip install -e .
+
+# Install with domain-specific dependencies
+pip install -e ".[climate]"      # Climate data support (xarray, xesmf, zarr)
+pip install -e ".[materials]"    # Materials science (pymatgen, matminer)
+pip install -e ".[life_sciences]" # Life sciences (biopython)
+pip install -e ".[hpc]"          # HPC data (scikit-learn)
+pip install -e ".[fusion]"       # Fusion energy (h5py)
+
+# Install with all dependencies
+pip install -e ".[all]"
+
+# Install with specific output format support
+pip install -e ".[parquet]"      # Parquet output support
+pip install -e ".[hdf5]"         # HDF5 output support
+pip install -e ".[torch]"        # PyTorch tensor support
 ```
 
 ## Quick Start
@@ -15,23 +31,23 @@ source /opt/venvs/drai/bin/activate
 
 ```bash
 # Auto-detect domain and process
-python cli.py data.csv -o ./output
+redi data.csv -o ./output
 
 # Specify domain explicitly
-python cli.py data.nc --domain climate -o ./output
+redi data.nc --domain climate -o ./output
 
 # Run specific stages only
-python cli.py data.csv --stages ingest,preprocess,transform
+redi data.csv --stages ingest,preprocess,transform
 ```
 
 ### Analyze Dataset Only
 
 ```bash
 # Generate Data Card and recommendations (no processing)
-python cli.py data.csv --analyze
+redi data.csv --analyze
 
-# Or use analyze.py directly
-python analyze.py data.csv
+# Or use the analyze module directly
+python -m redi.analyze data.csv
 ```
 
 ## Pipeline Stages
@@ -57,7 +73,7 @@ python analyze.py data.csv
 ## CLI Options
 
 ```
-python cli.py <input> [options]
+redi <input> [options]
 
 Arguments:
   input                   Input file path
@@ -174,7 +190,7 @@ redi/
 
 ```bash
 # Process Aurora job accounting data
-python cli.py /home/w1b/drai/hpc/ANL-ALCF-DJC-AURORA_20250127_20251031.csv -o ./hpc_output
+redi /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 
 # Output:
 # hpc_output/

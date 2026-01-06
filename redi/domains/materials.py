@@ -32,7 +32,7 @@ MAGPIE_PREFIXES = [
 
 def get_ingest_steps():
     """Get materials-specific ingest steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadMaterialsCSV(PipelineStep):
         """Load materials CSV with composition parsing"""
@@ -123,7 +123,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get materials-specific preprocess steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CleanMaterialsData(PipelineStep):
         """Clean materials data (remove invalid compositions, handle missing)"""
@@ -180,7 +180,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get materials-specific transform steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class FeaturizeCompositions(PipelineStep):
         """Generate composition-based features using matminer"""
@@ -298,7 +298,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get materials-specific structure steps"""
-    from pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CreateGraphFromStructure(PipelineStep):
         """Create graph representation of crystal structure"""
@@ -409,7 +409,7 @@ def get_structure_steps():
 def get_output_steps():
     """Get materials-specific output steps"""
     # Use standard output steps
-    from pipeline.output import get_output_steps
+    from ..pipeline.output import get_output_steps
     return get_output_steps(output_format="npz")
 
 

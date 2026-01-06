@@ -39,7 +39,7 @@ logger = logging.getLogger("redi")
 
 def detect_domain(input_path: Path, columns: Optional[List[str]] = None) -> str:
     """Auto-detect domain from file and content"""
-    from domains import detect_domain as _detect_domain, DOMAIN_EXTENSIONS
+    from .domains import detect_domain as _detect_domain, DOMAIN_EXTENSIONS
 
     # Check extension first
     ext = input_path.suffix.lower()
@@ -76,12 +76,12 @@ def run_pipeline(
     config: Optional[dict] = None
 ):
     """Run the REDI pipeline"""
-    from pipeline import Pipeline, PipelineStage, create_context
-    from pipeline.ingest import get_ingest_steps
-    from pipeline.preprocess import get_preprocess_steps
-    from pipeline.transform import get_transform_steps
-    from pipeline.structure import get_structure_steps
-    from pipeline.output import get_output_steps
+    from .pipeline import Pipeline, PipelineStage, create_context
+    from .pipeline.ingest import get_ingest_steps
+    from .pipeline.preprocess import get_preprocess_steps
+    from .pipeline.transform import get_transform_steps
+    from .pipeline.structure import get_structure_steps
+    from .pipeline.output import get_output_steps
 
     input_path = Path(input_path)
     if not input_path.exists():
@@ -128,15 +128,15 @@ def run_pipeline(
     # Try to add domain-specific steps
     try:
         if domain == "climate":
-            from domains.climate import get_full_pipeline
+            from .domains.climate import get_full_pipeline
         elif domain == "materials":
-            from domains.materials import get_full_pipeline
+            from .domains.materials import get_full_pipeline
         elif domain == "life_sciences":
-            from domains.life_sciences import get_full_pipeline
+            from .domains.life_sciences import get_full_pipeline
         elif domain == "fusion":
-            from domains.fusion import get_full_pipeline
+            from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
-            from domains.hpc import get_full_pipeline
+            from .domains.hpc import get_full_pipeline
         else:
             get_full_pipeline = None
 
@@ -169,8 +169,7 @@ def run_pipeline(
 def analyze_dataset(input_path: str) -> str:
     """Run data card analysis only"""
     try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        from analyze import generate_report
+        from .analyze import generate_report
         return generate_report(input_path)
     except ImportError as e:
         logger.error(f"Could not import analyze module: {e}")

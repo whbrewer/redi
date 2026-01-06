@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redi"
+version = "0.1.0"
+description = "REDI - Readiness Engine for Data Integration: Transform raw scientific data into AI-ready datasets"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Wes Brewer"}
+]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["data-readiness", "AI", "ML", "scientific-data", "preprocessing", "pipeline"]
+
+dependencies = [
+    "pandas>=1.5.0",
+    "numpy>=1.21.0",
+]
+
+[project.optional-dependencies]
+# Domain-specific dependencies
+climate = [
+    "xarray>=2022.1.0",
+    "netCDF4>=1.6.0",
+    "zarr>=2.13.0",
+    "xesmf>=0.7.0",
+]
+materials = [
+    "pymatgen>=2023.1.1",
+    "matminer>=0.8.0",
+]
+life_sciences = [
+    "biopython>=1.80",
+]
+fusion = [
+    "h5py>=3.7.0",
+]
+hpc = [
+    "scikit-learn>=1.1.0",
+]
+
+# Output format dependencies
+parquet = [
+    "pyarrow>=10.0.0",
+]
+hdf5 = [
+    "h5py>=3.7.0",
+]
+
+# Deep learning dependencies
+torch = [
+    "torch>=1.12.0",
+]
+torch-geometric = [
+    "torch>=1.12.0",
+    "torch-geometric>=2.2.0",
+]
+
+# Install all domain dependencies
+all-domains = [
+    "redi[climate,materials,life_sciences,fusion,hpc]",
+]
+
+# Install everything
+all = [
+    "redi[all-domains,parquet,hdf5,torch-geometric]",
+]
+
+# Development dependencies
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+redi = "redi.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/wesbrewer/redi"
+Documentation = "https://github.com/wesbrewer/redi#readme"
+Repository = "https://github.com/wesbrewer/redi"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["redi*"]
+
+[tool.setuptools.package-data]
+redi = ["*.md"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
