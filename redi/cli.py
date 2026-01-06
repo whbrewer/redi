@@ -355,6 +355,7 @@ def run_pipeline(
         try:
             from .analyze import generate_report
             report = generate_report(str(input_path))
+            ctx.output_dir.mkdir(parents=True, exist_ok=True)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
             datacard_path.write_text(report)
             if "saved_files" not in ctx.metadata:
