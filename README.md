@@ -262,6 +262,54 @@ redi /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 # └── metadata.json
 ```
 
+## Testing
+
+REDI includes unit tests and smoke tests for all supported domains.
+
+### Install Test Dependencies
+
+```bash
+pip install -e ".[dev]"
+# or just pytest
+pip install pytest pytest-cov
+```
+
+### Run All Tests
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage report
+pytest tests/ --cov=redi --cov-report=term-missing
+```
+
+### Run Specific Test Categories
+
+```bash
+# Unit tests only
+pytest tests/test_analyze.py tests/test_pipeline.py -v
+
+# Smoke tests by domain
+pytest tests/test_smoke_hpc.py -v           # HPC domain
+pytest tests/test_smoke_climate.py -v       # Climate domain
+pytest tests/test_smoke_materials.py -v     # Materials/AFLOW domain
+pytest tests/test_smoke_life_sciences.py -v # Bio/OpenFold domain
+```
+
+### Test Structure
+
+```
+tests/
+├── conftest.py              # Shared fixtures (sample data generators)
+├── test_analyze.py          # Unit tests for DataAnalyzer and recommendations
+├── test_pipeline.py         # Unit tests for Pipeline core classes
+├── test_smoke_hpc.py        # HPC domain end-to-end tests
+├── test_smoke_climate.py    # Climate/NetCDF end-to-end tests
+├── test_smoke_materials.py  # Materials science end-to-end tests
+└── test_smoke_life_sciences.py  # Life sciences/OpenFold end-to-end tests
+```
+
 ## References
 
 - [DRAI Framework Paper](https://doi.org/10.1145/3750720.3757282)
