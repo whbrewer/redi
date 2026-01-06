@@ -424,6 +424,8 @@ Examples:
                        help="Scientific domain (auto-detected if not specified)")
     parser.add_argument("-o", "--output", default="./output", help="Output directory")
     parser.add_argument("-s", "--stages", help="Comma-separated list of stages to run")
+    parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
+                       default="npz", help="Output format: npz (default), parquet, csv, hdf5, zarr")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("-a", "--analyze", action="store_true", help="Only analyze and generate data card")
     parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
@@ -447,6 +449,7 @@ Examples:
         output_dir=args.output,
         domain=args.domain,
         stages=stages,
+        config={"output_format": args.format},
         verbose=args.verbose,
         style=args.style
     )

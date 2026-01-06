@@ -392,11 +392,45 @@ def get_output_steps():
             return ctx
 
     class SaveClimateOutput(PipelineStep):
-        """Save climate data as train/val/test NPZ files"""
+        """Save climate data in specified format"""
 
         name = "save_climate"
         stage = PipelineStage.OUTPUT
-        description = "Save climate data as train/val/test NPZ files"
+        description = "Save climate data as train/val/test files"
+
+        def _save_split(self, X, var_names, split_name, output_dir, fmt):
+            """Save a single split in the specified format"""
+            import numpy as np
+
+            if fmt == "npz":
+                path = output_dir / f"{split_name}.npz"
+                np.savez_compressed(path, X=X, variable_names=var_names)
+            elif fmt == "parquet":
+                import pandas as pd
+                path = output_dir / f"{split_name}.parquet"
+                df = pd.DataFrame(X, columns=var_names if len(var_names) == X.shape[1] else None)
+                df.to_parquet(path)
+            elif fmt == "csv":
+                import pandas as pd
+                path = output_dir / f"{split_name}.csv"
+                df = pd.DataFrame(X, columns=var_names if len(var_names) == X.shape[1] else None)
+                df.to_csv(path, index=False)
+            elif fmt == "hdf5":
+                import h5py
+                path = output_dir / f"{split_name}.h5"
+                with h5py.File(path, 'w') as f:
+                    f.create_dataset('X', data=X)
+                    f.attrs['variable_names'] = var_names
+            elif fmt == "zarr":
+                import zarr
+                path = output_dir / f"{split_name}.zarr"
+                root = zarr.open(str(path), mode='w')
+                root.create_dataset('X', data=X)
+                root.attrs['variable_names'] = var_names
+            else:
+                path = output_dir / f"{split_name}.npz"
+                np.savez_compressed(path, X=X, variable_names=var_names)
+            return str(path)
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
@@ -404,16 +438,17 @@ def get_output_steps():
 
                 ctx.output_dir.mkdir(parents=True, exist_ok=True)
                 saved_files = []
+                fmt = ctx.config.get("output_format", "npz")
 
                 # Handle xarray Dataset - save as Zarr
                 if hasattr(ctx.data, 'to_zarr'):
                     output_path = ctx.output_dir / "data.zarr"
                     ctx.data.to_zarr(output_path, mode='w')
                     saved_files.append(str(output_path))
-                    ctx.metadata["output_format"] = "zarr"
+                    fmt = "zarr"
                     logger.info(f"Saved Zarr: {output_path}")
 
-                # Handle numpy dict with splits - save train/val/test
+                # Handle numpy dict with splits
                 elif isinstance(ctx.data, dict) and "X" in ctx.data:
                     X = ctx.data["X"]
                     var_names = ctx.data.get("variable_names", [])
@@ -422,19 +457,16 @@ def get_output_steps():
                         # Save split files
                         for split_name, idx_key in [("train", "train_idx"), ("val", "val_idx"), ("test", "test_idx")]:
                             idx = ctx.data[idx_key]
-                            output_path = ctx.output_dir / f"{split_name}.npz"
-                            np.savez_compressed(output_path, X=X[idx], variable_names=var_names)
-                            saved_files.append(str(output_path))
-                        logger.info(f"Saved train/val/test NPZ files")
+                            path = self._save_split(X[idx], var_names, split_name, ctx.output_dir, fmt)
+                            saved_files.append(path)
+                        logger.info(f"Saved train/val/test {fmt.upper()} files")
                     else:
                         # No split, save single file
-                        output_path = ctx.output_dir / "data.npz"
-                        np.savez_compressed(output_path, X=X, variable_names=var_names)
-                        saved_files.append(str(output_path))
-                        logger.info(f"Saved NPZ: {output_path}, shape: {X.shape}")
+                        path = self._save_split(X, var_names, "data", ctx.output_dir, fmt)
+                        saved_files.append(path)
+                        logger.info(f"Saved {fmt.upper()}: {path}")
 
-                    ctx.metadata["output_format"] = "npz"
-
+                ctx.metadata["output_format"] = fmt
                 ctx.metadata["saved_files"] = saved_files
 
             except Exception as e:
