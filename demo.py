@@ -174,31 +174,39 @@ VLSNYDANKTGLKELPMRNLQEILHGAVRFSNNPALCNVESIQWRDIVSSDFLSNMSMDF
     return fasta_path
 
 
-def demo_domain(domain: str, temp_dir: Path, output_dir: Path):
+def demo_domain(domain: str, temp_dir: Path, output_dir: Path, output_format: str = "npz", input_file: str = None):
     """Run demo for a specific domain."""
     from redi.analyze import analyze_dataset, generate_report, get_recommendations
     from redi.cli import run_pipeline
 
     print_header(f"REDI Demo: {domain.upper()} Domain")
 
-    # Create sample data
-    print_section("Creating sample data...")
-
-    if domain == "hpc":
-        sample_file = create_hpc_sample(temp_dir)
-        print_success(f"Created HPC job data: {sample_file.name}")
-    elif domain == "climate":
-        sample_file = create_climate_sample(temp_dir)
-        print_success(f"Created climate data: {sample_file.name}")
-    elif domain == "materials":
-        sample_file = create_materials_sample(temp_dir)
-        print_success(f"Created materials data: {sample_file.name}")
-    elif domain == "bio":
-        sample_file = create_bio_sample(temp_dir)
-        print_success(f"Created protein data: {sample_file.name}")
+    # Use provided input file or create sample data
+    if input_file:
+        sample_file = Path(input_file)
+        if not sample_file.exists():
+            print_warning(f"Input file not found: {input_file}")
+            return
+        print_section("Using provided input file...")
+        print_success(f"Input: {sample_file}")
     else:
-        print_warning(f"Unknown domain: {domain}")
-        return
+        print_section("Creating sample data...")
+
+        if domain == "hpc":
+            sample_file = create_hpc_sample(temp_dir)
+            print_success(f"Created HPC job data: {sample_file.name}")
+        elif domain == "climate":
+            sample_file = create_climate_sample(temp_dir)
+            print_success(f"Created climate data: {sample_file.name}")
+        elif domain == "materials":
+            sample_file = create_materials_sample(temp_dir)
+            print_success(f"Created materials data: {sample_file.name}")
+        elif domain == "bio":
+            sample_file = create_bio_sample(temp_dir)
+            print_success(f"Created protein data: {sample_file.name}")
+        else:
+            print_warning(f"Unknown domain: {domain}")
+            return
 
     # Step 1: Analyze dataset
     print_section("Step 1: Analyzing dataset...")
@@ -220,13 +228,14 @@ def demo_domain(domain: str, temp_dir: Path, output_dir: Path):
     print_info(f"Output Formats: {', '.join(recs['output_formats'])}")
 
     # Step 3: Run pipeline
-    print_section("Step 3: Running preprocessing pipeline...")
+    print_section(f"Step 3: Running preprocessing pipeline (output: {output_format})...")
     domain_output = output_dir / domain
 
     ctx = run_pipeline(
         input_path=str(sample_file),
         output_dir=str(domain_output),
-        domain=data_card.detected_domain
+        domain=data_card.detected_domain,
+        config={"output_format": output_format}
     )
 
     if ctx.errors:
@@ -279,11 +288,21 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python demo.py                     # Run HPC demo (default)
-  python demo.py --domain climate    # Run climate demo
-  python demo.py --domain materials  # Run materials science demo
-  python demo.py --domain bio        # Run life sciences demo
-  python demo.py --all               # Run all demos
+  python demo.py                          # Run HPC demo with sample data
+  python demo.py --domain climate         # Run climate demo with sample data
+  python demo.py --domain materials       # Run materials science demo
+  python demo.py --domain bio             # Run life sciences demo
+  python demo.py --all                    # Run all demos with sample data
+
+  # Use real data:
+  python demo.py -i data.csv -d hpc       # Process real HPC data
+  python demo.py -i climate.nc -d climate # Process real NetCDF file
+  python demo.py -i materials.csv         # Auto-detect domain
+
+  # Output options:
+  python demo.py -o ./output --keep       # Save output to ./output
+  python demo.py --format parquet         # Output as Parquet files
+  python demo.py --format csv             # Output as CSV files
         """
     )
 
@@ -292,6 +311,12 @@ Examples:
         choices=["hpc", "climate", "materials", "bio"],
         default="hpc",
         help="Domain to demonstrate (default: hpc)"
+    )
+
+    parser.add_argument(
+        "-i", "--input",
+        default=None,
+        help="Input file to process (uses sample data if not specified)"
     )
 
     parser.add_argument(
@@ -310,6 +335,13 @@ Examples:
         "--keep",
         action="store_true",
         help="Keep output files after demo"
+    )
+
+    parser.add_argument(
+        "-f", "--format",
+        choices=["npz", "parquet", "csv", "hdf5", "zarr"],
+        default="npz",
+        help="Output format (default: npz)"
     )
 
     args = parser.parse_args()
@@ -348,7 +380,7 @@ Examples:
             domains = [args.domain]
 
         for domain in domains:
-            demo_domain(domain, temp_dir, output_dir)
+            demo_domain(domain, temp_dir, output_dir, args.format, args.input)
             if len(domains) > 1:
                 print("\n" + "=" * 70 + "\n")
 
