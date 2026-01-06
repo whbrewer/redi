@@ -5,12 +5,16 @@ REDI Demo Script
 Demonstrates REDI capabilities across different scientific domains.
 
 Usage:
-    python demo.py                    # Run HPC demo (default)
     python demo.py --domain hpc       # HPC job accounting data
     python demo.py --domain climate   # Climate/NetCDF data
     python demo.py --domain materials # Materials science/AFLOW data
     python demo.py --domain bio       # Life sciences/protein data
     python demo.py --all              # Run all domain demos
+
+    # With real data:
+    python demo.py -i data.csv -d hpc           # Process HPC job data
+    python demo.py -i climate.nc -d climate     # Process NetCDF file
+    python demo.py -i proteins.fasta -d bio     # Process FASTA file
 """
 
 import argparse
@@ -288,29 +292,31 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python demo.py                          # Run HPC demo with sample data
-  python demo.py --domain climate         # Run climate demo with sample data
-  python demo.py --domain materials       # Run materials science demo
-  python demo.py --domain bio             # Run life sciences demo
-  python demo.py --all                    # Run all demos with sample data
+  # Run demos with sample data:
+  python demo.py --domain hpc             # HPC job accounting demo
+  python demo.py --domain climate         # Climate/NetCDF demo
+  python demo.py --domain materials       # Materials science demo
+  python demo.py --domain bio             # Life sciences demo
+  python demo.py --all                    # All domains
 
-  # Use real data:
-  python demo.py -i data.csv -d hpc       # Process real HPC data
-  python demo.py -i climate.nc -d climate # Process real NetCDF file
-  python demo.py -i materials.csv         # Auto-detect domain
+  # Process real data files:
+  python demo.py -i /path/to/jobs.csv -d hpc
+  python demo.py -i /path/to/climate.nc -d climate
+  python demo.py -i /path/to/structures.csv -d materials
+  python demo.py -i /path/to/proteins.fasta -d bio
 
   # Output options:
-  python demo.py -o ./output --keep       # Save output to ./output
-  python demo.py --format parquet         # Output as Parquet files
-  python demo.py --format csv             # Output as CSV files
+  python demo.py -d hpc -o ./output --keep   # Save output to ./output
+  python demo.py -d hpc --format parquet     # Output as Parquet files
+  python demo.py -d hpc --format csv         # Output as CSV files
         """
     )
 
     parser.add_argument(
         "-d", "--domain",
         choices=["hpc", "climate", "materials", "bio"],
-        default="hpc",
-        help="Domain to demonstrate (default: hpc)"
+        default=None,
+        help="Domain to demonstrate (required unless --all or --input specified)"
     )
 
     parser.add_argument(
@@ -346,6 +352,12 @@ Examples:
 
     args = parser.parse_args()
 
+    # Check if domain or --all is specified
+    if not args.all and not args.domain:
+        parser.print_help()
+        print(f"\n{Colors.YELLOW}Error: Please specify a domain with -d/--domain or use --all{Colors.END}")
+        sys.exit(1)
+
     # Print banner
     print(f"""
 {Colors.BOLD}{Colors.CYAN}
@@ -376,8 +388,12 @@ Examples:
     try:
         if args.all:
             domains = ["hpc", "climate", "materials", "bio"]
-        else:
+        elif args.domain:
             domains = [args.domain]
+        else:
+            # This shouldn't happen due to earlier check, but handle gracefully
+            parser.print_help()
+            sys.exit(1)
 
         for domain in domains:
             demo_domain(domain, temp_dir, output_dir, args.format, args.input)

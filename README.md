@@ -262,6 +262,46 @@ redi /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 # └── metadata.json
 ```
 
+## Demo Script
+
+Interactive demo showcasing REDI capabilities with sample or real data.
+
+### Run with Sample Data
+
+```bash
+python demo.py --domain hpc       # HPC job accounting demo
+python demo.py --domain climate   # Climate/NetCDF demo
+python demo.py --domain materials # Materials science demo
+python demo.py --domain bio       # Life sciences demo
+python demo.py --all              # Run all domain demos
+```
+
+### Run with Real Data
+
+```bash
+# HPC job accounting data
+python demo.py -i /path/to/ANL-ALCF-DJC-AURORA.csv -d hpc -o ./output --keep
+
+# Climate NetCDF data
+python demo.py -i /path/to/climate.nc -d climate -o ./output --keep
+
+# Materials science data (AFLOW-style CSV or CIF files)
+python demo.py -i /path/to/materials.csv -d materials -o ./output --keep
+
+# Life sciences data (FASTA, PDB, or CSV with sequence data)
+python demo.py -i /path/to/proteins.fasta -d bio -o ./output --keep
+```
+
+### Output Format Options
+
+```bash
+python demo.py -d hpc --format npz      # NumPy compressed (default)
+python demo.py -d hpc --format parquet  # Apache Parquet
+python demo.py -d hpc --format csv      # CSV files
+python demo.py -d hpc --format hdf5     # HDF5 format
+python demo.py -d hpc --format zarr     # Zarr arrays (climate)
+```
+
 ## Testing
 
 REDI includes unit tests and smoke tests for all supported domains.

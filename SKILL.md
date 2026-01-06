@@ -35,19 +35,21 @@ redi data.csv --stages ingest,preprocess,transform
 Interactive demo showcasing all capabilities:
 
 ```bash
-# Run with sample data
-python demo.py                          # HPC demo (default)
+# Run with sample data (domain required)
+python demo.py --domain hpc             # HPC demo
 python demo.py --domain climate         # Climate demo
 python demo.py --domain materials       # Materials science demo
 python demo.py --domain bio             # Life sciences demo
 python demo.py --all                    # All domains
 
 # Run with real data
-python demo.py -i /path/to/data.csv -d hpc -o ./output --keep
+python demo.py -i /path/to/jobs.csv -d hpc -o ./output --keep
+python demo.py -i /path/to/climate.nc -d climate -o ./output --keep
+python demo.py -i /path/to/proteins.fasta -d bio -o ./output --keep
 
 # Change output format
-python demo.py --format parquet         # Parquet output
-python demo.py --format csv             # CSV output
+python demo.py -d hpc --format parquet  # Parquet output
+python demo.py -d hpc --format csv      # CSV output
 ```
 
 ## CLI Options
