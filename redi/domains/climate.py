@@ -40,15 +40,14 @@ def get_ingest_steps():
         description = "Load NetCDF/Zarr climate data with xarray"
 
         def validate(self, ctx: PipelineContext) -> bool:
-            # Check metadata or detect from extension
-            fmt = ctx.metadata.get("file_format")
-            if not fmt:
+            # Auto-detect format from extension if not set
+            if not ctx.metadata.get("file_format"):
                 ext = ctx.input_path.suffix.lower()
                 fmt = {".nc": "netcdf", ".nc4": "netcdf", ".zarr": "zarr",
                        ".grib": "grib", ".grib2": "grib"}.get(ext)
                 if fmt:
                     ctx.metadata["file_format"] = fmt
-            return fmt in ["netcdf", "zarr", "grib"]
+            return ctx.metadata.get("file_format") in ["netcdf", "zarr", "grib"]
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
@@ -332,10 +331,10 @@ def get_structure_steps():
                 # Note if some variables were excluded
                 excluded = [v for v in ds.data_vars if v not in var_names]
                 if excluded:
-                    logger.info(f"Excluded {len(excluded)} variables with different shapes: {excluded[:3]}...")
+                    logger.info(f"Excluded {len(excluded)} variables with different shapes")
 
                 ctx.metadata["array_shape"] = X.shape
-                logger.info(f"Converted to numpy array: shape {X.shape}, variables: {var_names}")
+                logger.info(f"Converted to numpy: shape {X.shape}, vars: {var_names}")
 
             except Exception as e:
                 ctx.add_error(f"Error converting to numpy: {str(e)}")
@@ -369,7 +368,7 @@ def get_output_steps():
                     ctx.data.to_zarr(output_path, mode='w')
                     saved_files.append(str(output_path))
                     ctx.metadata["output_format"] = "zarr"
-                    logger.info(f"Saved Zarr store to {output_path}")
+                    logger.info(f"Saved Zarr: {output_path}")
 
                 # Handle numpy dict - save as NPZ
                 elif isinstance(ctx.data, dict) and "X" in ctx.data:
@@ -381,7 +380,7 @@ def get_output_steps():
                     )
                     saved_files.append(str(output_path))
                     ctx.metadata["output_format"] = "npz"
-                    logger.info(f"Saved NPZ to {output_path}, shape: {ctx.data['X'].shape}")
+                    logger.info(f"Saved NPZ: {output_path}, shape: {ctx.data['X'].shape}")
 
                 ctx.metadata["saved_files"] = saved_files
 
