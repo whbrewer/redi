@@ -353,7 +353,9 @@ def run_pipeline(
         # Generate and save Data Card
         print_section("Data Card")
         try:
-            from .analyze import generate_report
+            from .analyze import generate_report, analyze_dataset, PipelineRecommender
+
+            # Generate full report for file
             report = generate_report(str(input_path))
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
@@ -362,6 +364,25 @@ def run_pipeline(
                 ctx.metadata["saved_files"] = []
             ctx.metadata["saved_files"].append(str(datacard_path))
             print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+
+            # Display recommendations in terminal
+            data_card = analyze_dataset(str(input_path))
+            recommender = PipelineRecommender(data_card)
+            rec = recommender.get_recommendations()
+
+            print_section("Pipeline Recommendations")
+            print(f"    {Colors.BOLD}Current Level:{Colors.END} {rec['current_level']}")
+            print(f"    {Colors.BOLD}Target Level:{Colors.END} {rec['target_level']}")
+            print()
+            print(f"    {Colors.BOLD}Next Steps:{Colors.END}")
+            for step in rec['needed_steps']:
+                if step['status'] == 'pending':
+                    print(f"      {Colors.YELLOW}○{Colors.END} {step['name']}: {step['description']}")
+
+            print()
+            print(f"    {Colors.BOLD}Recommended Tools:{Colors.END} {', '.join(rec['recommended_tools'])}")
+            print(f"    {Colors.BOLD}Output Formats:{Colors.END} {', '.join(rec['output_formats'])}")
+
         except Exception as e:
             print(f"    {Colors.YELLOW}⚠ Could not generate Data Card: {e}{Colors.END}")
 
