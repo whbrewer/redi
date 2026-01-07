@@ -370,13 +370,46 @@ def run_pipeline(
             recommender = PipelineRecommender(data_card)
             rec = recommender.get_recommendations()
 
+            # Track which recommended steps have been completed in this pipeline run
+            completed_steps = set()
+            for status, step_name, _, _ in step_results:
+                if status == "success":
+                    # Map pipeline step names to recommendation step names
+                    step_lower = step_name.lower()
+                    if "regrid" in step_lower:
+                        completed_steps.add("regrid")
+                    if "normalize" in step_lower:
+                        completed_steps.add("normalize")
+                    if "shard" in step_lower or "save" in step_lower or "output" in step_lower:
+                        completed_steps.add("shard")
+                    if "load" in step_lower or "ingest" in step_lower:
+                        completed_steps.add("download")
+                    if "featurize" in step_lower or "engineer" in step_lower:
+                        completed_steps.add("featurize")
+                    if "encode" in step_lower:
+                        completed_steps.add("encode")
+                    if "label" in step_lower:
+                        completed_steps.add("label")
+
             print_section("Pipeline Recommendations")
             print(f"    {Colors.BOLD}Current Level:{Colors.END} {rec['current_level']}")
             print(f"    {Colors.BOLD}Target Level:{Colors.END} {rec['target_level']}")
-            print()
-            print(f"    {Colors.BOLD}Next Steps:{Colors.END}")
-            for step in rec['needed_steps']:
-                if step['status'] == 'pending':
+
+            # Show completed steps
+            completed_rec_steps = [step for step in rec['needed_steps'] if step['name'] in completed_steps]
+            if completed_rec_steps:
+                print()
+                print(f"    {Colors.BOLD}Completed This Run:{Colors.END}")
+                for step in completed_rec_steps:
+                    print(f"      {Colors.GREEN}✓{Colors.END} {step['name']}: {step['description']}")
+
+            # Show pending steps
+            pending_steps = [step for step in rec['needed_steps']
+                           if step['status'] == 'pending' and step['name'] not in completed_steps]
+            if pending_steps:
+                print()
+                print(f"    {Colors.BOLD}Next Steps:{Colors.END}")
+                for step in pending_steps:
                     print(f"      {Colors.YELLOW}○{Colors.END} {step['name']}: {step['description']}")
 
             print()
