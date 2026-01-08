@@ -63,6 +63,12 @@ class TrainValTestSplit(PipelineStep):
             n_samples = len(X)
             indices = np.arange(n_samples)
 
+            logger.debug(f"     Total samples: {n_samples:,}")
+            logger.debug(f"     Split ratios: train={self.train_ratio}, val={self.val_ratio}, test={self.test_ratio}")
+            logger.debug(f"     Shuffle: {self.shuffle}")
+            if self.shuffle:
+                logger.debug(f"     Random seed: {self.random_seed}")
+
             if self.shuffle:
                 np.random.seed(self.random_seed)
                 np.random.shuffle(indices)
@@ -75,6 +81,10 @@ class TrainValTestSplit(PipelineStep):
             val_idx = indices[train_end:val_end]
             test_idx = indices[val_end:]
 
+            logger.debug(f"     Train samples: {len(train_idx):,} ({len(train_idx)/n_samples*100:.1f}%)")
+            logger.debug(f"     Val samples: {len(val_idx):,} ({len(val_idx)/n_samples*100:.1f}%)")
+            logger.debug(f"     Test samples: {len(test_idx):,} ({len(test_idx)/n_samples*100:.1f}%)")
+
             splits = {
                 "train": {"X": X[train_idx]},
                 "val": {"X": X[val_idx]},
@@ -85,6 +95,7 @@ class TrainValTestSplit(PipelineStep):
                 splits["train"]["y"] = y[train_idx]
                 splits["val"]["y"] = y[val_idx]
                 splits["test"]["y"] = y[test_idx]
+                logger.debug(f"     Target variable included in splits")
 
             # Preserve feature names
             if "feature_names" in ctx.data:
@@ -130,13 +141,19 @@ class ShardData(PipelineStep):
             if not isinstance(ctx.data, dict):
                 return ctx
 
+            logger.debug(f"     Shard size: {self.shard_size:,}")
+            logger.debug(f"     Output format: {self.output_format}")
+
             # Handle splits or raw data
             if "train" in ctx.data:
                 splits = ctx.data
+                logger.debug(f"     Processing splits: {list(splits.keys())}")
             else:
                 splits = {"data": ctx.data}
+                logger.debug(f"     Processing single data block")
 
             sharded = {}
+            total_shards = 0
             for split_name, split_data in splits.items():
                 if "X" not in split_data:
                     continue
@@ -144,6 +161,8 @@ class ShardData(PipelineStep):
                 X = split_data["X"]
                 n_samples = len(X)
                 n_shards = (n_samples + self.shard_size - 1) // self.shard_size
+
+                logger.debug(f"     {split_name}: {n_samples:,} samples -> {n_shards} shards")
 
                 shards = []
                 for i in range(n_shards):
@@ -159,12 +178,14 @@ class ShardData(PipelineStep):
                     "shards": shards,
                     "feature_names": split_data.get("feature_names", [])
                 }
+                total_shards += n_shards
 
             ctx.data = sharded
             ctx.metadata["sharding"] = {
                 "shard_size": self.shard_size,
                 "output_format": self.output_format
             }
+            logger.debug(f"     Total shards created: {total_shards}")
             logger.info(f"Created shards of size {self.shard_size}")
 
         except Exception as e:
@@ -190,15 +211,20 @@ class SaveNPZ(PipelineStep):
             output_dir = ctx.output_dir
             output_dir.mkdir(parents=True, exist_ok=True)
 
+            logger.debug(f"     Output directory: {output_dir}")
+            logger.debug(f"     Compression: {self.compress}")
+
             saved_files = []
 
             if isinstance(ctx.data, dict):
                 # Check if sharded
                 if any("shards" in v for v in ctx.data.values() if isinstance(v, dict)):
+                    logger.debug(f"     Saving sharded data")
                     for split_name, split_data in ctx.data.items():
                         if not isinstance(split_data, dict) or "shards" not in split_data:
                             continue
 
+                        logger.debug(f"     {split_name}: {len(split_data['shards'])} shards")
                         for i, shard in enumerate(split_data["shards"]):
                             file_path = output_dir / f"{split_name}_shard_{i:04d}.npz"
                             if self.compress:
@@ -208,6 +234,7 @@ class SaveNPZ(PipelineStep):
                             saved_files.append(str(file_path))
                 else:
                     # Save splits directly
+                    logger.debug(f"     Saving splits: {list(ctx.data.keys())}")
                     for split_name, split_data in ctx.data.items():
                         if not isinstance(split_data, dict) or "X" not in split_data:
                             continue
@@ -218,6 +245,10 @@ class SaveNPZ(PipelineStep):
                             np.savez_compressed(file_path, **save_data)
                         else:
                             np.savez(file_path, **save_data)
+
+                        file_size = file_path.stat().st_size
+                        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"
+                        logger.debug(f"     Saved {file_path.name}: {size_str}")
                         saved_files.append(str(file_path))
 
             ctx.metadata["saved_files"] = saved_files
@@ -249,6 +280,9 @@ class SaveHDF5(PipelineStep):
 
             file_path = output_dir / "data.h5"
 
+            logger.debug(f"     Output file: {file_path}")
+            logger.debug(f"     Compression: {self.compression}")
+
             with h5py.File(file_path, 'w') as f:
                 if isinstance(ctx.data, dict):
                     for split_name, split_data in ctx.data.items():
@@ -256,6 +290,8 @@ class SaveHDF5(PipelineStep):
                             continue
 
                         grp = f.create_group(split_name)
+                        logger.debug(f"     Created group: {split_name}")
+
                         for key, value in split_data.items():
                             if key == "feature_names":
                                 grp.attrs["feature_names"] = json.dumps(value)
@@ -264,8 +300,14 @@ class SaveHDF5(PipelineStep):
                                     shard_grp = grp.create_group(f"shard_{i:04d}")
                                     for k, v in shard.items():
                                         shard_grp.create_dataset(k, data=v, compression=self.compression)
+                                logger.debug(f"       {len(value)} shards saved")
                             elif hasattr(value, '__array__'):
                                 grp.create_dataset(key, data=value, compression=self.compression)
+                                logger.debug(f"       {key}: shape {value.shape}")
+
+            file_size = file_path.stat().st_size
+            size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"
+            logger.debug(f"     File size: {size_str}")
 
             ctx.metadata["saved_files"] = [str(file_path)]
             ctx.metadata["output_format"] = "hdf5"
@@ -296,9 +338,13 @@ class SaveParquet(PipelineStep):
             output_dir = ctx.output_dir
             output_dir.mkdir(parents=True, exist_ok=True)
 
+            logger.debug(f"     Output directory: {output_dir}")
+            logger.debug(f"     Compression: {self.compression}")
+
             saved_files = []
 
             if isinstance(ctx.data, dict):
+                logger.debug(f"     Splits to save: {list(ctx.data.keys())}")
                 for split_name, split_data in ctx.data.items():
                     if not isinstance(split_data, dict) or "X" not in split_data:
                         continue
@@ -312,6 +358,10 @@ class SaveParquet(PipelineStep):
 
                     file_path = output_dir / f"{split_name}.parquet"
                     df.to_parquet(file_path, compression=self.compression)
+
+                    file_size = file_path.stat().st_size
+                    size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"
+                    logger.debug(f"     Saved {file_path.name}: {len(df)} rows, {len(df.columns)} columns, {size_str}")
                     saved_files.append(str(file_path))
 
             ctx.metadata["saved_files"] = saved_files
@@ -337,6 +387,8 @@ class SaveMetadata(PipelineStep):
             output_dir = ctx.output_dir
             output_dir.mkdir(parents=True, exist_ok=True)
 
+            logger.debug(f"     Output directory: {output_dir}")
+
             # Save metadata
             metadata_path = output_dir / "metadata.json"
             metadata = {
@@ -347,9 +399,18 @@ class SaveMetadata(PipelineStep):
                 **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
             }
 
+            logger.debug(f"     Input file: {ctx.input_path}")
+            logger.debug(f"     Domain: {ctx.domain}")
+            logger.debug(f"     Completed stages: {len(ctx.completed_stages)}")
+            logger.debug(f"     Metadata keys: {list(ctx.metadata.keys())}")
+            if ctx.errors:
+                logger.debug(f"     Errors recorded: {len(ctx.errors)}")
+
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=2, default=str)
 
+            file_size = metadata_path.stat().st_size
+            logger.debug(f"     Saved {metadata_path.name}: {file_size} bytes")
             logger.info(f"Saved metadata to {metadata_path}")
 
         except Exception as e:

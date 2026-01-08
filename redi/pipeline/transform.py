@@ -40,8 +40,12 @@ class NormalizeNumeric(PipelineStep):
             # Select columns
             if self.columns:
                 cols = [c for c in self.columns if c in ctx.data.columns]
+                logger.debug(f"     Using specified columns: {len(cols)} columns")
             else:
                 cols = ctx.data.select_dtypes(include=['number']).columns.tolist()
+                logger.debug(f"     Auto-selected {len(cols)} numeric columns")
+
+            logger.debug(f"     Normalization method: {self.method}")
 
             stats = {}
             for col in cols:
@@ -51,6 +55,7 @@ class NormalizeNumeric(PipelineStep):
                     if std > 0:
                         ctx.data[col] = (ctx.data[col] - mean) / std
                     stats[col] = {"mean": float(mean), "std": float(std)}
+                    logger.debug(f"     {col}: mean={mean:.4f}, std={std:.4f}")
 
                 elif self.method == "minmax":
                     min_val = ctx.data[col].min()
@@ -58,6 +63,7 @@ class NormalizeNumeric(PipelineStep):
                     if max_val > min_val:
                         ctx.data[col] = (ctx.data[col] - min_val) / (max_val - min_val)
                     stats[col] = {"min": float(min_val), "max": float(max_val)}
+                    logger.debug(f"     {col}: min={min_val:.4f}, max={max_val:.4f}")
 
                 elif self.method == "robust":
                     median = ctx.data[col].median()
@@ -67,6 +73,7 @@ class NormalizeNumeric(PipelineStep):
                     if iqr > 0:
                         ctx.data[col] = (ctx.data[col] - median) / iqr
                     stats[col] = {"median": float(median), "iqr": float(iqr)}
+                    logger.debug(f"     {col}: median={median:.4f}, iqr={iqr:.4f}")
 
             ctx.metadata["normalization"] = {
                 "method": self.method,
@@ -107,12 +114,18 @@ class EncodeCategorical(PipelineStep):
             # Select categorical columns
             if self.columns:
                 cols = [c for c in self.columns if c in ctx.data.columns]
+                logger.debug(f"     Using specified columns: {len(cols)} columns")
             else:
                 cols = ctx.data.select_dtypes(include=['object', 'category']).columns.tolist()
+                logger.debug(f"     Auto-selected {len(cols)} categorical columns")
+
+            logger.debug(f"     Encoding method: {self.method}")
+            logger.debug(f"     Max categories for one-hot: {self.max_categories}")
 
             encoded_info = {}
             for col in cols:
                 n_unique = ctx.data[col].nunique()
+                logger.debug(f"     {col}: {n_unique} unique values")
 
                 # Skip high-cardinality columns for one-hot
                 if self.method == "onehot" and n_unique > self.max_categories:
@@ -123,15 +136,18 @@ class EncodeCategorical(PipelineStep):
                     dummies = pd.get_dummies(ctx.data[col], prefix=col, dummy_na=True)
                     ctx.data = pd.concat([ctx.data.drop(columns=[col]), dummies], axis=1)
                     encoded_info[col] = {"method": "onehot", "categories": n_unique}
+                    logger.debug(f"     {col}: one-hot encoded -> {len(dummies.columns)} columns")
 
                 elif self.method == "label":
                     ctx.data[col], uniques = pd.factorize(ctx.data[col])
                     encoded_info[col] = {"method": "label", "mapping": dict(enumerate(uniques))}
+                    logger.debug(f"     {col}: label encoded (0 to {len(uniques)-1})")
 
                 elif self.method == "frequency":
                     freq_map = ctx.data[col].value_counts(normalize=True).to_dict()
                     ctx.data[col] = ctx.data[col].map(freq_map)
                     encoded_info[col] = {"method": "frequency"}
+                    logger.debug(f"     {col}: frequency encoded")
 
             ctx.metadata["categorical_encoding"] = encoded_info
             logger.info(f"Encoded {len(encoded_info)} categorical columns")
@@ -159,6 +175,8 @@ class EngineerFeatures(PipelineStep):
             if not isinstance(ctx.data, pd.DataFrame):
                 return ctx
 
+            logger.debug(f"     Feature definitions: {len(self.features)}")
+
             created = []
             for feat in self.features:
                 name = feat.get("name")
@@ -167,8 +185,10 @@ class EngineerFeatures(PipelineStep):
                     try:
                         ctx.data[name] = ctx.data.eval(expr)
                         created.append(name)
+                        logger.debug(f"     Created '{name}' = {expr}")
                     except Exception as e:
                         logger.warning(f"Failed to create feature {name}: {e}")
+                        logger.debug(f"     Failed '{name}' = {expr}: {e}")
 
             ctx.metadata["engineered_features"] = created
             logger.info(f"Created {len(created)} engineered features")
@@ -198,32 +218,47 @@ class AutoFeatureEngineering(PipelineStep):
                 return ctx
 
             created = []
+            logger.debug(f"     Create datetime features: {self.create_datetime_features}")
+            logger.debug(f"     Create interactions: {self.create_interactions}")
 
             # Datetime features
             if self.create_datetime_features:
                 datetime_cols = ctx.data.select_dtypes(include=['datetime64']).columns
+                logger.debug(f"     Found {len(datetime_cols)} datetime columns")
                 for col in datetime_cols:
                     ctx.data[f"{col}_year"] = ctx.data[col].dt.year
                     ctx.data[f"{col}_month"] = ctx.data[col].dt.month
                     ctx.data[f"{col}_day"] = ctx.data[col].dt.day
                     ctx.data[f"{col}_dayofweek"] = ctx.data[col].dt.dayofweek
                     ctx.data[f"{col}_hour"] = ctx.data[col].dt.hour
-                    created.extend([
+                    new_features = [
                         f"{col}_year", f"{col}_month", f"{col}_day",
                         f"{col}_dayofweek", f"{col}_hour"
-                    ])
+                    ]
+                    created.extend(new_features)
+                    logger.debug(f"     {col}: created {len(new_features)} datetime features")
 
             # Log transforms for skewed numeric columns
             numeric_cols = ctx.data.select_dtypes(include=['number']).columns
+            skewed_cols = []
             for col in numeric_cols:
                 if col.endswith('_log'):
                     continue
                 # Check skewness
-                if ctx.data[col].skew() > 1.0:
+                skewness = ctx.data[col].skew()
+                if skewness > 1.0:
                     min_val = ctx.data[col].min()
                     if min_val >= 0:
                         ctx.data[f"{col}_log"] = np.log1p(ctx.data[col])
                         created.append(f"{col}_log")
+                        skewed_cols.append((col, skewness))
+
+            if skewed_cols:
+                logger.debug(f"     Applied log transform to {len(skewed_cols)} skewed columns:")
+                for col, skew in skewed_cols[:5]:
+                    logger.debug(f"       - {col} (skewness: {skew:.2f})")
+                if len(skewed_cols) > 5:
+                    logger.debug(f"       ... and {len(skewed_cols) - 5} more")
 
             ctx.metadata["auto_engineered_features"] = created
             logger.info(f"Auto-created {len(created)} features")
@@ -261,21 +296,32 @@ class SelectFeatures(PipelineStep):
             numeric_cols = ctx.data.select_dtypes(include=['number']).columns.tolist()
             removed = []
 
+            logger.debug(f"     Selection method: {self.method}")
+            logger.debug(f"     Threshold: {self.threshold}")
+            logger.debug(f"     Numeric columns to evaluate: {len(numeric_cols)}")
+
             if self.method == "variance":
                 # Remove low-variance features
+                logger.debug(f"     Checking variance of each column...")
                 for col in numeric_cols:
                     variance = ctx.data[col].var()
                     if variance < self.threshold:
                         ctx.data = ctx.data.drop(columns=[col])
                         removed.append(col)
+                        logger.debug(f"     Removed '{col}' (variance: {variance:.6f})")
 
             elif self.method == "correlation" and self.target_column:
                 # Select features correlated with target
+                logger.debug(f"     Target column: {self.target_column}")
                 if self.target_column in ctx.data.columns:
                     corr = ctx.data[numeric_cols].corrwith(ctx.data[self.target_column]).abs()
                     low_corr = corr[corr < self.threshold].index.tolist()
                     removed = [c for c in low_corr if c != self.target_column]
                     ctx.data = ctx.data.drop(columns=removed)
+                    for col in removed[:5]:
+                        logger.debug(f"     Removed '{col}' (correlation: {corr[col]:.4f})")
+                    if len(removed) > 5:
+                        logger.debug(f"     ... and {len(removed) - 5} more columns")
 
             ctx.metadata["feature_selection"] = {
                 "method": self.method,
@@ -283,6 +329,7 @@ class SelectFeatures(PipelineStep):
                 "removed": removed,
                 "remaining": len(ctx.data.columns)
             }
+            logger.debug(f"     Columns remaining: {len(ctx.data.columns)}")
             logger.info(f"Removed {len(removed)} features, {len(ctx.data.columns)} remaining")
 
         except Exception as e:

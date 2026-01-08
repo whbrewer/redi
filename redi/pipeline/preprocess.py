@@ -40,23 +40,41 @@ class HandleMissingValues(PipelineStep):
 
             df = ctx.data
             missing_before = df.isna().sum().sum()
+            rows_before = len(df)
+
+            logger.debug(f"     Strategy: {self.strategy}")
+            logger.debug(f"     Total missing values: {missing_before}")
+
+            # Log per-column missing counts
+            missing_per_col = df.isna().sum()
+            cols_with_missing = missing_per_col[missing_per_col > 0]
+            if len(cols_with_missing) > 0:
+                logger.debug(f"     Columns with missing values:")
+                for col, count in cols_with_missing.items():
+                    pct = (count / len(df)) * 100
+                    logger.debug(f"       - {col}: {count} ({pct:.1f}%)")
 
             if self.strategy == "drop":
                 ctx.data = df.dropna()
+                logger.debug(f"     Dropped {rows_before - len(ctx.data)} rows with missing values")
             elif self.strategy == "fill":
                 ctx.data = df.fillna(self.fill_value)
+                logger.debug(f"     Filled with value: {self.fill_value}")
             elif self.strategy == "mean":
                 numeric_cols = df.select_dtypes(include=['number']).columns
                 df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].mean())
                 ctx.data = df
+                logger.debug(f"     Filled {len(numeric_cols)} numeric columns with mean")
             elif self.strategy == "median":
                 numeric_cols = df.select_dtypes(include=['number']).columns
                 df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
                 ctx.data = df
+                logger.debug(f"     Filled {len(numeric_cols)} numeric columns with median")
             elif self.strategy == "mode":
                 for col in df.columns:
                     df[col] = df[col].fillna(df[col].mode().iloc[0] if not df[col].mode().empty else None)
                 ctx.data = df
+                logger.debug(f"     Filled all columns with mode")
 
             missing_after = ctx.data.isna().sum().sum()
             ctx.metadata["missing_values_handled"] = {
@@ -64,6 +82,7 @@ class HandleMissingValues(PipelineStep):
                 "before": int(missing_before),
                 "after": int(missing_after)
             }
+            logger.debug(f"     Remaining missing values: {missing_after}")
             logger.info(f"Missing values: {missing_before} -> {missing_after} (strategy: {self.strategy})")
 
         except ImportError:
@@ -92,11 +111,18 @@ class RemoveDuplicates(PipelineStep):
                 return ctx
 
             before_count = len(ctx.data)
+            logger.debug(f"     Rows before: {before_count:,}")
+            logger.debug(f"     Subset columns: {self.subset if self.subset else 'all columns'}")
+            logger.debug(f"     Keep strategy: {self.keep}")
+
             ctx.data = ctx.data.drop_duplicates(subset=self.subset, keep=self.keep)
             after_count = len(ctx.data)
+            removed = before_count - after_count
 
-            ctx.metadata["duplicates_removed"] = before_count - after_count
-            logger.info(f"Removed {before_count - after_count} duplicate rows")
+            ctx.metadata["duplicates_removed"] = removed
+            logger.debug(f"     Rows after: {after_count:,}")
+            logger.debug(f"     Duplicates removed: {removed:,} ({(removed/before_count)*100:.1f}%)" if before_count > 0 else "     No rows to check")
+            logger.info(f"Removed {removed} duplicate rows")
 
         except Exception as e:
             ctx.add_error(f"Error removing duplicates: {str(e)}")
@@ -120,25 +146,42 @@ class ValidateDataTypes(PipelineStep):
             if not isinstance(ctx.data, pd.DataFrame):
                 return ctx
 
+            dtypes_before = {col: str(dtype) for col, dtype in ctx.data.dtypes.items()}
+            conversions = []
+
             # Auto-detect datetime columns
+            logger.debug(f"     Scanning {len(ctx.data.columns)} columns for datetime patterns")
             for col in ctx.data.columns:
                 if ctx.data[col].dtype == 'object':
                     # Try to parse as datetime
                     try:
                         if any(keyword in col.lower() for keyword in ['date', 'time', 'timestamp']):
                             ctx.data[col] = pd.to_datetime(ctx.data[col], errors='coerce')
+                            conversions.append(f"{col}: object -> datetime64")
+                            logger.debug(f"     Auto-converted '{col}' to datetime")
                     except Exception:
                         pass
 
             # Apply explicit type mapping
+            if self.type_mapping:
+                logger.debug(f"     Applying {len(self.type_mapping)} explicit type mappings")
             for col, dtype in self.type_mapping.items():
                 if col in ctx.data.columns:
                     try:
+                        old_dtype = str(ctx.data[col].dtype)
                         ctx.data[col] = ctx.data[col].astype(dtype)
+                        conversions.append(f"{col}: {old_dtype} -> {dtype}")
+                        logger.debug(f"     Converted '{col}': {old_dtype} -> {dtype}")
                     except Exception as e:
                         logger.warning(f"Could not convert {col} to {dtype}: {e}")
 
             ctx.metadata["dtypes_after"] = {col: str(dtype) for col, dtype in ctx.data.dtypes.items()}
+
+            if conversions:
+                logger.debug(f"     Type conversions performed: {len(conversions)}")
+            else:
+                logger.debug(f"     No type conversions needed")
+
             logger.info("Data types validated")
 
         except Exception as e:
@@ -169,6 +212,12 @@ class HandleOutliers(PipelineStep):
             numeric_cols = ctx.data.select_dtypes(include=['number']).columns
             outliers_found = {}
 
+            logger.debug(f"     Method: {self.method}")
+            logger.debug(f"     Threshold: {self.threshold}")
+            logger.debug(f"     Action: {self.action}")
+            logger.debug(f"     Checking {len(numeric_cols)} numeric columns")
+
+            total_outliers = 0
             for col in numeric_cols:
                 if self.method == "iqr":
                     Q1 = ctx.data[col].quantile(0.25)
@@ -183,7 +232,12 @@ class HandleOutliers(PipelineStep):
                     upper = mean + self.threshold * std
 
                 outlier_mask = (ctx.data[col] < lower) | (ctx.data[col] > upper)
-                outliers_found[col] = int(outlier_mask.sum())
+                outlier_count = int(outlier_mask.sum())
+                outliers_found[col] = outlier_count
+                total_outliers += outlier_count
+
+                if outlier_count > 0:
+                    logger.debug(f"     {col}: {outlier_count} outliers (bounds: [{lower:.2f}, {upper:.2f}])")
 
                 if self.action == "clip":
                     ctx.data[col] = ctx.data[col].clip(lower=lower, upper=upper)
@@ -198,6 +252,7 @@ class HandleOutliers(PipelineStep):
                 "action": self.action,
                 "found": outliers_found
             }
+            logger.debug(f"     Total outliers found: {total_outliers}")
             logger.info(f"Outliers handled with {self.method} method")
 
         except Exception as e:
@@ -233,23 +288,33 @@ class AnonymizePII(PipelineStep):
             # Auto-detect PII columns if not specified
             pii_cols = self.columns or []
             if not pii_cols:
+                logger.debug(f"     Auto-detecting PII columns using keywords: {', '.join(self.PII_KEYWORDS[:5])}...")
                 for col in ctx.data.columns:
                     if any(keyword in col.lower() for keyword in self.PII_KEYWORDS):
                         pii_cols.append(col)
+                        logger.debug(f"     Detected PII column: {col}")
+            else:
+                logger.debug(f"     Using specified PII columns: {', '.join(pii_cols)}")
+
+            logger.debug(f"     Anonymization method: {self.method}")
 
             anonymized = []
             for col in pii_cols:
                 if col not in ctx.data.columns:
+                    logger.debug(f"     Column '{col}' not found, skipping")
                     continue
 
                 if self.method == "hash":
                     ctx.data[col] = ctx.data[col].apply(
                         lambda x: hashlib.sha256(str(x).encode()).hexdigest()[:16] if pd.notna(x) else None
                     )
+                    logger.debug(f"     Hashed column: {col}")
                 elif self.method == "remove":
                     ctx.data = ctx.data.drop(columns=[col])
+                    logger.debug(f"     Removed column: {col}")
                 elif self.method == "mask":
                     ctx.data[col] = "***MASKED***"
+                    logger.debug(f"     Masked column: {col}")
 
                 anonymized.append(col)
 
@@ -290,6 +355,10 @@ class RegridClimate(PipelineStep):
 
             ds = ctx.data
 
+            logger.debug(f"     Target resolution: {self.target_resolution}°")
+            logger.debug(f"     Interpolation method: {self.method}")
+            logger.debug(f"     Input dimensions: {dict(ds.dims)}")
+
             # Create target grid
             lat_out = np.arange(-90, 90 + self.target_resolution, self.target_resolution)
             lon_out = np.arange(0, 360, self.target_resolution)
@@ -298,9 +367,14 @@ class RegridClimate(PipelineStep):
                 'lon': (['lon'], lon_out),
             })
 
+            logger.debug(f"     Output grid: {len(lat_out)} lat x {len(lon_out)} lon points")
+
             # Build regridder
+            logger.debug(f"     Building regridder...")
             regridder = xe.Regridder(ds, ds_out, self.method)
             ctx.data = regridder(ds)
+
+            logger.debug(f"     Output dimensions: {dict(ctx.data.dims)}")
 
             ctx.metadata["regridded"] = {
                 "target_resolution": self.target_resolution,

@@ -241,13 +241,20 @@ def run_pipeline(
 
         # Show running status (rich mode)
         if style == "rich":
-            print(f"  ⏳ {Colors.YELLOW}{step.name}{Colors.END} ...", end="", flush=True)
+            if verbose:
+                # In verbose mode, print on own line so logs don't get overwritten
+                print(f"  ⏳ {Colors.YELLOW}{step.name}{Colors.END}: {step.description}")
+            else:
+                print(f"  ⏳ {Colors.YELLOW}{step.name}{Colors.END} ...", end="", flush=True)
 
         # Validate
         if not step.validate(ctx):
             step_time = time.time() - step_start
             if style == "rich":
-                print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (validation) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                if verbose:
+                    print(f"     {Colors.DIM}↳ skipped (validation failed){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                else:
+                    print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (validation) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
             elif style == "simple":
                 print(f"  [SKIP] {step.name}")
             step_results.append(("skipped", step.name, "", step_time))
@@ -281,14 +288,20 @@ def run_pipeline(
 
             if new_errors:
                 if style == "rich":
-                    print(f"\r  ⚠️  {Colors.YELLOW}{step.name}{Colors.END} → {ctx.errors[-1][:40]}... {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    if verbose:
+                        print(f"     {Colors.YELLOW}↳ warning: {ctx.errors[-1]}{Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    else:
+                        print(f"\r  ⚠️  {Colors.YELLOW}{step.name}{Colors.END} → {ctx.errors[-1][:40]}... {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                 elif style == "simple":
                     print(f"  [WARN] {step.name}: {ctx.errors[-1][:60]}")
                 step_results.append(("warning", step.name, ctx.errors[-1], step_time))
             else:
                 if style == "rich":
                     detail_str = f" → {detail}" if detail else ""
-                    print(f"\r  ✅ {Colors.GREEN}{step.name}{Colors.END}{detail_str} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    if verbose:
+                        print(f"     {Colors.GREEN}↳ done{Colors.END}{detail_str} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    else:
+                        print(f"\r  ✅ {Colors.GREEN}{step.name}{Colors.END}{detail_str} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                 elif style == "simple":
                     detail_str = f": {detail}" if detail else ""
                     print(f"  [OK] {step.name}{detail_str}")
@@ -299,7 +312,10 @@ def run_pipeline(
             ctx.add_error(f"Error in step {step.name}: {str(e)}")
             prev_error_count = len(ctx.errors)
             if style == "rich":
-                print(f"\r  ❌ {Colors.RED}{step.name}{Colors.END} → {str(e)[:50]} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                if verbose:
+                    print(f"     {Colors.RED}↳ error: {str(e)}{Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                else:
+                    print(f"\r  ❌ {Colors.RED}{step.name}{Colors.END} → {str(e)[:50]} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
             elif style == "simple":
                 print(f"  [FAIL] {step.name}: {str(e)[:60]}")
             step_results.append(("error", step.name, str(e), step_time))
