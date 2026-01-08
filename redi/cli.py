@@ -156,7 +156,10 @@ def run_pipeline(
         print(f"Domain: {domain}")
 
     # Create context
-    ctx = create_context(str(input_path), output_dir, domain, **(config or {}))
+    safe_config = dict(config or {})
+    for reserved_key in ("input_path", "input", "output_dir", "domain"):
+        safe_config.pop(reserved_key, None)
+    ctx = create_context(str(input_path), output_dir, domain, **safe_config)
 
     # Load domain-specific pipeline
     if style == "rich":
@@ -487,10 +490,11 @@ Examples:
   %(prog)s data.csv -o ./processed       # Custom output directory
   %(prog)s data.csv --stages ingest,preprocess  # Run specific stages
   %(prog)s --analyze data.csv            # Generate data card only
+  %(prog)s pipeline.yaml                 # Run from YAML (input_path in config)
         """
     )
 
-    parser.add_argument("input", help="Input file path")
+    parser.add_argument("input", nargs="?", help="Input file path or YAML config path")
     parser.add_argument("-d", "--domain", choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
                        help="Scientific domain (auto-detected if not specified)")
     parser.add_argument("-o", "--output", default="./output", help="Output directory")
@@ -501,27 +505,81 @@ Examples:
     parser.add_argument("-a", "--analyze", action="store_true", help="Only analyze and generate data card")
     parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                        help="Output style: rich (default), simple, or json")
+    parser.add_argument("-c", "--config", help="YAML configuration file path")
 
     args = parser.parse_args()
 
+    config_path = args.config
+    input_path = args.input
+    if not config_path and input_path and input_path.endswith((".yml", ".yaml")):
+        config_path = input_path
+        input_path = None
+
+    # Load YAML config if provided
+    config = {}
+    if config_path:
+        from .config import load_yaml_config, merge_with_defaults, validate_config
+        try:
+            yaml_config = load_yaml_config(config_path)
+            config = merge_with_defaults(yaml_config)
+
+            # Validate configuration
+            issues = validate_config(config)
+            if issues:
+                for issue in issues:
+                    print(f"{Colors.YELLOW}Warning: {issue}{Colors.END}")
+        except FileNotFoundError as e:
+            print(f"{Colors.RED}Error: {e}{Colors.END}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
+            sys.exit(1)
+
+    # CLI arguments override YAML config
+    if args.domain:
+        config['domain'] = args.domain
+    if args.output != './output':
+        config['output_dir'] = args.output
+    if args.format != 'npz':
+        config['output_format'] = args.format
     if args.verbose:
+        config['verbose'] = True
+    if args.stages:
+        config['stages'] = args.stages.split(',')
+
+    # Set default output_format if not in config
+    if 'output_format' not in config:
+        config['output_format'] = args.format
+
+    verbose = args.verbose or config.get('verbose', False)
+    if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Handle analyze mode
+    if input_path is None:
+        input_path = config.get('input_path') or config.get('input')
+
+    if not input_path:
+        print(f"{Colors.RED}Error: input file path required. Provide it on the CLI or set "
+              f"'input_path' in the YAML config.{Colors.END}")
+        sys.exit(1)
+
     if args.analyze:
-        result = analyze_dataset(args.input)
+        result = analyze_dataset(input_path)
         print(result)
         return
 
     # Run pipeline
-    stages = args.stages.split(",") if args.stages else None
+    stages = config.get('stages')
+    if args.stages:
+        stages = args.stages.split(",")
     ctx = run_pipeline(
-        input_path=args.input,
-        output_dir=args.output,
-        domain=args.domain,
+        input_path=input_path,
+        output_dir=config.get('output_dir', args.output),
+        domain=config.get('domain', args.domain),
         stages=stages,
-        config={"output_format": args.format},
-        verbose=args.verbose,
+        config=config,
+        verbose=verbose,
         style=args.style
     )
 
