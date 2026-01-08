@@ -112,6 +112,23 @@ redi data.csv --analyze
 python -m redi.analyze data.csv
 ```
 
+## YAML Workflow Configs
+
+For reproducible runs, place options in a YAML file and pass it directly to the CLI.
+Include `input_path` in the YAML to avoid supplying the dataset on the command line.
+
+```yaml
+# pipeline.yaml
+input_path: /path/to/data.nc
+domain: climate
+output_dir: ./output
+output_format: npz
+```
+
+```bash
+redi pipeline.yaml
+```
+
 ## Pipeline Stages
 
 | Stage          | Description                                     |

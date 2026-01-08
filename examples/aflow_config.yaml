@@ -1,0 +1,21 @@
+# Example REDI Configuration for AFLOW Materials Data
+
+domain: materials
+input_path: /opt/drai/aflow/aflow_ml_ready.csv
+output_dir: ./output
+output_format: npz
+
+# Normalization settings
+normalize:
+  enabled: true
+  method: zscore  # zscore or minmax
+
+# Train/val/test split
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  shuffle: true
+  random_seed: 42

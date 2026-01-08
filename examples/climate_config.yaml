@@ -1,0 +1,44 @@
+# Example REDI Configuration for Climate Data Preprocessing
+# Compatible with ClimaX output format
+
+domain: climate
+input_path: /opt/drai/datasets/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_185001010000-186001010000_raw.nc
+output_dir: ./output
+output_format: npz
+
+# Regridding settings
+regrid:
+  enabled: true
+  target_resolution: 1.40625  # degrees (ClimaX default)
+  method: bilinear            # bilinear, conservative, nearest_s2d
+
+# Normalization settings
+normalize:
+  enabled: true
+  method: zscore              # zscore or minmax
+  two_pass: true              # compute stats across all data first
+
+# Variable selection (optional)
+variables:
+  select: null                # null = all variables
+  pressure_levels: null       # null = all levels, or specify: [500, 700, 850, 925, 1000]
+
+# Train/val/test split
+split:
+  method: temporal            # temporal or random
+  train:
+    start: "1979-01-01"
+    end: "2015-12-31"
+  val:
+    start: "2016-01-01"
+    end: "2017-12-31"
+  test:
+    start: "2018-01-01"
+    end: "2020-12-31"
+
+# ClimaX-compatible output format
+climax_output:
+  enabled: true
+  save_coordinates: true      # lat.npy, lon.npy
+  save_normalization: true    # normalize_mean.npz, normalize_std.npz
+  variable_naming: name_level # e.g., temperature_500

@@ -1,0 +1,21 @@
+# Example REDI Configuration for OpenFold FASTA Input
+
+domain: life_sciences
+input_path: /opt/drai/openfold/examples/monomer/fasta_dir/6kwc.fasta
+output_dir: ./output
+output_format: hdf5
+
+# Normalization settings
+normalize:
+  enabled: true
+  method: zscore
+
+# Train/val/test split
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  shuffle: true
+  random_seed: 42
