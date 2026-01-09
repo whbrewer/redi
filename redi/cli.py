@@ -606,6 +606,124 @@ def analyze_dataset(input_path: str) -> str:
         return f"{Colors.RED}Error: Could not import analyze module: {e}{Colors.END}"
 
 
+def run_fair_assessment(
+    input_path: str,
+    domain: Optional[str] = None,
+    fair_config_path: Optional[str] = None,
+    style: str = "rich",
+    output_dir: Optional[str] = None,
+) -> Optional[str]:
+    """Run FAIR principles assessment.
+
+    Args:
+        input_path: Path to data file
+        domain: Scientific domain
+        fair_config_path: Path to FAIR metadata YAML
+        style: Output style (rich, simple, json)
+        output_dir: Directory to save FAIR report
+
+    Returns:
+        Path to saved FAIR report or None
+    """
+    try:
+        from .fair import FAIRAssessor, FAIRMetadata, FAIRRecommender, load_fair_metadata
+        from .analyze import DataAnalyzer
+
+        # Load DataCard for context
+        data_card = None
+        detected_domain = domain
+        try:
+            analyzer = DataAnalyzer(input_path)
+            data_card = analyzer.analyze()
+            if not detected_domain:
+                detected_domain = data_card.detected_domain
+        except Exception:
+            pass
+
+        detected_domain = detected_domain or "general"
+
+        # Load external FAIR metadata if provided
+        fair_metadata = None
+        if fair_config_path:
+            try:
+                fair_metadata = load_fair_metadata(fair_config_path)
+            except Exception as e:
+                if style == "rich":
+                    print(f"    {Colors.YELLOW}Warning: Could not load FAIR config: {e}{Colors.END}")
+
+        # Run assessment
+        assessor = FAIRAssessor(domain=detected_domain)
+        fair_score = assessor.assess(
+            file_path=input_path,
+            data_card=data_card,
+            metadata=fair_metadata,
+        )
+
+        # Display results
+        if style == "rich":
+            print_section("FAIR Assessment")
+            print(f"    {Colors.BOLD}Overall Score:{Colors.END} {fair_score.overall_score:.0%}")
+            print()
+
+            # Category scores
+            for category, score in fair_score.category_scores.items():
+                if score >= 0.8:
+                    color = Colors.GREEN
+                    status = "Excellent"
+                elif score >= 0.6:
+                    color = Colors.CYAN
+                    status = "Good"
+                elif score >= 0.4:
+                    color = Colors.YELLOW
+                    status = "Needs Work"
+                else:
+                    color = Colors.RED
+                    status = "Poor"
+                print(f"    {category.capitalize():15} {color}{score:>5.0%}{Colors.END} ({status})")
+
+            # Quick recommendations
+            recommender = FAIRRecommender(fair_score, domain=detected_domain)
+            quick_wins = recommender.get_quick_wins()
+            if quick_wins:
+                print()
+                print(f"    {Colors.BOLD}Quick Wins:{Colors.END}")
+                for win in quick_wins[:3]:
+                    print(f"      {Colors.CYAN}→{Colors.END} {win}")
+
+        elif style == "simple":
+            print(f"FAIR Score: {fair_score.overall_score:.0%}")
+            for category, score in fair_score.category_scores.items():
+                print(f"  {category}: {score:.0%}")
+
+        elif style == "json":
+            import json
+            print(json.dumps(fair_score.to_dict(), indent=2))
+
+        # Save report if output_dir provided
+        saved_path = None
+        if output_dir:
+            out_path = Path(output_dir)
+            out_path.mkdir(parents=True, exist_ok=True)
+            report_path = out_path / "FAIR_ASSESSMENT.md"
+            report_path.write_text(fair_score.to_markdown())
+            saved_path = str(report_path)
+
+            if style == "rich":
+                print()
+                print(f"    📋 {Colors.BOLD}FAIR_ASSESSMENT.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+
+        return saved_path
+
+    except ImportError as e:
+        if style == "rich":
+            print(f"    {Colors.YELLOW}⚠ FAIR module not available: {e}{Colors.END}")
+        return None
+    except Exception as e:
+        if style == "rich":
+            print(f"    {Colors.RED}✗ FAIR assessment failed: {e}{Colors.END}")
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="REDI - Data Readiness for AI Pipeline",
@@ -638,6 +756,8 @@ Multi-file examples:
     parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                        help="Output style: rich (default), simple, or json")
     parser.add_argument("-c", "--config", help="YAML configuration file path")
+    parser.add_argument("--fair", action="store_true", help="Run FAIR principles assessment")
+    parser.add_argument("--fair-config", help="YAML file with FAIR metadata (DOI, license, etc.)")
 
     args = parser.parse_args()
 
@@ -719,7 +839,23 @@ Multi-file examples:
         if len(input_paths) > 1:
             print(f"\n{Colors.DIM}Note: Analyzed first file only. "
                   f"{len(input_paths) - 1} additional files not shown.{Colors.END}")
+
+        # Run FAIR assessment if requested
+        if args.fair:
+            run_fair_assessment(
+                str(input_paths[0]),
+                domain=config.get('domain', args.domain),
+                fair_config_path=args.fair_config,
+                style=args.style,
+            )
         return
+
+    # For FAIR-only mode (no analyze, no pipeline)
+    if args.fair and not args.analyze:
+        # Check if user wants FAIR-only (no other stages specified)
+        if args.stages is None and config.get('stages') is None:
+            # Run FAIR assessment only if --fair is the main action
+            pass  # Continue to pipeline, FAIR will be run at end
 
     # Run pipeline
     stages = config.get('stages')
@@ -734,6 +870,18 @@ Multi-file examples:
         style=args.style,
         input_paths=[str(p) for p in input_paths]
     )
+
+    # Run FAIR assessment after pipeline if requested
+    if args.fair and ctx:
+        fair_path = run_fair_assessment(
+            str(input_paths[0]),
+            domain=config.get('domain', args.domain),
+            fair_config_path=args.fair_config,
+            style=args.style,
+            output_dir=config.get('output_dir', args.output),
+        )
+        if fair_path and ctx.metadata.get("saved_files") is not None:
+            ctx.metadata["saved_files"].append(fair_path)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,13 @@ DEFAULTS: Dict[str, Any] = {
         'save_coordinates': True,
         'save_normalization': True,
     },
+
+    'fair': {
+        'enabled': False,
+        'metadata_file': None,  # Path to FAIR metadata YAML
+        'standards': 'auto',  # auto, or list of standards to check
+        'strict_mode': False,  # Require all assessable principles
+    },
 }
 
 
@@ -287,5 +294,11 @@ climax_output:
   save_coordinates: true     # lat.npy, lon.npy
   save_normalization: true   # normalize_mean.npz, normalize_std.npz
   variable_naming: name_level  # e.g., temperature_500
+
+# FAIR assessment settings
+fair:
+  enabled: false             # Run FAIR assessment
+  metadata_file: null        # Path to FAIR metadata YAML with DOI, license, etc.
+  standards: auto            # auto, or list: [cf_conventions, acdd]
 """
     return example
