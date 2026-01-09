@@ -87,6 +87,45 @@ source /path/to/venv/bin/activate
 python -c "import esmpy; import xesmf; print('ESMF/xesmf ready!')"
 ```
 
+## Claude Code Skill Installation
+
+REDI includes a Claude Code skill that lets you invoke it with `/redi` in Claude Code conversations.
+
+### Install the Skill
+
+Claude Code skills are stored in `.claude/skills/<skill-name>/SKILL.md` within your project. To install:
+
+```bash
+# From the redi directory
+mkdir -p .claude/skills/redi
+cp SKILL.md .claude/skills/redi/SKILL.md
+```
+
+Or create a symlink to keep the skill in sync with the source:
+
+```bash
+mkdir -p .claude/skills/redi
+ln -s "$(pwd)/SKILL.md" .claude/skills/redi/SKILL.md
+```
+
+### Skill File Format
+
+The skill file requires YAML frontmatter with `name` and `description`:
+
+```markdown
+---
+name: redi
+description: REDI transforms raw scientific data into AI-ready datasets...
+---
+
+# REDI - Readiness Engine for Data Integration
+...
+```
+
+### Usage
+
+In a Claude Code conversation, type `/redi` to activate the skill. Claude will then use the REDI CLI to process your datasets.
+
 ## Quick Start
 
 ### Run Full Pipeline

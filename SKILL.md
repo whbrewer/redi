@@ -1,6 +1,9 @@
-# REDI - Readiness Engine for Data Integration
+---
+name: redi
+description: REDI (Readiness Engine for Data Integration) transforms raw scientific data into AI-ready datasets. Use when the user wants to analyze a dataset for AI/ML readiness, generate a Data Card, get preprocessing recommendations, or process data through the full pipeline. Supports climate, materials science, life sciences, fusion, and HPC domains.
+---
 
-## Description
+# REDI - Readiness Engine for Data Integration
 
 REDI transforms raw scientific data into AI-ready datasets. Use when the user wants to:
 - Analyze a dataset for AI/ML readiness
@@ -10,6 +13,21 @@ REDI transforms raw scientific data into AI-ready datasets. Use when the user wa
 - Understand what steps are needed to make data AI-ready
 
 Supports climate, materials science, life sciences, fusion, and HPC domains.
+
+## Usage
+
+When the user provides a dataset path, run the REDI CLI:
+
+```bash
+# Full pipeline (auto-detects domain)
+redi /path/to/data.csv -o ./output
+
+# Analysis only (generates Data Card)
+redi --analyze /path/to/data.csv
+
+# Specific domain
+redi /path/to/data.nc --domain climate -o ./output
+```
 
 ## Quick Start
 
@@ -28,28 +46,6 @@ redi data.csv --domain hpc -o ./output
 
 # Run specific stages only
 redi data.csv --stages ingest,preprocess,transform
-```
-
-## Demo Script
-
-Interactive demo showcasing all capabilities:
-
-```bash
-# Run with sample data (domain required)
-python demo.py --domain hpc             # HPC demo
-python demo.py --domain climate         # Climate demo
-python demo.py --domain materials       # Materials science demo
-python demo.py --domain bio             # Life sciences demo
-python demo.py --all                    # All domains
-
-# Run with real data
-python demo.py -i /path/to/jobs.csv -d hpc -o ./output --keep
-python demo.py -i /path/to/climate.nc -d climate -o ./output --keep
-python demo.py -i /path/to/proteins.fasta -d bio -o ./output --keep
-
-# Change output format
-python demo.py -d hpc --format parquet  # Parquet output
-python demo.py -d hpc --format csv      # CSV output
 ```
 
 ## CLI Options
@@ -114,7 +110,6 @@ redi/
 │   ├── life_sciences.py
 │   ├── fusion.py
 │   └── hpc.py
-├── demo.py             # Interactive demo script
 └── tests/              # Unit and smoke tests
 ```
 
