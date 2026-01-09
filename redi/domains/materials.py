@@ -48,7 +48,19 @@ def get_ingest_steps():
             try:
                 import pandas as pd
 
-                df = pd.read_csv(ctx.input_path)
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+                if len(paths) == 1:
+                    df = pd.read_csv(paths[0])
+                else:
+                    dfs = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {path.name}")
+                        dfs.append(pd.read_csv(path))
+                    df = pd.concat(dfs, axis=0, ignore_index=True)
+                    logger.info(f"Concatenated {len(paths)} files")
+
                 ctx.data = df
 
                 # Identify composition column
@@ -93,12 +105,30 @@ def get_ingest_steps():
             try:
                 from pymatgen.core import Structure
 
-                structure = Structure.from_file(ctx.input_path)
-                ctx.data = structure
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
 
-                ctx.metadata["formula"] = structure.composition.reduced_formula
-                ctx.metadata["n_atoms"] = len(structure)
-                ctx.metadata["spacegroup"] = structure.get_space_group_info()
+                if len(paths) == 1:
+                    structure = Structure.from_file(paths[0])
+                    ctx.data = structure
+                    ctx.metadata["formula"] = structure.composition.reduced_formula
+                    ctx.metadata["n_atoms"] = len(structure)
+                    ctx.metadata["spacegroup"] = structure.get_space_group_info()
+                else:
+                    # Multiple structure files - load into list
+                    structures = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading structure {i+1}/{len(paths)}: {path.name}")
+                        structures.append(Structure.from_file(path))
+                    ctx.data = structures
+                    ctx.metadata["n_structures"] = len(structures)
+                    # Use first structure for metadata
+                    structure = structures[0]
+                    ctx.metadata["formula"] = structure.composition.reduced_formula
+                    ctx.metadata["n_atoms"] = len(structure)
+                    ctx.metadata["spacegroup"] = structure.get_space_group_info()
+                    logger.info(f"Loaded {len(structures)} structure files")
+
                 ctx.metadata["lattice"] = {
                     "a": structure.lattice.a,
                     "b": structure.lattice.b,

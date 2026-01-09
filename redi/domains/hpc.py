@@ -52,10 +52,27 @@ def get_ingest_steps():
             try:
                 import pandas as pd
 
-                if ctx.metadata.get("file_format") == "parquet":
-                    df = pd.read_parquet(ctx.input_path)
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+                file_format = ctx.metadata.get("file_format")
+
+                if len(paths) == 1:
+                    # Single file
+                    if file_format == "parquet":
+                        df = pd.read_parquet(paths[0])
+                    else:
+                        df = pd.read_csv(paths[0])
                 else:
-                    df = pd.read_csv(ctx.input_path)
+                    # Multiple files - concatenate
+                    dfs = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {path.name}")
+                        if file_format == "parquet":
+                            dfs.append(pd.read_parquet(path))
+                        else:
+                            dfs.append(pd.read_csv(path))
+                    df = pd.concat(dfs, axis=0, ignore_index=True)
+                    logger.info(f"Concatenated {len(paths)} files")
 
                 ctx.data = df
 

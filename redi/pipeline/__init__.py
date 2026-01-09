@@ -10,7 +10,7 @@ Modular 5-stage pipeline for data preprocessing:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable, Union
 from enum import Enum
 from pathlib import Path
 import logging
@@ -30,9 +30,10 @@ class PipelineStage(Enum):
 @dataclass
 class PipelineContext:
     """Context passed through pipeline stages"""
-    # Input/output paths
-    input_path: Path
+    # Input/output paths - support both single and multiple files
+    input_path: Path  # Primary input path (first file or single file)
     output_dir: Path
+    input_paths: List[Path] = field(default_factory=list)  # All input paths for multi-file
 
     # Domain detection
     domain: str = "general"
@@ -48,6 +49,16 @@ class PipelineContext:
 
     # Configuration
     config: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_multi_file(self) -> bool:
+        """Check if this context has multiple input files"""
+        return len(self.input_paths) > 1
+
+    @property
+    def num_input_files(self) -> int:
+        """Number of input files"""
+        return len(self.input_paths) if self.input_paths else 1
 
     def mark_complete(self, stage: PipelineStage):
         """Mark a stage as completed"""
@@ -144,15 +155,40 @@ class Pipeline:
 
 # Convenience function to create a pipeline context
 def create_context(
-    input_path: str,
+    input_path: Optional[str] = None,
     output_dir: str = "./output",
     domain: str = "general",
+    input_paths: Optional[List[str]] = None,
     **config
 ) -> PipelineContext:
-    """Create a new pipeline context"""
+    """Create a new pipeline context
+
+    Args:
+        input_path: Single input file path (for backward compatibility)
+        output_dir: Output directory path
+        domain: Scientific domain
+        input_paths: List of input file paths for multi-file processing
+        **config: Additional configuration options
+
+    Returns:
+        PipelineContext configured for single or multi-file processing
+    """
+    # Handle input paths
+    if input_paths:
+        # Multi-file mode
+        paths = [Path(p) for p in input_paths]
+        primary_path = paths[0]
+    elif input_path:
+        # Single file mode (backward compatible)
+        primary_path = Path(input_path)
+        paths = [primary_path]
+    else:
+        raise ValueError("Either input_path or input_paths must be provided")
+
     return PipelineContext(
-        input_path=Path(input_path),
+        input_path=primary_path,
         output_dir=Path(output_dir),
+        input_paths=paths,
         domain=domain,
         config=config
     )

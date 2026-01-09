@@ -6,6 +6,7 @@ Unified entry point for running REDI pipelines.
 """
 
 import argparse
+import glob
 import logging
 import sys
 import time
@@ -99,45 +100,133 @@ def detect_domain(input_path: Path, columns: Optional[List[str]] = None) -> str:
     return "general"
 
 
+def expand_input_paths(input_args: List[str]) -> List[Path]:
+    """Expand input arguments to a list of file paths.
+
+    Supports:
+    - Single file paths
+    - Multiple file paths
+    - Glob patterns (*.nc, data_*.csv, etc.)
+
+    Args:
+        input_args: List of input paths or patterns
+
+    Returns:
+        Sorted list of Path objects
+    """
+    expanded_paths = []
+
+    for arg in input_args:
+        # Check if it's a glob pattern
+        if '*' in arg or '?' in arg or '[' in arg:
+            # Expand glob pattern
+            matches = glob.glob(arg, recursive=True)
+            if matches:
+                expanded_paths.extend(Path(m) for m in matches)
+            else:
+                # No matches - keep original (will fail validation later)
+                expanded_paths.append(Path(arg))
+        else:
+            expanded_paths.append(Path(arg))
+
+    # Sort by filename for consistent ordering (important for time-series)
+    expanded_paths = sorted(set(expanded_paths), key=lambda p: p.name)
+
+    return expanded_paths
+
+
 def run_pipeline(
-    input_path: str,
+    input_path: Optional[str] = None,
     output_dir: str = "./output",
     domain: Optional[str] = None,
     stages: Optional[List[str]] = None,
     config: Optional[dict] = None,
     verbose: bool = False,
-    style: str = "rich"
+    style: str = "rich",
+    input_paths: Optional[List[str]] = None
 ):
-    """Run the REDI pipeline with engaging visual output"""
+    """Run the REDI pipeline with engaging visual output
+
+    Args:
+        input_path: Single input file path (for backward compatibility)
+        output_dir: Output directory
+        domain: Scientific domain (auto-detected if not specified)
+        stages: List of stages to run
+        config: Additional configuration
+        verbose: Enable verbose output
+        style: Output style (rich, simple, json)
+        input_paths: List of input file paths for multi-file processing
+    """
     from .pipeline import Pipeline, PipelineStage, create_context
 
-    input_path = Path(input_path)
-    if not input_path.exists():
+    # Handle input paths
+    if input_paths:
+        # Multi-file mode - paths already expanded
+        paths = [Path(p) for p in input_paths]
+    elif input_path:
+        # Single file mode (backward compatible)
+        paths = [Path(input_path)]
+    else:
         if style == "rich":
-            print(f"{Colors.RED}✗ Input file not found: {input_path}{Colors.END}")
+            print(f"{Colors.RED}✗ No input files specified{Colors.END}")
         else:
-            print(f"Error: Input file not found: {input_path}")
+            print("Error: No input files specified")
         return None
+
+    # Validate all files exist
+    missing_files = [p for p in paths if not p.exists()]
+    if missing_files:
+        if style == "rich":
+            print(f"{Colors.RED}✗ Input file(s) not found:{Colors.END}")
+            for f in missing_files[:5]:
+                print(f"    {f}")
+            if len(missing_files) > 5:
+                print(f"    ... and {len(missing_files) - 5} more")
+        else:
+            print(f"Error: Input file(s) not found: {missing_files[0]}")
+        return None
+
+    # Use first file as primary for backward compatibility
+    primary_path = paths[0]
 
     # Print banner (rich mode only)
     if style == "rich":
         print_banner()
 
     # Show input info
-    file_size = input_path.stat().st_size
-    size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.1f} MB"
+    if len(paths) == 1:
+        # Single file
+        file_size = primary_path.stat().st_size
+        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.1f} MB"
 
-    if style == "rich":
-        print_section("Input")
-        print_metric("File", str(input_path))
-        print_metric("Size", size_str)
-        print_metric("Format", input_path.suffix.upper().replace(".", ""))
-    elif style == "simple":
-        print(f"Input: {input_path} ({size_str})")
+        if style == "rich":
+            print_section("Input")
+            print_metric("File", str(primary_path))
+            print_metric("Size", size_str)
+            print_metric("Format", primary_path.suffix.upper().replace(".", ""))
+        elif style == "simple":
+            print(f"Input: {primary_path} ({size_str})")
+    else:
+        # Multiple files
+        total_size = sum(p.stat().st_size for p in paths)
+        size_str = f"{total_size / 1024:.1f} KB" if total_size < 1024*1024 else f"{total_size / (1024*1024):.1f} MB"
+        if total_size >= 1024*1024*1024:
+            size_str = f"{total_size / (1024*1024*1024):.2f} GB"
+
+        if style == "rich":
+            print_section("Input")
+            print_metric("Files", f"{len(paths)} files")
+            print_metric("Total Size", size_str)
+            print_metric("Format", primary_path.suffix.upper().replace(".", ""))
+            print_metric("First", paths[0].name)
+            print_metric("Last", paths[-1].name)
+        elif style == "simple":
+            print(f"Input: {len(paths)} files ({size_str})")
 
     # Auto-detect domain
+    domain_was_auto = domain is None
     if domain is None:
-        domain = detect_domain(input_path)
+        domain = detect_domain(primary_path)
 
     domain_icons = {
         "climate": "🌍",
@@ -151,15 +240,29 @@ def run_pipeline(
 
     if style == "rich":
         print_section("Domain Detection")
-        print(f"    {icon} Detected: {Colors.BOLD}{Colors.CYAN}{domain.upper()}{Colors.END}")
+        if domain == "general" and domain_was_auto:
+            print(f"    {Colors.YELLOW}⚠ Could not auto-detect domain{Colors.END}")
+            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc{Colors.END}")
+        else:
+            print(f"    {icon} Detected: {Colors.BOLD}{Colors.CYAN}{domain.upper()}{Colors.END}")
     elif style == "simple":
+        if domain == "general" and domain_was_auto:
+            print(f"Warning: Could not auto-detect domain. Use -d to specify.")
         print(f"Domain: {domain}")
 
     # Create context
     safe_config = dict(config or {})
-    for reserved_key in ("input_path", "input", "output_dir", "domain"):
+    for reserved_key in ("input_path", "input", "output_dir", "domain", "input_paths"):
         safe_config.pop(reserved_key, None)
-    ctx = create_context(str(input_path), output_dir, domain, **safe_config)
+
+    # Pass all paths to context
+    ctx = create_context(
+        input_path=str(primary_path),
+        output_dir=output_dir,
+        domain=domain,
+        input_paths=[str(p) for p in paths],
+        **safe_config
+    )
 
     # Load domain-specific pipeline
     if style == "rich":
@@ -290,14 +393,36 @@ def run_pipeline(
             prev_error_count = len(ctx.errors)
 
             if new_errors:
+                error_msg = ctx.errors[-1]
+                # Check for critical errors that should stop the pipeline
+                is_critical = any(phrase in error_msg.lower() for phrase in [
+                    "unknown file format",
+                    "file not found",
+                    "no data loaded",
+                    "all files failed"
+                ])
+
                 if style == "rich":
-                    if verbose:
-                        print(f"     {Colors.YELLOW}↳ warning: {ctx.errors[-1]}{Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    if is_critical:
+                        if verbose:
+                            print(f"     {Colors.RED}↳ error: {error_msg}{Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                        else:
+                            print(f"\r  ❌ {Colors.RED}{step.name}{Colors.END} → {error_msg[:40]}... {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                     else:
-                        print(f"\r  ⚠️  {Colors.YELLOW}{step.name}{Colors.END} → {ctx.errors[-1][:40]}... {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                        if verbose:
+                            print(f"     {Colors.YELLOW}↳ warning: {error_msg}{Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                        else:
+                            print(f"\r  ⚠️  {Colors.YELLOW}{step.name}{Colors.END} → {error_msg[:40]}... {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                 elif style == "simple":
-                    print(f"  [WARN] {step.name}: {ctx.errors[-1][:60]}")
-                step_results.append(("warning", step.name, ctx.errors[-1], step_time))
+                    print(f"  [{'FAIL' if is_critical else 'WARN'}] {step.name}: {error_msg[:60]}")
+
+                if is_critical:
+                    step_results.append(("error", step.name, error_msg, step_time))
+                    if style == "rich":
+                        print(f"\n    {Colors.RED}Pipeline stopped due to critical error.{Colors.END}")
+                    break
+                else:
+                    step_results.append(("warning", step.name, error_msg, step_time))
             else:
                 if style == "rich":
                     detail_str = f" → {detail}" if detail else ""
@@ -374,8 +499,8 @@ def run_pipeline(
         try:
             from .analyze import generate_report, analyze_dataset, PipelineRecommender
 
-            # Generate full report for file
-            report = generate_report(str(input_path))
+            # Generate full report for file (use primary path for multi-file)
+            report = generate_report(str(primary_path))
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
             datacard_path.write_text(report)
@@ -385,7 +510,7 @@ def run_pipeline(
             print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
             # Display recommendations in terminal
-            data_card = analyze_dataset(str(input_path))
+            data_card = analyze_dataset(str(primary_path))
             recommender = PipelineRecommender(data_card)
             rec = recommender.get_recommendations()
 
@@ -491,10 +616,15 @@ Examples:
   %(prog)s data.csv --stages ingest,preprocess  # Run specific stages
   %(prog)s --analyze data.csv            # Generate data card only
   %(prog)s pipeline.yaml                 # Run from YAML (input_path in config)
+
+Multi-file examples:
+  %(prog)s data_*.nc                     # Process multiple NetCDF files (glob)
+  %(prog)s file1.nc file2.nc file3.nc    # Process explicit file list
+  %(prog)s "/path/to/data/*.nc"          # Quoted glob pattern
         """
     )
 
-    parser.add_argument("input", nargs="?", help="Input file path or YAML config path")
+    parser.add_argument("input", nargs="*", help="Input file path(s), glob pattern, or YAML config")
     parser.add_argument("-d", "--domain", choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
                        help="Scientific domain (auto-detected if not specified)")
     parser.add_argument("-o", "--output", default="./output", help="Output directory")
@@ -510,10 +640,18 @@ Examples:
     args = parser.parse_args()
 
     config_path = args.config
-    input_path = args.input
-    if not config_path and input_path and input_path.endswith((".yml", ".yaml")):
-        config_path = input_path
-        input_path = None
+    input_args = args.input  # Now a list
+
+    # Check if first input is a YAML config file
+    if not config_path and input_args and len(input_args) == 1:
+        if input_args[0].endswith((".yml", ".yaml")):
+            config_path = input_args[0]
+            input_args = []
+
+    # Expand glob patterns in input arguments
+    input_paths = []
+    if input_args:
+        input_paths = expand_input_paths(input_args)
 
     # Load YAML config if provided
     config = {}
@@ -555,18 +693,30 @@ Examples:
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # Handle analyze mode
-    if input_path is None:
-        input_path = config.get('input_path') or config.get('input')
+    # Handle input from config if not provided on CLI
+    if not input_paths:
+        config_input = config.get('input_path') or config.get('input')
+        config_input_paths = config.get('input_paths')
 
-    if not input_path:
-        print(f"{Colors.RED}Error: input file path required. Provide it on the CLI or set "
-              f"'input_path' in the YAML config.{Colors.END}")
+        if config_input_paths:
+            # Multi-file from config
+            input_paths = expand_input_paths(config_input_paths)
+        elif config_input:
+            # Single file from config (may be a glob pattern)
+            input_paths = expand_input_paths([config_input])
+
+    if not input_paths:
+        print(f"{Colors.RED}Error: input file path(s) required. Provide on CLI or set "
+              f"'input_path' or 'input_paths' in the YAML config.{Colors.END}")
         sys.exit(1)
 
+    # For analyze mode, use first file
     if args.analyze:
-        result = analyze_dataset(input_path)
+        result = analyze_dataset(str(input_paths[0]))
         print(result)
+        if len(input_paths) > 1:
+            print(f"\n{Colors.DIM}Note: Analyzed first file only. "
+                  f"{len(input_paths) - 1} additional files not shown.{Colors.END}")
         return
 
     # Run pipeline
@@ -574,13 +724,13 @@ Examples:
     if args.stages:
         stages = args.stages.split(",")
     ctx = run_pipeline(
-        input_path=input_path,
         output_dir=config.get('output_dir', args.output),
         domain=config.get('domain', args.domain),
         stages=stages,
         config=config,
         verbose=verbose,
-        style=args.style
+        style=args.style,
+        input_paths=[str(p) for p in input_paths]
     )
 
 

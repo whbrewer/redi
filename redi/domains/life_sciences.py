@@ -45,18 +45,29 @@ def get_ingest_steps():
             try:
                 from Bio import SeqIO
 
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
                 fmt = "fasta" if ctx.metadata.get("file_format") == "fasta" else "fastq"
-                sequences = list(SeqIO.parse(ctx.input_path, fmt))
+
+                all_sequences = []
+                for i, path in enumerate(paths):
+                    if len(paths) > 1:
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {path.name}")
+                    seqs = list(SeqIO.parse(path, fmt))
+                    all_sequences.extend(seqs)
+
+                if len(paths) > 1:
+                    logger.info(f"Loaded sequences from {len(paths)} files")
 
                 ctx.data = {
-                    "sequences": [str(seq.seq) for seq in sequences],
-                    "ids": [seq.id for seq in sequences],
-                    "descriptions": [seq.description for seq in sequences]
+                    "sequences": [str(seq.seq) for seq in all_sequences],
+                    "ids": [seq.id for seq in all_sequences],
+                    "descriptions": [seq.description for seq in all_sequences]
                 }
 
-                ctx.metadata["num_sequences"] = len(sequences)
-                ctx.metadata["avg_length"] = sum(len(s) for s in ctx.data["sequences"]) / len(sequences)
-                logger.info(f"Loaded {len(sequences)} sequences")
+                ctx.metadata["num_sequences"] = len(all_sequences)
+                ctx.metadata["avg_length"] = sum(len(s) for s in ctx.data["sequences"]) / len(all_sequences) if all_sequences else 0
+                logger.info(f"Loaded {len(all_sequences)} sequences")
 
             except ImportError:
                 ctx.add_error("biopython not installed")
@@ -79,7 +90,19 @@ def get_ingest_steps():
             try:
                 import pandas as pd
 
-                df = pd.read_csv(ctx.input_path)
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+                if len(paths) == 1:
+                    df = pd.read_csv(paths[0])
+                else:
+                    dfs = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {path.name}")
+                        dfs.append(pd.read_csv(path))
+                    df = pd.concat(dfs, axis=0, ignore_index=True)
+                    logger.info(f"Concatenated {len(paths)} files")
+
                 ctx.data = df
 
                 # Detect PII columns
