@@ -871,12 +871,15 @@ Multi-file examples:
         input_paths=[str(p) for p in input_paths]
     )
 
-    # Run FAIR assessment after pipeline if requested
-    if args.fair and ctx:
+    # Run FAIR assessment after pipeline if requested (CLI flag or YAML config)
+    fair_enabled = args.fair or config.get('fair', {}).get('enabled', False)
+    fair_config_path = args.fair_config or config.get('fair', {}).get('metadata_file')
+
+    if fair_enabled and ctx:
         fair_path = run_fair_assessment(
             str(input_paths[0]),
             domain=config.get('domain', args.domain),
-            fair_config_path=args.fair_config,
+            fair_config_path=fair_config_path,
             style=args.style,
             output_dir=config.get('output_dir', args.output),
         )

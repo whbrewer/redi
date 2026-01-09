@@ -1,0 +1,67 @@
+# FAIR Metadata Sidecar File
+# This file provides FAIR-related metadata that cannot be auto-detected from the data file.
+# Place alongside your data file with the naming convention: <datafile>.fair.yaml
+
+# =============================================================================
+# FINDABLE
+# =============================================================================
+
+# F1: Globally unique persistent identifier
+persistent_identifier: "10.5281/zenodo.1234567"
+identifier_type: "doi"
+
+# F4: Registered in searchable resource
+is_registered: true
+registry_name: "Zenodo"
+registry_url: "https://zenodo.org/record/1234567"
+
+# =============================================================================
+# ACCESSIBLE
+# =============================================================================
+
+# A1: Retrievable by identifier using standardized protocol
+access_url: "https://zenodo.org/record/1234567/files/fair_sample_data.csv"
+access_protocol: "https"
+
+# A1.2: Authentication (if required)
+requires_authentication: false
+# authentication_type: "api_key"  # Uncomment if auth required
+# authentication_documented: true
+
+# A2: Metadata landing page (persists even if data removed)
+metadata_landing_page: "https://zenodo.org/record/1234567"
+
+# =============================================================================
+# INTEROPERABLE
+# =============================================================================
+
+# I2: Vocabularies/standards used
+vocabulary_standards:
+  - "CF Conventions 1.10"
+  - "ISO 8601 timestamps"
+  - "WGS84 coordinates"
+
+# I3: References to related datasets
+references_other_data:
+  - "10.5281/zenodo.9999999"  # Parent dataset
+  - "10.1234/related-study"   # Related publication
+
+# Schema documentation
+schema_url: "https://example.org/schemas/weather-observations-v1.json"
+
+# =============================================================================
+# REUSABLE
+# =============================================================================
+
+# R1.1: License
+license: "CC-BY-4.0"
+license_url: "https://creativecommons.org/licenses/by/4.0/"
+
+# R1.2: Provenance documented
+provenance_documented: true
+
+# R1.3: Community standards followed
+community_standards:
+  - "CF Conventions"
+  - "ACDD 1.3"
+  - "ISO 19115 Geographic Metadata"
