@@ -30,7 +30,8 @@ CLIMATE_VARIABLES = {
 
 def get_ingest_steps():
     """Get climate-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadClimateData(PipelineStep):
         """Load climate data using xarray"""
@@ -53,26 +54,73 @@ def get_ingest_steps():
             try:
                 import xarray as xr
 
-                path = ctx.input_path
+                # Handle multi-file case
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+                file_format = ctx.metadata.get("file_format")
 
-                if ctx.metadata.get("file_format") == "zarr":
-                    ctx.data = xr.open_zarr(path)
-                elif ctx.metadata.get("file_format") == "grib":
-                    ctx.data = xr.open_dataset(path, engine="cfgrib")
+                if len(paths) == 1:
+                    # Single file mode
+                    path = paths[0]
+                    if file_format == "zarr":
+                        ctx.data = xr.open_zarr(path)
+                    elif file_format == "grib":
+                        ctx.data = xr.open_dataset(path, engine="cfgrib")
+                    else:
+                        ctx.data = xr.open_dataset(path)
+                    logger.info(f"Loaded single climate file: {path.name}")
                 else:
-                    ctx.data = xr.open_dataset(path)
+                    # Multi-file mode - load sequentially and concatenate
+                    if file_format == "zarr":
+                        ctx.add_error("Cannot combine multiple Zarr stores. Use a single Zarr store.")
+                        return ctx
+
+                    file_list = [str(p) for p in paths]
+                    logger.info(f"Loading {len(paths)} climate files sequentially")
+
+                    datasets = []
+                    failed_files = []
+                    for i, fpath in enumerate(file_list):
+                        fname = Path(fpath).name
+                        logger.debug(f"Loading file {i+1}/{len(file_list)}: {fname}")
+                        try:
+                            if file_format == "grib":
+                                ds = xr.open_dataset(fpath, engine="cfgrib")
+                            else:
+                                ds = xr.open_dataset(fpath)
+                            datasets.append(ds)
+                        except Exception as e:
+                            failed_files.append((fname, str(e)))
+                            logger.warning(f"Failed to load {fname}: {e}")
+
+                    if failed_files:
+                        # Report failed files
+                        failed_names = [f[0] for f in failed_files]
+                        ctx.metadata["failed_files"] = failed_files
+                        if not datasets:
+                            ctx.add_error(f"All {len(file_list)} files failed to load. First error: {failed_files[0][1]}")
+                            return ctx
+                        logger.warning(f"Skipped {len(failed_files)} corrupted file(s): {', '.join(failed_names)}")
+
+                    if len(datasets) == 1:
+                        ctx.data = datasets[0]
+                    else:
+                        ctx.data = xr.concat(datasets, dim='time', data_vars='minimal')
+
+                    logger.info(f"Successfully combined {len(datasets)} files")
 
                 # Extract metadata
                 ctx.metadata["variables"] = list(ctx.data.data_vars)
                 ctx.metadata["dimensions"] = dict(ctx.data.dims)
                 ctx.metadata["coordinates"] = list(ctx.data.coords)
+                ctx.metadata["num_source_files"] = len(paths)
 
                 # Detect time range
                 if "time" in ctx.data.coords:
+                    time_vals = ctx.data.time.values
                     ctx.metadata["time_range"] = {
-                        "start": str(ctx.data.time.values[0]),
-                        "end": str(ctx.data.time.values[-1]),
-                        "steps": len(ctx.data.time)
+                        "start": str(time_vals[0]),
+                        "end": str(time_vals[-1]),
+                        "steps": len(time_vals)
                     }
 
                 # Detect spatial extent
@@ -94,19 +142,19 @@ def get_ingest_steps():
 
                 logger.info(f"Loaded climate data: {ctx.metadata['variables']}")
 
-            except ImportError as e:
-                ctx.add_error(f"Missing package: {str(e)}")
+            except ImportError:
+                ctx.add_error(missing_dependency_error("xarray/netCDF4", "climate"))
             except Exception as e:
                 ctx.add_error(f"Error loading climate data: {str(e)}")
 
             return ctx
 
-    return [LoadClimateData()]
+    return [DetectFormat(), LoadClimateData()]
 
 
 def get_preprocess_steps():
     """Get climate-specific preprocess steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
     class RegridClimate(PipelineStep):
         """Regrid to uniform lat/lon resolution using xESMF"""
@@ -167,7 +215,7 @@ def get_preprocess_steps():
                 logger.info(f"Regridded to {self.target_resolution}° resolution")
 
             except ImportError:
-                ctx.add_error("xesmf not installed")
+                ctx.add_error(missing_dependency_error("xesmf", "climate"))
             except Exception as e:
                 ctx.add_error(f"Error regridding: {str(e)}")
 
@@ -215,6 +263,8 @@ def get_preprocess_steps():
                 ctx.metadata["normalization_stats"] = stats
                 logger.info(f"Normalized {len(stats)} climate variables")
 
+            except ImportError:
+                ctx.add_error(missing_dependency_error("xarray/netCDF4", "climate"))
             except Exception as e:
                 ctx.add_error(f"Error normalizing: {str(e)}")
 

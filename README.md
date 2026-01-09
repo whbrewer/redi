@@ -141,6 +141,23 @@ redi data.nc --domain climate -o ./output
 redi data.csv --stages ingest,preprocess,transform
 ```
 
+### Multi-File Processing
+
+REDI supports processing multiple files that will be concatenated together:
+
+```bash
+# Glob pattern (quote to prevent shell expansion)
+redi "/path/to/data/*.nc" -d climate -o ./output
+
+# Multiple explicit files
+redi file1.nc file2.nc file3.nc -d climate -o ./output
+
+# Bracket patterns for ranges
+redi "/path/to/temp_18[5-9]*.nc" -d climate -o ./output
+```
+
+For climate/NetCDF data, files are concatenated along the time dimension using xarray. For CSV/Parquet, files are concatenated row-wise.
+
 ### Analyze Dataset Only
 
 ```bash
@@ -157,8 +174,27 @@ For reproducible runs, place options in a YAML file and pass it directly to the 
 Include `input_path` in the YAML to avoid supplying the dataset on the command line.
 
 ```yaml
-# pipeline.yaml
+# pipeline.yaml - single file
 input_path: /path/to/data.nc
+domain: climate
+output_dir: ./output
+output_format: npz
+```
+
+```yaml
+# pipeline.yaml - multiple files (glob pattern)
+input_path: "/path/to/data/*.nc"
+domain: climate
+output_dir: ./output
+output_format: npz
+```
+
+```yaml
+# pipeline.yaml - explicit file list
+input_paths:
+  - /path/to/data_1850.nc
+  - /path/to/data_1860.nc
+  - /path/to/data_1870.nc
 domain: climate
 output_dir: ./output
 output_format: npz
@@ -191,18 +227,23 @@ redi pipeline.yaml
 ## CLI Options
 
 ```
-redi <input> [options]
+redi <input> [input2 ...] [options]
 
 Arguments:
-  input                   Input file path
+  input                   Input file path(s), glob pattern, or YAML config
+                          Multiple files can be specified and will be concatenated
+                          Glob patterns are expanded (e.g., "*.nc", "data_18[5-9]*.nc")
 
 Options:
   -d, --domain DOMAIN     Scientific domain (auto-detected if not specified)
                           Choices: climate, materials, life_sciences, fusion, hpc, general
   -o, --output DIR        Output directory (default: ./output)
   -s, --stages STAGES     Comma-separated list of stages to run
+  -f, --format FORMAT     Output format: npz, parquet, csv, hdf5, zarr (default: npz)
   -a, --analyze           Only analyze and generate Data Card (no processing)
   -v, --verbose           Verbose output
+  -c, --config FILE       YAML configuration file path
+  --style STYLE           Output style: rich (default), simple, or json
 ```
 
 ## Module Usage
@@ -232,11 +273,19 @@ print(report)
 ```python
 from cli import run_pipeline
 
+# Single file
 ctx = run_pipeline(
     input_path="data.csv",
     output_dir="./output",
     domain="hpc",  # or None for auto-detect
     stages=["ingest", "preprocess", "transform", "structure", "output"]
+)
+
+# Multiple files
+ctx = run_pipeline(
+    input_paths=["data_1850.nc", "data_1860.nc", "data_1870.nc"],
+    output_dir="./output",
+    domain="climate"
 )
 
 print(f"Completed: {[s.value for s in ctx.completed_stages]}")
@@ -250,14 +299,21 @@ from pipeline import Pipeline, create_context
 from pipeline.ingest import get_ingest_steps
 from pipeline.preprocess import get_preprocess_steps
 
-# Create context
+# Create context (single file)
 ctx = create_context("data.csv", "./output", "hpc")
 
+# Create context (multiple files)
+ctx = create_context(
+    output_dir="./output",
+    domain="climate",
+    input_paths=["data_1850.nc", "data_1860.nc", "data_1870.nc"]
+)
+
 # Build custom pipeline
-pipeline = Pipeline("hpc")
+pipeline = Pipeline("climate")
 for step in get_ingest_steps():
     pipeline.add_step(step)
-for step in get_preprocess_steps("hpc"):
+for step in get_preprocess_steps("climate"):
     pipeline.add_step(step)
 
 # Execute

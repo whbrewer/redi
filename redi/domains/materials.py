@@ -32,7 +32,8 @@ MAGPIE_PREFIXES = [
 
 def get_ingest_steps():
     """Get materials-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadMaterialsCSV(PipelineStep):
         """Load materials CSV with composition parsing"""
@@ -48,7 +49,19 @@ def get_ingest_steps():
             try:
                 import pandas as pd
 
-                df = pd.read_csv(ctx.input_path)
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+                if len(paths) == 1:
+                    df = pd.read_csv(paths[0])
+                else:
+                    dfs = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {path.name}")
+                        dfs.append(pd.read_csv(path))
+                    df = pd.concat(dfs, axis=0, ignore_index=True)
+                    logger.info(f"Concatenated {len(paths)} files")
+
                 ctx.data = df
 
                 # Identify composition column
@@ -93,12 +106,30 @@ def get_ingest_steps():
             try:
                 from pymatgen.core import Structure
 
-                structure = Structure.from_file(ctx.input_path)
-                ctx.data = structure
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
 
-                ctx.metadata["formula"] = structure.composition.reduced_formula
-                ctx.metadata["n_atoms"] = len(structure)
-                ctx.metadata["spacegroup"] = structure.get_space_group_info()
+                if len(paths) == 1:
+                    structure = Structure.from_file(paths[0])
+                    ctx.data = structure
+                    ctx.metadata["formula"] = structure.composition.reduced_formula
+                    ctx.metadata["n_atoms"] = len(structure)
+                    ctx.metadata["spacegroup"] = structure.get_space_group_info()
+                else:
+                    # Multiple structure files - load into list
+                    structures = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading structure {i+1}/{len(paths)}: {path.name}")
+                        structures.append(Structure.from_file(path))
+                    ctx.data = structures
+                    ctx.metadata["n_structures"] = len(structures)
+                    # Use first structure for metadata
+                    structure = structures[0]
+                    ctx.metadata["formula"] = structure.composition.reduced_formula
+                    ctx.metadata["n_atoms"] = len(structure)
+                    ctx.metadata["spacegroup"] = structure.get_space_group_info()
+                    logger.info(f"Loaded {len(structures)} structure files")
+
                 ctx.metadata["lattice"] = {
                     "a": structure.lattice.a,
                     "b": structure.lattice.b,
@@ -112,13 +143,13 @@ def get_ingest_steps():
                 logger.info(f"Loaded structure: {ctx.metadata['formula']}")
 
             except ImportError:
-                ctx.add_error("pymatgen not installed")
+                ctx.add_error(missing_dependency_error("pymatgen", "materials"))
             except Exception as e:
                 ctx.add_error(f"Error loading structure: {str(e)}")
 
             return ctx
 
-    return [LoadMaterialsCSV(), LoadStructureFile()]
+    return [DetectFormat(), LoadMaterialsCSV(), LoadStructureFile()]
 
 
 def get_preprocess_steps():
@@ -245,7 +276,8 @@ def get_transform_steps():
                 logger.info(f"Added {len(feature_labels)} composition features")
 
             except ImportError as e:
-                ctx.add_error(f"Missing package: {str(e)}")
+                package = getattr(e, "name", None) or "pymatgen/matminer"
+                ctx.add_error(missing_dependency_error(package, "materials"))
             except Exception as e:
                 ctx.add_error(f"Error featurizing: {str(e)}")
 

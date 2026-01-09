@@ -15,7 +15,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-from . import PipelineStep, PipelineStage, PipelineContext
+from . import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +314,7 @@ class SaveHDF5(PipelineStep):
             logger.info(f"Saved HDF5 to {file_path}")
 
         except ImportError:
-            ctx.add_error("h5py not installed")
+            ctx.add_error(missing_dependency_error("h5py", "hdf5"))
         except Exception as e:
             ctx.add_error(f"Error saving HDF5: {str(e)}")
         return ctx
@@ -369,7 +369,7 @@ class SaveParquet(PipelineStep):
             logger.info(f"Saved {len(saved_files)} Parquet files to {output_dir}")
 
         except ImportError:
-            ctx.add_error("pandas/pyarrow not installed")
+            ctx.add_error(missing_dependency_error("pyarrow", "parquet"))
         except Exception as e:
             ctx.add_error(f"Error saving Parquet: {str(e)}")
         return ctx

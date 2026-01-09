@@ -28,7 +28,8 @@ PLASMA_PARAMETERS = {
 
 def get_ingest_steps():
     """Get fusion-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadFusionHDF5(PipelineStep):
         """Load fusion HDF5 data files"""
@@ -45,35 +46,56 @@ def get_ingest_steps():
                 import h5py
                 import numpy as np
 
-                with h5py.File(ctx.input_path, 'r') as f:
-                    # Extract structure
-                    def get_datasets(group, prefix=""):
-                        datasets = {}
-                        for key in group.keys():
-                            path = f"{prefix}/{key}" if prefix else key
-                            if isinstance(group[key], h5py.Dataset):
-                                datasets[path] = {
-                                    "shape": group[key].shape,
-                                    "dtype": str(group[key].dtype)
-                                }
-                            elif isinstance(group[key], h5py.Group):
-                                datasets.update(get_datasets(group[key], path))
-                        return datasets
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
 
-                    structure = get_datasets(f)
+                def get_datasets(group, prefix=""):
+                    datasets = {}
+                    for key in group.keys():
+                        path = f"{prefix}/{key}" if prefix else key
+                        if isinstance(group[key], h5py.Dataset):
+                            datasets[path] = {
+                                "shape": group[key].shape,
+                                "dtype": str(group[key].dtype)
+                            }
+                        elif isinstance(group[key], h5py.Group):
+                            datasets.update(get_datasets(group[key], path))
+                    return datasets
 
-                    # Load data into memory
-                    data = {}
-                    for path in structure.keys():
-                        data[path] = f[path][:]
+                if len(paths) == 1:
+                    # Single file
+                    with h5py.File(paths[0], 'r') as f:
+                        structure = get_datasets(f)
+                        data = {}
+                        for path in structure.keys():
+                            data[path] = f[path][:]
+                    ctx.data = data
+                    ctx.metadata["datasets"] = structure
+                    ctx.metadata["num_signals"] = len(structure)
+                else:
+                    # Multiple files - load each into a dict keyed by filename
+                    all_data = {}
+                    all_structures = {}
+                    for i, fpath in enumerate(paths):
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {fpath.name}")
+                        with h5py.File(fpath, 'r') as f:
+                            structure = get_datasets(f)
+                            data = {}
+                            for path in structure.keys():
+                                data[path] = f[path][:]
+                        all_data[fpath.name] = data
+                        all_structures[fpath.name] = structure
 
-                ctx.data = data
-                ctx.metadata["datasets"] = structure
-                ctx.metadata["num_signals"] = len(structure)
-                logger.info(f"Loaded fusion HDF5: {len(structure)} signals")
+                    ctx.data = all_data
+                    ctx.metadata["datasets"] = all_structures
+                    ctx.metadata["num_files"] = len(paths)
+                    ctx.metadata["num_signals"] = sum(len(s) for s in all_structures.values())
+                    logger.info(f"Loaded {len(paths)} fusion HDF5 files")
+
+                logger.info(f"Loaded fusion HDF5: {ctx.metadata.get('num_signals', 0)} signals")
 
             except ImportError:
-                ctx.add_error("h5py not installed")
+                ctx.add_error(missing_dependency_error("h5py", "fusion"))
             except Exception as e:
                 ctx.add_error(f"Error loading fusion HDF5: {str(e)}")
 
@@ -93,7 +115,19 @@ def get_ingest_steps():
             try:
                 import pandas as pd
 
-                df = pd.read_csv(ctx.input_path)
+                # Handle multi-file input
+                paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+                if len(paths) == 1:
+                    df = pd.read_csv(paths[0])
+                else:
+                    dfs = []
+                    for i, path in enumerate(paths):
+                        logger.debug(f"Loading file {i+1}/{len(paths)}: {path.name}")
+                        dfs.append(pd.read_csv(path))
+                    df = pd.concat(dfs, axis=0, ignore_index=True)
+                    logger.info(f"Concatenated {len(paths)} files")
+
                 ctx.data = df
 
                 # Detect shot/pulse column
@@ -126,7 +160,7 @@ def get_ingest_steps():
 
             return ctx
 
-    return [LoadFusionHDF5(), LoadFusionCSV()]
+    return [DetectFormat(), LoadFusionHDF5(), LoadFusionCSV()]
 
 
 def get_preprocess_steps():

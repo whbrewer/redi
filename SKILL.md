@@ -46,22 +46,30 @@ redi data.csv --domain hpc -o ./output
 
 # Run specific stages only
 redi data.csv --stages ingest,preprocess,transform
+
+# Process multiple files (glob pattern)
+redi "/path/to/data/*.nc" -d climate -o ./output
+
+# Process multiple files (explicit list)
+redi file1.nc file2.nc file3.nc -d climate -o ./output
 ```
 
 ## CLI Options
 
 ```
-redi <input> [options]
+redi <input> [input2 ...] [options]
 
 Arguments:
-  input                   Input file path
+  input                   Input file path(s) or glob pattern (e.g., "*.nc")
 
 Options:
   -d, --domain DOMAIN     Domain: climate, materials, life_sciences, fusion, hpc, general
   -o, --output DIR        Output directory (default: ./output)
   -s, --stages STAGES     Comma-separated stages to run
+  -f, --format FORMAT     Output format: npz, parquet, csv, hdf5, zarr
   -a, --analyze           Only analyze and generate Data Card
   -v, --verbose           Verbose output
+  -c, --config FILE       YAML configuration file
 ```
 
 ## Domains

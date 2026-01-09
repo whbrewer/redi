@@ -16,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, List
-from . import PipelineStep, PipelineStage, PipelineContext
+from . import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +63,57 @@ class DetectFormat(PipelineStep):
         ".bp": "adios",
     }
 
-    def execute(self, ctx: PipelineContext) -> PipelineContext:
-        path = ctx.input_path
+    def _sniff_format(self, path: Path) -> str:
+        """Detect format by sniffing file content"""
+        try:
+            with open(path, 'rb') as f:
+                header = f.read(1024)
 
-        if not path.exists():
-            ctx.add_error(f"File not found: {path}")
+            # Check for binary formats
+            if header.startswith(b'\x89HDF'):
+                return "hdf5"
+            if header.startswith(b'PAR1') or b'PAR1' in header[:100]:
+                return "parquet"
+            if header.startswith(b'CDF'):
+                return "netcdf"
+
+            # Try to decode as text
+            try:
+                text = header.decode('utf-8', errors='ignore')
+                first_line = text.split('\n')[0].strip()
+
+                # Check for JSON
+                if first_line.startswith('{') or first_line.startswith('['):
+                    return "json"
+
+                # Check for FASTA
+                if first_line.startswith('>'):
+                    return "fasta"
+
+                # Check for CSV/TSV (has delimiters)
+                if ',' in first_line or '\t' in first_line or ';' in first_line:
+                    return "csv"
+
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+        return "unknown"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        # Handle multi-file case
+        paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+        # Check all files exist
+        missing = [p for p in paths if not p.exists()]
+        if missing:
+            ctx.add_error(f"File(s) not found: {missing[0]}")
             return ctx
 
-        # Detect format from extension
+        # Detect format from first file
+        path = paths[0]
         ext = path.suffix.lower()
         detected_format = self.FORMAT_EXTENSIONS.get(ext, "unknown")
         logger.debug(f"     File extension: {ext}")
@@ -82,17 +125,53 @@ class DetectFormat(PipelineStep):
                 detected_format = "zarr"
                 logger.debug(f"     Found zarr markers, format set to zarr")
 
-        file_size = path.stat().st_size if path.is_file() else 0
-        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"
+        # If format unknown, try content sniffing
+        if detected_format == "unknown" and path.is_file():
+            detected_format = self._sniff_format(path)
+            if detected_format != "unknown":
+                logger.debug(f"     Detected format from content: {detected_format}")
+
+        # Validate all files have same format (for multi-file)
+        if len(paths) > 1:
+            formats = set()
+            for p in paths:
+                p_ext = p.suffix.lower()
+                p_fmt = self.FORMAT_EXTENSIONS.get(p_ext, "unknown")
+                # Sniff if unknown
+                if p_fmt == "unknown" and p.is_file():
+                    p_fmt = self._sniff_format(p)
+                formats.add(p_fmt)
+
+            if len(formats) > 1 and "unknown" not in formats:
+                ctx.add_error(f"Mixed file formats detected: {formats}. All files must have the same format.")
+                return ctx
+
+            logger.debug(f"     Multi-file mode: {len(paths)} files")
+
+        # Calculate total size
+        total_size = sum(p.stat().st_size for p in paths if p.is_file())
+        size_str = f"{total_size / 1024:.1f} KB" if total_size < 1024*1024 else f"{total_size / (1024*1024):.2f} MB"
 
         ctx.metadata["file_format"] = detected_format
         ctx.metadata["file_extension"] = ext
-        ctx.metadata["file_size_bytes"] = file_size
+        ctx.metadata["file_size_bytes"] = total_size
         ctx.metadata["file_name"] = path.name
+        ctx.metadata["num_input_files"] = len(paths)
+        ctx.metadata["input_files"] = [p.name for p in paths]
 
-        logger.debug(f"     File size: {size_str}")
+        logger.debug(f"     Total size: {size_str}")
         logger.debug(f"     Detected format: {detected_format}")
-        logger.info(f"Detected format: {detected_format} for {path.name}")
+
+        if detected_format == "unknown":
+            logger.warning(f"Could not detect file format for: {path.name}")
+            ctx.add_error(f"Unknown file format. Supported formats: csv, json, parquet, netcdf, hdf5, fasta, cif, etc. "
+                         f"Check file extension or use a supported format.")
+            return ctx
+
+        if len(paths) > 1:
+            logger.info(f"Detected format: {detected_format} for {len(paths)} files")
+        else:
+            logger.info(f"Detected format: {detected_format} for {path.name}")
         return ctx
 
 
@@ -109,8 +188,24 @@ class LoadCSV(PipelineStep):
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
-            logger.debug(f"     Reading CSV file: {ctx.input_path}")
-            ctx.data = pd.read_csv(ctx.input_path)
+
+            paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+            if len(paths) == 1:
+                # Single file
+                logger.debug(f"     Reading CSV file: {paths[0]}")
+                ctx.data = pd.read_csv(paths[0])
+            else:
+                # Multiple files - concatenate
+                logger.debug(f"     Reading {len(paths)} CSV files")
+                dfs = []
+                for i, path in enumerate(paths):
+                    logger.debug(f"     Reading file {i+1}/{len(paths)}: {path.name}")
+                    df = pd.read_csv(path)
+                    dfs.append(df)
+                ctx.data = pd.concat(dfs, axis=0, ignore_index=True)
+                logger.debug(f"     Concatenated {len(paths)} files")
+
             ctx.metadata["num_rows"] = len(ctx.data)
             ctx.metadata["num_columns"] = len(ctx.data.columns)
             ctx.metadata["columns"] = list(ctx.data.columns)
@@ -126,9 +221,12 @@ class LoadCSV(PipelineStep):
             memory_mb = ctx.data.memory_usage(deep=True).sum() / (1024 * 1024)
             logger.debug(f"     Memory usage: {memory_mb:.2f} MB")
 
-            logger.info(f"Loaded CSV: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
+            if len(paths) > 1:
+                logger.info(f"Loaded {len(paths)} CSV files: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
+            else:
+                logger.info(f"Loaded CSV: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
         except ImportError:
-            ctx.add_error("pandas not installed - required for CSV loading")
+            ctx.add_error(missing_dependency_error("pandas"))
         except Exception as e:
             ctx.add_error(f"Failed to load CSV: {str(e)}")
         return ctx
@@ -192,8 +290,24 @@ class LoadParquet(PipelineStep):
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
-            logger.debug(f"     Reading Parquet file: {ctx.input_path}")
-            ctx.data = pd.read_parquet(ctx.input_path)
+
+            paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+            if len(paths) == 1:
+                # Single file
+                logger.debug(f"     Reading Parquet file: {paths[0]}")
+                ctx.data = pd.read_parquet(paths[0])
+            else:
+                # Multiple files - concatenate
+                logger.debug(f"     Reading {len(paths)} Parquet files")
+                dfs = []
+                for i, path in enumerate(paths):
+                    logger.debug(f"     Reading file {i+1}/{len(paths)}: {path.name}")
+                    df = pd.read_parquet(path)
+                    dfs.append(df)
+                ctx.data = pd.concat(dfs, axis=0, ignore_index=True)
+                logger.debug(f"     Concatenated {len(paths)} files")
+
             ctx.metadata["num_rows"] = len(ctx.data)
             ctx.metadata["num_columns"] = len(ctx.data.columns)
             ctx.metadata["columns"] = list(ctx.data.columns)
@@ -206,9 +320,12 @@ class LoadParquet(PipelineStep):
             memory_mb = ctx.data.memory_usage(deep=True).sum() / (1024 * 1024)
             logger.debug(f"     Memory usage: {memory_mb:.2f} MB")
 
-            logger.info(f"Loaded Parquet: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
+            if len(paths) > 1:
+                logger.info(f"Loaded {len(paths)} Parquet files: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
+            else:
+                logger.info(f"Loaded Parquet: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
         except ImportError:
-            ctx.add_error("pandas/pyarrow not installed - required for Parquet loading")
+            ctx.add_error(missing_dependency_error("pyarrow", "parquet"))
         except Exception as e:
             ctx.add_error(f"Failed to load Parquet: {str(e)}")
         return ctx
@@ -227,8 +344,44 @@ class LoadNetCDF(PipelineStep):
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import xarray as xr
-            logger.debug(f"     Reading NetCDF file: {ctx.input_path}")
-            ctx.data = xr.open_dataset(ctx.input_path)
+
+            paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+            if len(paths) == 1:
+                # Single file
+                logger.debug(f"     Reading NetCDF file: {paths[0]}")
+                ctx.data = xr.open_dataset(paths[0])
+            else:
+                # Multiple files - load sequentially and concatenate
+                logger.debug(f"     Reading {len(paths)} NetCDF files sequentially")
+                file_list = [str(p) for p in paths]
+
+                datasets = []
+                failed_files = []
+                for i, fpath in enumerate(file_list):
+                    fname = Path(fpath).name
+                    logger.debug(f"     Loading file {i+1}/{len(file_list)}: {fname}")
+                    try:
+                        ds = xr.open_dataset(fpath)
+                        datasets.append(ds)
+                    except Exception as e:
+                        failed_files.append((fname, str(e)))
+                        logger.warning(f"     Failed to load {fname}: {e}")
+
+                if failed_files:
+                    ctx.metadata["failed_files"] = failed_files
+                    if not datasets:
+                        ctx.add_error(f"All {len(file_list)} files failed to load")
+                        return ctx
+                    logger.warning(f"     Skipped {len(failed_files)} corrupted file(s)")
+
+                if len(datasets) == 1:
+                    ctx.data = datasets[0]
+                else:
+                    ctx.data = xr.concat(datasets, dim='time', data_vars='minimal')
+
+                logger.debug(f"     Successfully combined {len(datasets)} files")
+
             ctx.metadata["variables"] = list(ctx.data.data_vars)
             ctx.metadata["dimensions"] = dict(ctx.data.dims)
             ctx.metadata["coordinates"] = list(ctx.data.coords)
@@ -238,9 +391,12 @@ class LoadNetCDF(PipelineStep):
             logger.debug(f"     Dimensions: {ctx.metadata['dimensions']}")
             logger.debug(f"     Coordinates: {', '.join(ctx.metadata['coordinates'])}")
 
-            logger.info(f"Loaded NetCDF: {len(ctx.metadata['variables'])} variables")
+            if len(paths) > 1:
+                logger.info(f"Loaded {len(paths)} NetCDF files: {len(ctx.metadata['variables'])} variables")
+            else:
+                logger.info(f"Loaded NetCDF: {len(ctx.metadata['variables'])} variables")
         except ImportError:
-            ctx.add_error("xarray not installed - required for NetCDF loading")
+            ctx.add_error(missing_dependency_error("xarray/netCDF4", "climate"))
         except Exception as e:
             ctx.add_error(f"Failed to load NetCDF: {str(e)}")
         return ctx
@@ -287,7 +443,7 @@ class LoadHDF5(PipelineStep):
 
             logger.info(f"Loaded HDF5: {len(ctx.metadata['groups'])} top-level groups")
         except ImportError:
-            ctx.add_error("h5py not installed - required for HDF5 loading")
+            ctx.add_error(missing_dependency_error("h5py", "hdf5"))
         except Exception as e:
             ctx.add_error(f"Failed to load HDF5: {str(e)}")
         return ctx

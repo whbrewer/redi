@@ -13,7 +13,7 @@ Operations:
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
-from . import PipelineStep, PipelineStage, PipelineContext
+from . import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ class ToTorchTensors(PipelineStep):
             logger.info(f"Converted to PyTorch tensors on {self.device}")
 
         except ImportError:
-            ctx.add_error("PyTorch not installed")
+            ctx.add_error(missing_dependency_error("torch", "torch"))
         except Exception as e:
             ctx.add_error(f"Error converting to PyTorch: {str(e)}")
         return ctx
@@ -318,7 +318,7 @@ class CreateTorchGeometricData(PipelineStep):
             logger.info("Created PyTorch Geometric Data object")
 
         except ImportError:
-            ctx.add_error("torch_geometric not installed")
+            ctx.add_error(missing_dependency_error("torch-geometric", "torch-geometric"))
         except Exception as e:
             ctx.add_error(f"Error creating PyG Data: {str(e)}")
         return ctx
