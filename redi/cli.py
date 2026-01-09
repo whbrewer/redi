@@ -399,7 +399,9 @@ def run_pipeline(
                     "unknown file format",
                     "file not found",
                     "no data loaded",
-                    "all files failed"
+                    "all files failed",
+                    "missing dependency",
+                    "install with:"
                 ])
 
                 if style == "rich":

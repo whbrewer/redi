@@ -15,7 +15,7 @@ Operations:
 
 import logging
 from typing import Any, Dict, List, Optional
-from . import PipelineStep, PipelineStage, PipelineContext
+from . import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ class HandleMissingValues(PipelineStep):
             logger.info(f"Missing values: {missing_before} -> {missing_after} (strategy: {self.strategy})")
 
         except ImportError:
-            ctx.add_error("pandas not installed")
+            ctx.add_error(missing_dependency_error("pandas"))
         except Exception as e:
             ctx.add_error(f"Error handling missing values: {str(e)}")
         return ctx
@@ -382,8 +382,8 @@ class RegridClimate(PipelineStep):
             }
             logger.info(f"Regridded to {self.target_resolution}° resolution")
 
-        except ImportError:
-            ctx.add_error("xesmf not installed - required for regridding")
+            except ImportError:
+                ctx.add_error(missing_dependency_error("xesmf", "climate"))
         except Exception as e:
             ctx.add_error(f"Error regridding: {str(e)}")
         return ctx

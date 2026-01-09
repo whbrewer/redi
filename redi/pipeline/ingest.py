@@ -16,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, List
-from . import PipelineStep, PipelineStage, PipelineContext
+from . import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ class LoadCSV(PipelineStep):
             else:
                 logger.info(f"Loaded CSV: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
         except ImportError:
-            ctx.add_error("pandas not installed - required for CSV loading")
+            ctx.add_error(missing_dependency_error("pandas"))
         except Exception as e:
             ctx.add_error(f"Failed to load CSV: {str(e)}")
         return ctx
@@ -325,7 +325,7 @@ class LoadParquet(PipelineStep):
             else:
                 logger.info(f"Loaded Parquet: {ctx.metadata['num_rows']} rows, {ctx.metadata['num_columns']} columns")
         except ImportError:
-            ctx.add_error("pandas/pyarrow not installed - required for Parquet loading")
+            ctx.add_error(missing_dependency_error("pyarrow", "parquet"))
         except Exception as e:
             ctx.add_error(f"Failed to load Parquet: {str(e)}")
         return ctx
@@ -396,7 +396,7 @@ class LoadNetCDF(PipelineStep):
             else:
                 logger.info(f"Loaded NetCDF: {len(ctx.metadata['variables'])} variables")
         except ImportError:
-            ctx.add_error("xarray not installed - required for NetCDF loading")
+            ctx.add_error(missing_dependency_error("xarray/netCDF4", "climate"))
         except Exception as e:
             ctx.add_error(f"Failed to load NetCDF: {str(e)}")
         return ctx
@@ -443,7 +443,7 @@ class LoadHDF5(PipelineStep):
 
             logger.info(f"Loaded HDF5: {len(ctx.metadata['groups'])} top-level groups")
         except ImportError:
-            ctx.add_error("h5py not installed - required for HDF5 loading")
+            ctx.add_error(missing_dependency_error("h5py", "hdf5"))
         except Exception as e:
             ctx.add_error(f"Failed to load HDF5: {str(e)}")
         return ctx

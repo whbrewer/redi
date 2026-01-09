@@ -18,6 +18,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def missing_dependency_error(package: str, extra: Optional[str] = None) -> str:
+    """Create a consistent missing-dependency error with an install hint."""
+    if extra:
+        install_hint = f'pip install -e ".[{extra}]"'
+    else:
+        install_hint = "pip install -e ."
+    return f"Missing dependency: {package}. Install with: {install_hint}"
+
+
 class PipelineStage(Enum):
     """Pipeline stages matching the abstracted 5-level pattern"""
     INGEST = "ingest"

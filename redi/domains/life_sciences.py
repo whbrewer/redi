@@ -29,7 +29,8 @@ PII_PATTERNS = [
 
 def get_ingest_steps():
     """Get life sciences-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadFASTA(PipelineStep):
         """Load FASTA sequence file"""
@@ -70,7 +71,7 @@ def get_ingest_steps():
                 logger.info(f"Loaded {len(all_sequences)} sequences")
 
             except ImportError:
-                ctx.add_error("biopython not installed")
+                ctx.add_error(missing_dependency_error("biopython", "life_sciences"))
             except Exception as e:
                 ctx.add_error(f"Error loading FASTA: {str(e)}")
 
@@ -121,7 +122,7 @@ def get_ingest_steps():
 
             return ctx
 
-    return [LoadFASTA(), LoadClinicalCSV()]
+    return [DetectFormat(), LoadFASTA(), LoadClinicalCSV()]
 
 
 def get_preprocess_steps():

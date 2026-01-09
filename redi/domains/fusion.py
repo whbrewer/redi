@@ -28,7 +28,8 @@ PLASMA_PARAMETERS = {
 
 def get_ingest_steps():
     """Get fusion-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadFusionHDF5(PipelineStep):
         """Load fusion HDF5 data files"""
@@ -94,7 +95,7 @@ def get_ingest_steps():
                 logger.info(f"Loaded fusion HDF5: {ctx.metadata.get('num_signals', 0)} signals")
 
             except ImportError:
-                ctx.add_error("h5py not installed")
+                ctx.add_error(missing_dependency_error("h5py", "fusion"))
             except Exception as e:
                 ctx.add_error(f"Error loading fusion HDF5: {str(e)}")
 
@@ -159,7 +160,7 @@ def get_ingest_steps():
 
             return ctx
 
-    return [LoadFusionHDF5(), LoadFusionCSV()]
+    return [DetectFormat(), LoadFusionHDF5(), LoadFusionCSV()]
 
 
 def get_preprocess_steps():

@@ -32,7 +32,8 @@ MAGPIE_PREFIXES = [
 
 def get_ingest_steps():
     """Get materials-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadMaterialsCSV(PipelineStep):
         """Load materials CSV with composition parsing"""
@@ -142,13 +143,13 @@ def get_ingest_steps():
                 logger.info(f"Loaded structure: {ctx.metadata['formula']}")
 
             except ImportError:
-                ctx.add_error("pymatgen not installed")
+                ctx.add_error(missing_dependency_error("pymatgen", "materials"))
             except Exception as e:
                 ctx.add_error(f"Error loading structure: {str(e)}")
 
             return ctx
 
-    return [LoadMaterialsCSV(), LoadStructureFile()]
+    return [DetectFormat(), LoadMaterialsCSV(), LoadStructureFile()]
 
 
 def get_preprocess_steps():
@@ -275,7 +276,8 @@ def get_transform_steps():
                 logger.info(f"Added {len(feature_labels)} composition features")
 
             except ImportError as e:
-                ctx.add_error(f"Missing package: {str(e)}")
+                package = getattr(e, "name", None) or "pymatgen/matminer"
+                ctx.add_error(missing_dependency_error(package, "materials"))
             except Exception as e:
                 ctx.add_error(f"Error featurizing: {str(e)}")
 

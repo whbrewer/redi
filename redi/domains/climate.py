@@ -30,7 +30,8 @@ CLIMATE_VARIABLES = {
 
 def get_ingest_steps():
     """Get climate-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline.ingest import DetectFormat
 
     class LoadClimateData(PipelineStep):
         """Load climate data using xarray"""
@@ -141,19 +142,19 @@ def get_ingest_steps():
 
                 logger.info(f"Loaded climate data: {ctx.metadata['variables']}")
 
-            except ImportError as e:
-                ctx.add_error(f"Missing package: {str(e)}")
+            except ImportError:
+                ctx.add_error(missing_dependency_error("xarray/netCDF4", "climate"))
             except Exception as e:
                 ctx.add_error(f"Error loading climate data: {str(e)}")
 
             return ctx
 
-    return [LoadClimateData()]
+    return [DetectFormat(), LoadClimateData()]
 
 
 def get_preprocess_steps():
     """Get climate-specific preprocess steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
     class RegridClimate(PipelineStep):
         """Regrid to uniform lat/lon resolution using xESMF"""
@@ -214,7 +215,7 @@ def get_preprocess_steps():
                 logger.info(f"Regridded to {self.target_resolution}° resolution")
 
             except ImportError:
-                ctx.add_error("xesmf not installed")
+                ctx.add_error(missing_dependency_error("xesmf", "climate"))
             except Exception as e:
                 ctx.add_error(f"Error regridding: {str(e)}")
 
@@ -262,6 +263,8 @@ def get_preprocess_steps():
                 ctx.metadata["normalization_stats"] = stats
                 logger.info(f"Normalized {len(stats)} climate variables")
 
+            except ImportError:
+                ctx.add_error(missing_dependency_error("xarray/netCDF4", "climate"))
             except Exception as e:
                 ctx.add_error(f"Error normalizing: {str(e)}")
 
