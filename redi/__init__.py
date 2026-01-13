@@ -20,11 +20,12 @@ from .fair import (
     generate_fair_report,
 )
 
-# SICKLE data loaders (optional - requires numpy)
+# Data loaders (optional - requires numpy)
 try:
     from .dataloaders import (
         GESTSDataLoader,
         SSTBinaryDataLoader,
+        ZarrDataLoader,
         get_dataloader,
         load_sickle_data,
         LoadedData,
@@ -62,6 +63,7 @@ if _HAS_DATALOADERS:
     __all__.extend([
         "GESTSDataLoader",
         "SSTBinaryDataLoader",
+        "ZarrDataLoader",
         "get_dataloader",
         "load_sickle_data",
         "LoadedData",

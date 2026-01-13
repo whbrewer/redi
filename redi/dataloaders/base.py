@@ -183,7 +183,7 @@ def get_dataloader(path: str, format_type: str = "auto", **kwargs) -> BaseDataLo
 
     Args:
         path: Path to the data
-        format_type: Either "auto", "gests", or "sst-binary"
+        format_type: Either "auto", "gests", "sst-binary", or "zarr"
         **kwargs: Additional arguments passed to the dataloader
 
     Returns:
@@ -191,10 +191,22 @@ def get_dataloader(path: str, format_type: str = "auto", **kwargs) -> BaseDataLo
     """
     from .gests import GESTSDataLoader
     from .sst_binary import SSTBinaryDataLoader
+    from .zarr_loader import ZarrDataLoader
 
     if format_type == "auto":
         # Try to auto-detect format
         path_obj = Path(path)
+
+        # Check for Zarr format (.zarr directory with .zarray or .zgroup)
+        if path_obj.is_dir():
+            if (path_obj / ".zarray").exists() or (path_obj / ".zgroup").exists():
+                return ZarrDataLoader(path, **kwargs)
+            # Also check for zarr v3 format (zarr.json)
+            if (path_obj / "zarr.json").exists():
+                return ZarrDataLoader(path, **kwargs)
+            # Check by extension
+            if path_obj.suffix == ".zarr":
+                return ZarrDataLoader(path, **kwargs)
 
         # Check for SST-binary format (files like u_28.440000)
         if path_obj.is_dir():
@@ -216,7 +228,7 @@ def get_dataloader(path: str, format_type: str = "auto", **kwargs) -> BaseDataLo
 
         raise ValueError(
             f"Could not auto-detect format for path: {path}. "
-            "Please specify format_type='gests' or format_type='sst-binary'"
+            "Please specify format_type='gests', 'sst-binary', or 'zarr'"
         )
 
     elif format_type in ("gests", "gests+"):
@@ -224,6 +236,9 @@ def get_dataloader(path: str, format_type: str = "auto", **kwargs) -> BaseDataLo
 
     elif format_type in ("sst-binary", "sst"):
         return SSTBinaryDataLoader(path, **kwargs)
+
+    elif format_type == "zarr":
+        return ZarrDataLoader(path, **kwargs)
 
     else:
         raise ValueError(f"Unknown format type: {format_type}")

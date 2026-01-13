@@ -1,11 +1,11 @@
 """
 REDI Dataloaders Module
 
-Provides data loaders for scientific simulation formats used in the SICKLE
-project for turbulence research:
+Provides data loaders for scientific simulation and array formats:
 
 - GESTS: GPU-based Extreme-Scale Turbulence Simulations (forced isotropic turbulence)
 - SST-Binary: Stably Stratified Turbulence (buoyancy-influenced turbulence)
+- Zarr: Chunked, compressed N-dimensional arrays (climate, remote sensing, etc.)
 
 Usage:
     >>> from redi.dataloaders import get_dataloader
@@ -14,15 +14,14 @@ Usage:
     >>> data = loader.load_snapshot()
 
 Or directly:
-    >>> from redi.dataloaders import GESTSDataLoader, SSTBinaryDataLoader
-    >>> loader = GESTSDataLoader("/path/to/gests/data")
-    >>> velocity = loader.load_variable("velocity")
+    >>> from redi.dataloaders import GESTSDataLoader, SSTBinaryDataLoader, ZarrDataLoader
+    >>> loader = ZarrDataLoader("/path/to/data.zarr")
+    >>> temperature = loader.load_variable("temperature")
 
 References:
     - SICKLE: Sparse Intelligent Curation frameworK for Learning Efficiently
       https://github.com/at-aaims/sickle
-    - Brewer et al. (2025) "Intelligent Sampling of Extreme-Scale Turbulence
-      Datasets for Accurate and Efficient Spatiotemporal Model Training"
+    - Zarr: https://zarr.readthedocs.io/
 """
 
 from .base import (
@@ -33,6 +32,7 @@ from .base import (
 )
 from .gests import GESTSDataLoader
 from .sst_binary import SSTBinaryDataLoader
+from .zarr_loader import ZarrDataLoader
 
 
 __all__ = [
@@ -45,6 +45,7 @@ __all__ = [
     # Concrete loaders
     "GESTSDataLoader",
     "SSTBinaryDataLoader",
+    "ZarrDataLoader",
 ]
 
 
