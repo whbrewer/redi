@@ -20,6 +20,20 @@ from .fair import (
     generate_fair_report,
 )
 
+# SICKLE data loaders (optional - requires numpy)
+try:
+    from .dataloaders import (
+        GESTSDataLoader,
+        SSTBinaryDataLoader,
+        get_dataloader,
+        load_sickle_data,
+        LoadedData,
+        DatasetMetadata,
+    )
+    _HAS_DATALOADERS = True
+except ImportError:
+    _HAS_DATALOADERS = False
+
 __all__ = [
     # Analysis
     "analyze_dataset",
@@ -42,3 +56,14 @@ __all__ = [
     # Version
     "__version__",
 ]
+
+# Add dataloader exports if available
+if _HAS_DATALOADERS:
+    __all__.extend([
+        "GESTSDataLoader",
+        "SSTBinaryDataLoader",
+        "get_dataloader",
+        "load_sickle_data",
+        "LoadedData",
+        "DatasetMetadata",
+    ])

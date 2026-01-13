@@ -14,6 +14,7 @@ Operations:
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, List
 from . import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
@@ -102,6 +103,33 @@ class DetectFormat(PipelineStep):
 
         return "unknown"
 
+    def _detect_sickle_format(self, path: Path) -> Optional[str]:
+        """Detect SICKLE turbulence data formats (GESTS or SST-binary)."""
+        if not path.is_dir():
+            return None
+
+        # Check for SST-binary format: files like u_28.440000, p_28.440000
+        sst_pattern = re.compile(r'^[a-z]+_\d+\.\d+$')
+        sst_files = [f for f in path.iterdir() if f.is_file() and sst_pattern.match(f.name)]
+        if len(sst_files) >= 2:
+            return "sst-binary"
+
+        # Check for GESTS format: subdirectories with cube_* files
+        subdirs = [d for d in path.iterdir() if d.is_dir()]
+        for subdir in subdirs:
+            # Check for numbered cube directories (8192 format)
+            if subdir.name.isdigit():
+                cube_files = list(subdir.glob("cube_*"))
+                if cube_files:
+                    return "gests"
+            # Check for variable name directories (e.g., velocity/, pressure/)
+            elif subdir.name in ("velocity", "pressure", "enstrophy", "dissipation"):
+                cube_files = list(subdir.glob("cube_*"))
+                if cube_files:
+                    return "gests"
+
+        return None
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         # Handle multi-file case
         paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
@@ -118,12 +146,18 @@ class DetectFormat(PipelineStep):
         detected_format = self.FORMAT_EXTENSIONS.get(ext, "unknown")
         logger.debug(f"     File extension: {ext}")
 
-        # Handle directories (e.g., zarr stores)
+        # Handle directories (e.g., zarr stores, SICKLE data)
         if path.is_dir():
-            logger.debug(f"     Path is directory, checking for zarr markers")
+            logger.debug(f"     Path is directory, checking for format markers")
             if (path / ".zarray").exists() or (path / ".zgroup").exists():
                 detected_format = "zarr"
                 logger.debug(f"     Found zarr markers, format set to zarr")
+            else:
+                # Check for SICKLE formats
+                sickle_format = self._detect_sickle_format(path)
+                if sickle_format:
+                    detected_format = sickle_format
+                    logger.debug(f"     Detected SICKLE format: {sickle_format}")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():
@@ -449,6 +483,73 @@ class LoadHDF5(PipelineStep):
         return ctx
 
 
+class LoadSICKLE(PipelineStep):
+    """Load SICKLE turbulence data formats (GESTS and SST-binary)"""
+
+    name = "load_sickle"
+    stage = PipelineStage.INGEST
+    description = "Load SICKLE turbulence simulation data (GESTS/SST-binary)"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        return ctx.metadata.get("file_format") in ["gests", "sst-binary"]
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            from ..dataloaders import get_dataloader, LoadedData
+
+            file_format = ctx.metadata.get("file_format")
+            path = ctx.input_path
+
+            logger.debug(f"     Loading SICKLE data ({file_format}): {path}")
+
+            # Get the appropriate dataloader
+            loader = get_dataloader(str(path), format_type=file_format, verbose=False)
+
+            # Get metadata first (this scans the directory)
+            meta = loader.metadata
+
+            # Store metadata
+            ctx.metadata["variables"] = meta.variables
+            ctx.metadata["dimensions"] = meta.dimensions
+            ctx.metadata["grid_shape"] = meta.grid_shape
+            ctx.metadata["num_timesteps"] = meta.num_timesteps
+            ctx.metadata["timesteps"] = meta.timesteps
+            ctx.metadata["dtype"] = meta.dtype
+            ctx.metadata["sickle_metadata"] = meta.to_dict()
+
+            # Load the first snapshot (or all data if small enough)
+            if meta.total_size_bytes < 100 * 1024 * 1024:  # < 100MB
+                logger.debug(f"     Dataset small enough, loading all data")
+                loaded = loader.load_all()
+            else:
+                logger.debug(f"     Large dataset, loading first snapshot only")
+                loaded = loader.load_snapshot()
+
+            # Store the loaded data
+            ctx.data = loaded
+
+            # Calculate some summary statistics
+            num_points = 1
+            for dim_size in meta.grid_shape:
+                num_points *= dim_size
+
+            logger.debug(f"     Variables: {', '.join(meta.variables)}")
+            logger.debug(f"     Grid shape: {meta.grid_shape}")
+            logger.debug(f"     Timesteps: {meta.num_timesteps}")
+            logger.debug(f"     Total grid points: {num_points:,}")
+
+            size_mb = meta.total_size_bytes / (1024 * 1024)
+            size_str = f"{size_mb:.2f} MB" if size_mb < 1024 else f"{size_mb/1024:.2f} GB"
+            logger.info(f"Loaded {file_format.upper()}: {len(meta.variables)} variables, "
+                       f"{meta.num_timesteps} timesteps, {size_str}")
+
+        except ImportError as e:
+            ctx.add_error(f"SICKLE dataloaders not available: {e}")
+        except Exception as e:
+            ctx.add_error(f"Failed to load SICKLE data: {str(e)}")
+        return ctx
+
+
 class ValidateInput(PipelineStep):
     """Basic input validation"""
 
@@ -497,6 +598,7 @@ def get_ingest_steps() -> List[PipelineStep]:
         LoadParquet(),
         LoadNetCDF(),
         LoadHDF5(),
+        LoadSICKLE(),
         ValidateInput(),
     ]
 
