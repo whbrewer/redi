@@ -1,0 +1,97 @@
+# REDI Data Readiness Pipeline Configuration
+# Dataset: SST (Stably Stratified Turbulence) P1F4R32
+# Source: SICKLE project turbulence simulation data
+# Path: /opt/drai/turbulence/sst/P1F4R32/
+
+# Scientific domain for domain-specific preprocessing
+domain: hpc
+
+# Input data location
+input_path: /opt/drai/turbulence/sst/P1F4R32/
+
+# Output settings
+output_dir: ./output/p1f4r32_ready
+output_format: zarr  # zarr for large 3D data, also supports: npz, hdf5
+
+# SICKLE/SST turbulence data loader settings
+sickle:
+  # 3D grid dimensions (nx, ny, nz)
+  # P1F4R32 uses 514x512x256 grid
+  grid_shape: [514, 512, 256]
+
+  # Variables to process from the binary files
+  # Available in P1F4R32: u, v, w, p, r, pv
+  variables:
+    - u    # x-velocity component
+    - v    # y-velocity component
+    - w    # z-velocity component
+    - p    # pressure
+    - r    # density perturbation
+    - pv   # potential vorticity
+
+  # Timesteps to process (null = all found timesteps)
+  # Current data has timestep 28.040000
+  timesteps: null
+
+  # Combine u, v, w into single velocity field [3, nx, ny, nz]
+  combine_velocity: true
+
+  # Data type for reading binary files
+  dtype: float32
+
+# Normalization for ML readiness
+normalize:
+  enabled: true
+  method: zscore       # zscore (mean=0, std=1) or minmax (0-1 range)
+  per_variable: true   # normalize each field independently
+  two_pass: false      # single-pass for efficiency on large data
+
+# Train/validation/test split
+split:
+  method: random
+  ratios:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+  shuffle: true
+  random_seed: 42
+
+# Subsampling for very large 3D grids
+subsample:
+  enabled: true
+  method: gradient    # gradient-based importance sampling preserves physics
+  ratio: 0.25         # keep 25% of grid points
+  seed: 42
+
+# Data augmentation for training
+augment:
+  enabled: false
+  random_rotation: false
+  random_flip: false
+  add_noise: false
+  noise_std: 0.01
+
+# Output file settings
+save:
+  format: zarr
+  save_coordinates: true
+  save_normalization: true
+  # Chunk sizes for parallel I/O
+  chunks: [64, 64, 64]
+  compression: blosc
+
+# FAIR metadata assessment (optional)
+fair:
+  enabled: true
+  metadata_file: null
+
+# Pipeline execution options
+pipeline:
+  # Run validation checks on input data
+  validate_input: true
+  # Generate data card documentation
+  generate_data_card: true
+  # Compute quality metrics
+  compute_metrics: true
+  # Log level: debug, info, warning, error
+  log_level: info
