@@ -72,6 +72,16 @@ DEFAULTS: Dict[str, Any] = {
         'standards': 'auto',  # auto, or list of standards to check
         'strict_mode': False,  # Require all assessable principles
     },
+
+    'catalog': {
+        'enabled': False,
+        'type': 'openmetadata',  # openmetadata, mlflow, intake
+        'host': None,  # Catalog server URL
+        'token': None,  # Authentication token (or use env var)
+        'token_env': 'OPENMETADATA_TOKEN',  # Env var for token
+        'service_name': 'redi',  # Service/connection name in catalog
+        'verify_ssl': True,
+    },
 }
 
 
@@ -300,5 +310,14 @@ fair:
   enabled: false             # Run FAIR assessment
   metadata_file: null        # Path to FAIR metadata YAML with DOI, license, etc.
   standards: auto            # auto, or list: [cf_conventions, acdd]
+
+# Data catalog export settings
+catalog:
+  enabled: false             # Export to data catalog after processing
+  type: openmetadata         # openmetadata, mlflow, intake
+  host: null                 # Catalog server URL (e.g., http://localhost:8585/api)
+  token: null                # Auth token (or set OPENMETADATA_TOKEN env var)
+  token_env: OPENMETADATA_TOKEN  # Env var name for token
+  service_name: redi         # Service name in the catalog
 """
     return example

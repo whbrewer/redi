@@ -511,6 +511,21 @@ def run_pipeline(
             ctx.metadata["saved_files"].append(str(datacard_path))
             print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
+            # Save metadata.json (needed for catalog export)
+            metadata_path = ctx.output_dir / "metadata.json"
+            metadata_dict = {
+                "input_file": str(primary_path),
+                "domain": domain,
+                "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
+                "errors": ctx.errors,
+                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+            }
+            import json as json_module
+            with open(metadata_path, 'w') as f:
+                json_module.dump(metadata_dict, f, indent=2, default=str)
+            ctx.metadata["saved_files"].append(str(metadata_path))
+            print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+
             # Display recommendations in terminal
             data_card = analyze_dataset(str(primary_path))
             recommender = PipelineRecommender(data_card)
@@ -575,11 +590,68 @@ def run_pipeline(
 
     elif style == "simple":
         print(f"Done: {success_count} ok, {warning_count} warnings, {error_count} errors ({total_time:.2f}s)")
+
+        # Save metadata.json and DATA_CARD.md for simple/json modes too
+        try:
+            from .analyze import generate_report
+            ctx.output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save DATA_CARD.md
+            report = generate_report(str(primary_path))
+            datacard_path = ctx.output_dir / "DATA_CARD.md"
+            datacard_path.write_text(report)
+            if "saved_files" not in ctx.metadata:
+                ctx.metadata["saved_files"] = []
+            ctx.metadata["saved_files"].append(str(datacard_path))
+
+            # Save metadata.json
+            metadata_path = ctx.output_dir / "metadata.json"
+            import json as json_module
+            metadata_dict = {
+                "input_file": str(primary_path),
+                "domain": domain,
+                "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
+                "errors": ctx.errors,
+                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+            }
+            with open(metadata_path, 'w') as f:
+                json_module.dump(metadata_dict, f, indent=2, default=str)
+            ctx.metadata["saved_files"].append(str(metadata_path))
+        except Exception:
+            pass  # Silent in simple mode
+
         if ctx.metadata.get("saved_files"):
             for f in ctx.metadata["saved_files"]:
                 print(f"  Output: {f}")
 
     elif style == "json":
+        # Save metadata.json and DATA_CARD.md for json mode too
+        try:
+            from .analyze import generate_report
+            ctx.output_dir.mkdir(parents=True, exist_ok=True)
+
+            report = generate_report(str(primary_path))
+            datacard_path = ctx.output_dir / "DATA_CARD.md"
+            datacard_path.write_text(report)
+            if "saved_files" not in ctx.metadata:
+                ctx.metadata["saved_files"] = []
+            ctx.metadata["saved_files"].append(str(datacard_path))
+
+            metadata_path = ctx.output_dir / "metadata.json"
+            import json as json_module
+            metadata_dict = {
+                "input_file": str(primary_path),
+                "domain": domain,
+                "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
+                "errors": ctx.errors,
+                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+            }
+            with open(metadata_path, 'w') as f:
+                json_module.dump(metadata_dict, f, indent=2, default=str)
+            ctx.metadata["saved_files"].append(str(metadata_path))
+        except Exception:
+            pass
+
         import json
         result = {
             "input": str(input_path),
@@ -604,6 +676,94 @@ def analyze_dataset(input_path: str) -> str:
         return generate_report(input_path)
     except ImportError as e:
         return f"{Colors.RED}Error: Could not import analyze module: {e}{Colors.END}"
+
+
+def run_catalog_export(
+    metadata_path: str,
+    catalog_type: str = "openmetadata",
+    host: str = None,
+    token: str = None,
+    token_env: str = "OPENMETADATA_TOKEN",
+    service_name: str = "redi",
+    style: str = "rich",
+) -> bool:
+    """Export REDI metadata to a data catalog.
+
+    Args:
+        metadata_path: Path to REDI metadata.json file
+        catalog_type: Type of catalog (openmetadata, mlflow, intake)
+        host: Catalog server URL
+        token: Authentication token
+        token_env: Environment variable name for token
+        service_name: Service name in the catalog
+        style: Output style (rich, simple, json)
+
+    Returns:
+        True if export succeeded
+    """
+    import os
+
+    try:
+        from .catalog import export_to_catalog, list_catalogs
+
+        # Get token from environment if not provided
+        if not token:
+            token = os.environ.get(token_env, "")
+
+        if not host:
+            if style == "rich":
+                print(f"    {Colors.YELLOW}⚠ Catalog host URL not configured{Colors.END}")
+                print(f"    {Colors.DIM}Set 'catalog.host' in config or use --catalog-host{Colors.END}")
+            return False
+
+        if not token:
+            if style == "rich":
+                print(f"    {Colors.YELLOW}⚠ Catalog token not configured{Colors.END}")
+                print(f"    {Colors.DIM}Set {token_env} env var or use --catalog-token{Colors.END}")
+            return False
+
+        if style == "rich":
+            print_section("Catalog Export")
+            print(f"    {Colors.DIM}Type:{Colors.END} {catalog_type}")
+            print(f"    {Colors.DIM}Host:{Colors.END} {host}")
+            print(f"    {Colors.DIM}Service:{Colors.END} {service_name}")
+
+        # Run export
+        result = export_to_catalog(
+            metadata_path=metadata_path,
+            catalog_type=catalog_type,
+            host=host,
+            token=token,
+            service_name=service_name,
+        )
+
+        if result.success:
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Exported to catalog")
+                print(f"    {Colors.DIM}Entity:{Colors.END} {Colors.BOLD}{result.entity_id}{Colors.END}")
+                if result.entity_url:
+                    print(f"    {Colors.DIM}URL:{Colors.END} {result.entity_url}")
+            elif style == "simple":
+                print(f"Catalog export: {result.entity_id}")
+            elif style == "json":
+                import json
+                print(json.dumps(result.to_dict(), indent=2))
+            return True
+        else:
+            if style == "rich":
+                print(f"    {Colors.RED}✗{Colors.END} Export failed: {result.message}")
+            elif style == "simple":
+                print(f"Catalog export failed: {result.message}")
+            return False
+
+    except ImportError as e:
+        if style == "rich":
+            print(f"    {Colors.YELLOW}⚠ Catalog module error: {e}{Colors.END}")
+        return False
+    except Exception as e:
+        if style == "rich":
+            print(f"    {Colors.RED}✗ Catalog export error: {e}{Colors.END}")
+        return False
 
 
 def run_fair_assessment(
@@ -741,6 +901,11 @@ Multi-file examples:
   %(prog)s data_*.nc                     # Process multiple NetCDF files (glob)
   %(prog)s file1.nc file2.nc file3.nc    # Process explicit file list
   %(prog)s "/path/to/data/*.nc"          # Quoted glob pattern
+
+Catalog export examples:
+  %(prog)s data.csv --catalog --catalog-host http://localhost:8585/api
+  %(prog)s data.csv --catalog --catalog-type openmetadata
+  %(prog)s examples/catalog_example.yaml # Full catalog config in YAML
         """
     )
 
@@ -758,6 +923,12 @@ Multi-file examples:
     parser.add_argument("-c", "--config", help="YAML configuration file path")
     parser.add_argument("--fair", action="store_true", help="Run FAIR principles assessment")
     parser.add_argument("--fair-config", help="YAML file with FAIR metadata (DOI, license, etc.)")
+    parser.add_argument("--catalog", action="store_true", help="Export to data catalog after processing")
+    parser.add_argument("--catalog-type", choices=["openmetadata", "mlflow", "intake"],
+                       default="openmetadata", help="Data catalog type (default: openmetadata)")
+    parser.add_argument("--catalog-host", help="Catalog server URL (e.g., http://localhost:8585/api)")
+    parser.add_argument("--catalog-token", help="Catalog authentication token")
+    parser.add_argument("--catalog-service", default="redi", help="Service name in catalog (default: redi)")
 
     args = parser.parse_args()
 
@@ -885,6 +1056,29 @@ Multi-file examples:
         )
         if fair_path and ctx.metadata.get("saved_files") is not None:
             ctx.metadata["saved_files"].append(fair_path)
+
+    # Run catalog export after pipeline if requested (CLI flag or YAML config)
+    catalog_config = config.get('catalog', {})
+    catalog_enabled = args.catalog or catalog_config.get('enabled', False)
+
+    if catalog_enabled and ctx:
+        # Get metadata.json path from output
+        output_dir = Path(config.get('output_dir', args.output))
+        metadata_path = output_dir / "metadata.json"
+
+        if metadata_path.exists():
+            run_catalog_export(
+                metadata_path=str(metadata_path),
+                catalog_type=args.catalog_type or catalog_config.get('type', 'openmetadata'),
+                host=args.catalog_host or catalog_config.get('host'),
+                token=args.catalog_token or catalog_config.get('token'),
+                token_env=catalog_config.get('token_env', 'OPENMETADATA_TOKEN'),
+                service_name=args.catalog_service or catalog_config.get('service_name', 'redi'),
+                style=args.style,
+            )
+        else:
+            if args.style == "rich":
+                print(f"    {Colors.YELLOW}⚠ metadata.json not found, skipping catalog export{Colors.END}")
 
 
 if __name__ == "__main__":
