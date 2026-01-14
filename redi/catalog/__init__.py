@@ -73,8 +73,11 @@ def get_catalog_exporter(catalog_type: str, **config) -> CatalogExporter:
         elif catalog_type == "intake":
             from .intake import IntakeExporter
             register_catalog("intake", IntakeExporter)
+        elif catalog_type == "huggingface":
+            from .huggingface import HuggingFaceExporter
+            register_catalog("huggingface", HuggingFaceExporter)
         else:
-            available = list(_CATALOG_REGISTRY.keys()) or ["openmetadata", "mlflow", "intake"]
+            available = list(_CATALOG_REGISTRY.keys()) or ["openmetadata", "mlflow", "intake", "huggingface"]
             raise ValueError(
                 f"Unknown catalog type: '{catalog_type}'. "
                 f"Available: {', '.join(available)}"
@@ -96,7 +99,7 @@ def list_catalogs() -> list:
         List of supported catalog type names
     """
     # Include both registered and known importable catalogs
-    known = {"openmetadata", "mlflow", "intake"}
+    known = {"openmetadata", "mlflow", "intake", "huggingface"}
     registered = set(_CATALOG_REGISTRY.keys())
     return sorted(known | registered)
 

@@ -75,11 +75,13 @@ DEFAULTS: Dict[str, Any] = {
 
     'catalog': {
         'enabled': False,
-        'type': 'openmetadata',  # openmetadata, mlflow, intake
-        'host': None,  # Catalog server URL
+        'type': 'huggingface',  # huggingface, openmetadata, mlflow, intake
+        'host': None,  # Catalog server URL (for OpenMetadata)
         'token': None,  # Authentication token (or use env var)
-        'token_env': 'OPENMETADATA_TOKEN',  # Env var for token
+        'token_env': None,  # Env var for token (auto: HF_TOKEN or OPENMETADATA_TOKEN)
         'service_name': 'redi',  # Service/connection name in catalog
+        'repo_id': None,  # HuggingFace repo ID (e.g., 'org/dataset-name')
+        'private': True,  # Make HuggingFace dataset private
         'verify_ssl': True,
     },
 }
@@ -314,10 +316,14 @@ fair:
 # Data catalog export settings
 catalog:
   enabled: false             # Export to data catalog after processing
-  type: openmetadata         # openmetadata, mlflow, intake
-  host: null                 # Catalog server URL (e.g., http://localhost:8585/api)
-  token: null                # Auth token (or set OPENMETADATA_TOKEN env var)
-  token_env: OPENMETADATA_TOKEN  # Env var name for token
-  service_name: redi         # Service name in the catalog
+  type: huggingface          # huggingface, openmetadata, mlflow, intake
+  # HuggingFace settings:
+  repo_id: null              # e.g., 'your-org/dataset-name' (auto-generated if null)
+  private: true              # Make dataset private on HuggingFace
+  # token: null              # Or set HF_TOKEN env var
+  # OpenMetadata settings (if type: openmetadata):
+  # host: http://localhost:8585/api
+  # token_env: OPENMETADATA_TOKEN
+  # service_name: redi
 """
     return example

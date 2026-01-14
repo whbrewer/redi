@@ -1,46 +1,33 @@
 # REDI Catalog Export Example Configuration
 #
 # This example demonstrates exporting REDI-processed datasets to a data catalog.
-# Supports: OpenMetadata, MLflow (planned), Intake (planned)
+# Default: HuggingFace Hub (simplest, no server required)
+# Also supports: OpenMetadata, MLflow (planned), Intake (planned)
 #
 # Run with: redi examples/catalog_example.yaml
 #
-# Prerequisites for OpenMetadata:
-#   1. Install SDK: pip install openmetadata-ingestion
-#   2. Run OpenMetadata server (see below for Docker quick start)
-#   3. Set token: export OPENMETADATA_TOKEN="your-jwt-token"
-#
-# Quick Start - OpenMetadata with Docker:
-#   git clone https://github.com/open-metadata/OpenMetadata
-#   cd OpenMetadata/docker/development
-#   docker compose up -d
-#   # Access UI at http://localhost:8585 (admin/admin)
-#   # Get JWT token from Settings > Bots > ingestion-bot
+# Prerequisites for HuggingFace:
+#   1. Install: pip install datasets huggingface_hub
+#   2. Get token: https://huggingface.co/settings/tokens
+#   3. Set token: export HF_TOKEN="hf_..."
 
 # =============================================================================
 # Input Configuration
 # =============================================================================
 
-# Input data file (replace with your data)
 input_path: examples/fair_sample_data.csv
-
-# Scientific domain (auto-detected if omitted)
 domain: climate
-
-# Output settings
 output_dir: ./output/catalog_example
-output_format: parquet  # parquet works well for catalog discovery
+output_format: parquet  # parquet works well for HuggingFace
 
 # =============================================================================
 # Pipeline Configuration
 # =============================================================================
 
-# Normalization
 normalize:
   enabled: true
   method: zscore
 
-# Train/val/test split
 split:
   method: random
   ratios:
@@ -51,89 +38,69 @@ split:
   random_seed: 42
 
 # =============================================================================
-# FAIR Assessment (recommended for catalog metadata)
+# FAIR Assessment (recommended - adds metadata to catalog)
 # =============================================================================
 
 fair:
   enabled: true
   metadata_file: examples/fair_sample_data.fair.yaml
-  standards: auto
 
 # =============================================================================
 # Catalog Export Configuration
 # =============================================================================
 
 catalog:
-  # Enable catalog export after pipeline completes
   enabled: true
 
-  # Catalog backend type
-  # Options: openmetadata, mlflow (planned), intake (planned)
-  type: openmetadata
+  # --- HuggingFace Hub (Default - Simplest Option) ---
+  type: huggingface
 
-  # OpenMetadata server URL
-  # For local Docker: http://localhost:8585/api
-  # For cloud: https://your-instance.openmetadata.cloud/api
-  host: http://localhost:8585/api
+  # Repository name on HuggingFace Hub
+  # Format: "username/dataset-name" or "organization/dataset-name"
+  # If not set, auto-generated from input filename
+  repo_id: null  # e.g., "your-username/climate-sample"
 
-  # Authentication token
-  # Option 1: Set directly (not recommended for shared configs)
-  # token: "eyJ..."
-  #
-  # Option 2: Use environment variable (recommended)
-  # The token will be read from this env var if 'token' is not set
-  token_env: OPENMETADATA_TOKEN
+  # Make dataset private (recommended for testing)
+  private: true
 
-  # Service name in OpenMetadata
-  # This creates/uses an ML Model Service with this name
-  service_name: redi
-
-  # SSL verification (set to false for self-signed certs)
-  verify_ssl: true
+  # Token can be set here or via HF_TOKEN env var (recommended)
+  # token: "hf_..."
 
 # =============================================================================
-# Alternative: CLI Usage
+# CLI Usage Examples
 # =============================================================================
 #
-# Instead of YAML config, you can use CLI flags:
+# HuggingFace (default):
+#   export HF_TOKEN="hf_..."
+#   redi data.csv --catalog
+#   redi data.csv --catalog --catalog-repo my-org/my-dataset
+#   redi data.csv --catalog --catalog-private  # private dataset
 #
-#   # Basic usage with env var for token
-#   export OPENMETADATA_TOKEN="your-jwt-token"
-#   redi data.csv --catalog --catalog-host http://localhost:8585/api
-#
-#   # With explicit token (less secure)
-#   redi data.csv --catalog \
-#     --catalog-host http://localhost:8585/api \
-#     --catalog-token "your-jwt-token" \
-#     --catalog-service my-datasets
-#
-#   # Different catalog types (when implemented)
-#   redi data.csv --catalog --catalog-type mlflow
-#   redi data.csv --catalog --catalog-type intake
+# OpenMetadata:
+#   export OPENMETADATA_TOKEN="eyJ..."
+#   redi data.csv --catalog --catalog-type openmetadata \
+#       --catalog-host http://localhost:8585/api
 
 # =============================================================================
 # Python API Usage
 # =============================================================================
 #
-# from redi.catalog import export_to_catalog, get_catalog_exporter
+# from redi.catalog import export_to_catalog
+# from redi.catalog.huggingface import export_to_huggingface
 #
-# # Quick export
-# result = export_to_catalog(
+# # Quick export to HuggingFace
+# result = export_to_huggingface(
 #     "output/metadata.json",
-#     catalog_type="openmetadata",
-#     host="http://localhost:8585/api",
-#     token=os.environ["OPENMETADATA_TOKEN"],
+#     repo_id="my-org/my-dataset",
+#     private=True,
 # )
 #
 # if result.success:
-#     print(f"Exported: {result.entity_id}")
-#     print(f"View at: {result.entity_url}")
+#     print(f"Dataset URL: {result.entity_url}")
 #
-# # Or use exporter directly for more control
-# exporter = get_catalog_exporter("openmetadata")
-# exporter.configure(
-#     host="http://localhost:8585/api",
-#     token="...",
-#     service_name="my-ml-datasets",
+# # Generic export (auto-detects catalog type from config)
+# result = export_to_catalog(
+#     "output/metadata.json",
+#     catalog_type="huggingface",
+#     repo_id="my-org/my-dataset",
 # )
-# result = exporter.export("output/metadata.json")

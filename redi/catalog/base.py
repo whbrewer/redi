@@ -22,6 +22,7 @@ class CatalogType(Enum):
     OPENMETADATA = "openmetadata"
     MLFLOW = "mlflow"
     INTAKE = "intake"
+    HUGGINGFACE = "huggingface"
 
 
 @dataclass

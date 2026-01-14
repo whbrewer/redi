@@ -680,22 +680,26 @@ def analyze_dataset(input_path: str) -> str:
 
 def run_catalog_export(
     metadata_path: str,
-    catalog_type: str = "openmetadata",
+    catalog_type: str = "huggingface",
     host: str = None,
     token: str = None,
-    token_env: str = "OPENMETADATA_TOKEN",
+    token_env: str = None,
     service_name: str = "redi",
+    repo_id: str = None,
+    private: bool = True,
     style: str = "rich",
 ) -> bool:
     """Export REDI metadata to a data catalog.
 
     Args:
         metadata_path: Path to REDI metadata.json file
-        catalog_type: Type of catalog (openmetadata, mlflow, intake)
-        host: Catalog server URL
+        catalog_type: Type of catalog (openmetadata, mlflow, intake, huggingface)
+        host: Catalog server URL (for OpenMetadata)
         token: Authentication token
         token_env: Environment variable name for token
         service_name: Service name in the catalog
+        repo_id: Repository ID for HuggingFace
+        private: Make HuggingFace dataset private
         style: Output style (rich, simple, json)
 
     Returns:
@@ -706,36 +710,74 @@ def run_catalog_export(
     try:
         from .catalog import export_to_catalog, list_catalogs
 
+        # Determine token env var based on catalog type
+        if token_env is None:
+            if catalog_type == "huggingface":
+                token_env = "HF_TOKEN"
+            else:
+                token_env = "OPENMETADATA_TOKEN"
+
         # Get token from environment if not provided
         if not token:
             token = os.environ.get(token_env, "")
+            # Also try alternative HF token env var
+            if not token and catalog_type == "huggingface":
+                token = os.environ.get("HUGGINGFACE_TOKEN", "")
 
-        if not host:
+        # Validation depends on catalog type
+        if catalog_type == "huggingface":
+            # HuggingFace doesn't need host, but needs token
+            if not token:
+                if style == "rich":
+                    print_section("Catalog Export")
+                    print(f"    {Colors.YELLOW}⚠ HuggingFace token not configured{Colors.END}")
+                    print(f"    {Colors.DIM}Set HF_TOKEN env var or use --catalog-token{Colors.END}")
+                return False
+
             if style == "rich":
-                print(f"    {Colors.YELLOW}⚠ Catalog host URL not configured{Colors.END}")
-                print(f"    {Colors.DIM}Set 'catalog.host' in config or use --catalog-host{Colors.END}")
-            return False
+                print_section("Catalog Export")
+                print(f"    {Colors.DIM}Type:{Colors.END} {catalog_type}")
+                print(f"    {Colors.DIM}Repo:{Colors.END} {repo_id or '(auto-generated)'}")
+                print(f"    {Colors.DIM}Private:{Colors.END} {private}")
 
-        if not token:
+            # Run HuggingFace export
+            result = export_to_catalog(
+                metadata_path=metadata_path,
+                catalog_type=catalog_type,
+                token=token,
+                repo_id=repo_id,
+                private=private,
+            )
+        else:
+            # OpenMetadata and others need host
+            if not host:
+                if style == "rich":
+                    print_section("Catalog Export")
+                    print(f"    {Colors.YELLOW}⚠ Catalog host URL not configured{Colors.END}")
+                    print(f"    {Colors.DIM}Set 'catalog.host' in config or use --catalog-host{Colors.END}")
+                return False
+
+            if not token:
+                if style == "rich":
+                    print_section("Catalog Export")
+                    print(f"    {Colors.YELLOW}⚠ Catalog token not configured{Colors.END}")
+                    print(f"    {Colors.DIM}Set {token_env} env var or use --catalog-token{Colors.END}")
+                return False
+
             if style == "rich":
-                print(f"    {Colors.YELLOW}⚠ Catalog token not configured{Colors.END}")
-                print(f"    {Colors.DIM}Set {token_env} env var or use --catalog-token{Colors.END}")
-            return False
+                print_section("Catalog Export")
+                print(f"    {Colors.DIM}Type:{Colors.END} {catalog_type}")
+                print(f"    {Colors.DIM}Host:{Colors.END} {host}")
+                print(f"    {Colors.DIM}Service:{Colors.END} {service_name}")
 
-        if style == "rich":
-            print_section("Catalog Export")
-            print(f"    {Colors.DIM}Type:{Colors.END} {catalog_type}")
-            print(f"    {Colors.DIM}Host:{Colors.END} {host}")
-            print(f"    {Colors.DIM}Service:{Colors.END} {service_name}")
-
-        # Run export
-        result = export_to_catalog(
-            metadata_path=metadata_path,
-            catalog_type=catalog_type,
-            host=host,
-            token=token,
-            service_name=service_name,
-        )
+            # Run export for non-HF catalogs
+            result = export_to_catalog(
+                metadata_path=metadata_path,
+                catalog_type=catalog_type,
+                host=host,
+                token=token,
+                service_name=service_name,
+            )
 
         if result.success:
             if style == "rich":
@@ -903,9 +945,9 @@ Multi-file examples:
   %(prog)s "/path/to/data/*.nc"          # Quoted glob pattern
 
 Catalog export examples:
-  %(prog)s data.csv --catalog --catalog-host http://localhost:8585/api
-  %(prog)s data.csv --catalog --catalog-type openmetadata
-  %(prog)s examples/catalog_example.yaml # Full catalog config in YAML
+  %(prog)s data.csv --catalog                    # Export to HuggingFace Hub
+  %(prog)s data.csv --catalog --catalog-repo org/my-dataset
+  %(prog)s data.csv --catalog --catalog-type openmetadata --catalog-host http://localhost:8585/api
         """
     )
 
@@ -924,11 +966,14 @@ Catalog export examples:
     parser.add_argument("--fair", action="store_true", help="Run FAIR principles assessment")
     parser.add_argument("--fair-config", help="YAML file with FAIR metadata (DOI, license, etc.)")
     parser.add_argument("--catalog", action="store_true", help="Export to data catalog after processing")
-    parser.add_argument("--catalog-type", choices=["openmetadata", "mlflow", "intake"],
-                       default="openmetadata", help="Data catalog type (default: openmetadata)")
+    parser.add_argument("--catalog-type", choices=["openmetadata", "mlflow", "intake", "huggingface"],
+                       default="huggingface", help="Data catalog type (default: huggingface)")
     parser.add_argument("--catalog-host", help="Catalog server URL (e.g., http://localhost:8585/api)")
-    parser.add_argument("--catalog-token", help="Catalog authentication token")
+    parser.add_argument("--catalog-token", help="Catalog authentication token (or set HF_TOKEN for HuggingFace)")
     parser.add_argument("--catalog-service", default="redi", help="Service name in catalog (default: redi)")
+    parser.add_argument("--catalog-repo", help="Repository ID for HuggingFace (e.g., your-org/dataset-name)")
+    parser.add_argument("--catalog-private", action="store_true", default=True,
+                       help="Make HuggingFace dataset private (default: True)")
 
     args = parser.parse_args()
 
@@ -1069,11 +1114,13 @@ Catalog export examples:
         if metadata_path.exists():
             run_catalog_export(
                 metadata_path=str(metadata_path),
-                catalog_type=args.catalog_type or catalog_config.get('type', 'openmetadata'),
+                catalog_type=args.catalog_type or catalog_config.get('type', 'huggingface'),
                 host=args.catalog_host or catalog_config.get('host'),
                 token=args.catalog_token or catalog_config.get('token'),
-                token_env=catalog_config.get('token_env', 'OPENMETADATA_TOKEN'),
+                token_env=catalog_config.get('token_env'),
                 service_name=args.catalog_service or catalog_config.get('service_name', 'redi'),
+                repo_id=args.catalog_repo or catalog_config.get('repo_id'),
+                private=args.catalog_private if hasattr(args, 'catalog_private') else catalog_config.get('private', True),
                 style=args.style,
             )
         else:
