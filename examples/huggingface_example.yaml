@@ -1,0 +1,61 @@
+# REDI HuggingFace Hub Export Example
+#
+# This example demonstrates exporting REDI-processed datasets to HuggingFace Hub.
+#
+# Prerequisites:
+#   1. Install: pip install datasets huggingface_hub
+#   2. Get token: https://huggingface.co/settings/tokens (needs "Write" permission)
+#   3. Set token: export HF_TOKEN="hf_..."
+#
+# Run with:
+#   export HF_TOKEN="hf_..."
+#   redi examples/huggingface_example.yaml
+#
+# Or with CLI flags:
+#   redi data.csv --catalog --catalog-repo my-dataset --catalog-private
+
+# =============================================================================
+# Input Configuration
+# =============================================================================
+
+input_path: examples/fair_sample_data.csv
+domain: general
+output_dir: ./output/huggingface_example
+output_format: parquet  # parquet works well for HuggingFace
+
+# =============================================================================
+# Pipeline Configuration
+# =============================================================================
+
+normalize:
+  enabled: true
+  method: zscore
+
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  shuffle: true
+  random_seed: 42
+
+# =============================================================================
+# HuggingFace Hub Export
+# =============================================================================
+
+catalog:
+  enabled: true
+  type: huggingface
+
+  # Repository name - just the dataset name is fine, username is auto-detected
+  # Examples:
+  #   repo_id: my-dataset           -> becomes yourname/my-dataset
+  #   repo_id: my-org/my-dataset    -> uses as-is
+  repo_id: redi-example-dataset
+
+  # Make dataset private (recommended for testing)
+  private: true
+
+  # Token: set via HF_TOKEN env var (recommended) or uncomment below
+  # token: "hf_..."

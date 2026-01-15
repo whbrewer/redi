@@ -118,6 +118,19 @@ class HuggingFaceExporter(CatalogExporter):
                     "Hugging Face token not configured. Set HF_TOKEN env var or use --catalog-token"
                 )
 
+            # Auto-prefix username if repo_id doesn't contain one
+            if "/" not in repo_id:
+                try:
+                    api = HfApi(token=token)
+                    username = api.whoami()["name"]
+                    repo_id = f"{username}/{repo_id}"
+                    self._log(f"Auto-prefixed username: {repo_id}")
+                except Exception as e:
+                    self._log(f"Could not auto-detect username: {e}")
+                    return self._create_error_result(
+                        f"repo_id must be in format 'username/dataset-name'. Got: {repo_id}"
+                    )
+
             private = self.config.extra.get("private", True)
 
             # Find output directory from metadata

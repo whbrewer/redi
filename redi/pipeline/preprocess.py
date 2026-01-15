@@ -381,9 +381,8 @@ class RegridClimate(PipelineStep):
                 "method": self.method
             }
             logger.info(f"Regridded to {self.target_resolution}° resolution")
-
-            except ImportError:
-                ctx.add_error(missing_dependency_error("xesmf", "climate"))
+        except ImportError:
+            ctx.add_error(missing_dependency_error("xesmf", "climate"))
         except Exception as e:
             ctx.add_error(f"Error regridding: {str(e)}")
         return ctx
