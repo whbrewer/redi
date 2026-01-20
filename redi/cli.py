@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-REDI CLI - Data Readiness for AI Command Line Interface
+REDI CLI - Readiness Engine for Data Integration
 
-Unified entry point for running REDI pipelines.
+Unified entry point for running REDI in different modes:
+  - run (orchestrator): Execute the full pipeline on data
+  - sidecar: Observe and report on existing workflows
+  - discover: Analyze unknown datasets and propose pipelines
 """
 
 import argparse
@@ -134,6 +137,10 @@ def expand_input_paths(input_args: List[str]) -> List[Path]:
 
     return expanded_paths
 
+
+# =============================================================================
+# ORCHESTRATOR MODE (redi run)
+# =============================================================================
 
 def run_pipeline(
     input_path: Optional[str] = None,
@@ -667,16 +674,671 @@ def run_pipeline(
     return ctx
 
 
-def analyze_dataset(input_path: str) -> str:
-    """Run data card analysis only"""
-    print_banner()
-    try:
-        sys.path.insert(0, str(Path(__file__).parent))
-        from .analyze import generate_report
-        return generate_report(input_path)
-    except ImportError as e:
-        return f"{Colors.RED}Error: Could not import analyze module: {e}{Colors.END}"
+# =============================================================================
+# SIDECAR MODE (redi sidecar)
+# =============================================================================
 
+def run_sidecar(
+    workflow_file: str,
+    workflow_type: str = "auto",
+    output_dir: str = "./output",
+    watch: bool = False,
+    style: str = "rich",
+    config: Optional[dict] = None,
+):
+    """Run REDI in sidecar mode - observe existing workflows.
+
+    Args:
+        workflow_file: Path to workflow file (Snakefile, Nextflow, etc.)
+        workflow_type: Type of workflow (auto, snakemake, nextflow, bash)
+        output_dir: Output directory for Data Card and reports
+        watch: If True, watch for changes and re-run
+        style: Output style (rich, simple, json)
+        config: Optional YAML configuration dict
+    """
+    config = config or {}
+    workflow_path = Path(workflow_file)
+
+    if not workflow_path.exists():
+        if style == "rich":
+            print(f"{Colors.RED}✗ Workflow file not found: {workflow_file}{Colors.END}")
+        else:
+            print(f"Error: Workflow file not found: {workflow_file}")
+        return None
+
+    if style == "rich":
+        print_banner()
+        print_section("Sidecar Mode")
+        print_metric("Workflow", str(workflow_path))
+
+    # Auto-detect workflow type
+    if workflow_type == "auto":
+        if workflow_path.name.lower() in ("snakefile", "snakefile.smk") or workflow_path.suffix == ".smk":
+            workflow_type = "snakemake"
+        elif workflow_path.suffix in (".nf", ".nextflow"):
+            workflow_type = "nextflow"
+        elif workflow_path.suffix in (".sh", ".bash"):
+            workflow_type = "bash"
+        else:
+            workflow_type = "unknown"
+
+    if style == "rich":
+        print_metric("Type", workflow_type)
+        print_metric("Watch", "enabled" if watch else "disabled")
+
+    # Parse workflow to understand structure
+    if workflow_type == "snakemake":
+        return _sidecar_snakemake(workflow_path, output_dir, watch, style)
+    elif workflow_type == "nextflow":
+        return _sidecar_nextflow(workflow_path, output_dir, watch, style)
+    else:
+        if style == "rich":
+            print(f"\n    {Colors.YELLOW}⚠ Workflow type '{workflow_type}' not yet supported{Colors.END}")
+            print(f"    {Colors.DIM}Supported types: snakemake, nextflow{Colors.END}")
+        else:
+            print(f"Error: Workflow type '{workflow_type}' not supported")
+        return None
+
+
+def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style: str):
+    """Sidecar for Snakemake workflows."""
+    if style == "rich":
+        print_section("Parsing Snakemake Workflow")
+
+    # Parse the Snakefile to extract rules
+    rules = _parse_snakefile(workflow_path)
+
+    if style == "rich":
+        print(f"    Found {Colors.BOLD}{len(rules)}{Colors.END} rules:")
+        for rule in rules:
+            print(f"      • {rule['name']}: {rule.get('description', 'no description')}")
+
+    # Map rules to REDI pipeline stages
+    stage_mapping = _map_rules_to_stages(rules)
+
+    if style == "rich":
+        print_section("Stage Mapping")
+        for stage, mapped_rules in stage_mapping.items():
+            if mapped_rules:
+                print(f"    {stage}: {', '.join(mapped_rules)}")
+
+    # Create output directory and save analysis
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate sidecar report
+    report = {
+        "workflow_file": str(workflow_path),
+        "workflow_type": "snakemake",
+        "rules": rules,
+        "stage_mapping": stage_mapping,
+        "mode": "sidecar",
+    }
+
+    import json
+    report_path = out_path / "sidecar_report.json"
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2)
+
+    if style == "rich":
+        print_section("Output")
+        print(f"    📋 {Colors.BOLD}sidecar_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+        print()
+        print(f"{Colors.GREEN}{Colors.BOLD}✓ Sidecar analysis complete{Colors.END}")
+        print(f"{Colors.DIM}  To observe pipeline execution, run:{Colors.END}")
+        print(f"    snakemake --snakefile {workflow_path} --notemp 2>&1 | redi sidecar --stdin")
+        print()
+
+    return report
+
+
+def _parse_snakefile(path: Path) -> List[dict]:
+    """Parse a Snakefile to extract rule information."""
+    rules = []
+    content = path.read_text()
+
+    import re
+    # Simple regex to find rule definitions
+    rule_pattern = re.compile(r'rule\s+(\w+):', re.MULTILINE)
+
+    for match in rule_pattern.finditer(content):
+        rule_name = match.group(1)
+        # Extract rule body (simplified)
+        start = match.end()
+        # Find next rule or end of file
+        next_match = rule_pattern.search(content, start)
+        end = next_match.start() if next_match else len(content)
+        rule_body = content[start:end]
+
+        # Extract input/output patterns
+        input_match = re.search(r'input:\s*\n?\s*(.+?)(?=\n\s*\w+:|$)', rule_body, re.DOTALL)
+        output_match = re.search(r'output:\s*\n?\s*(.+?)(?=\n\s*\w+:|$)', rule_body, re.DOTALL)
+
+        rules.append({
+            'name': rule_name,
+            'input': input_match.group(1).strip() if input_match else None,
+            'output': output_match.group(1).strip() if output_match else None,
+            'description': _infer_rule_description(rule_name, rule_body),
+        })
+
+    return rules
+
+
+def _infer_rule_description(name: str, body: str) -> str:
+    """Infer a description for a rule based on its name and content."""
+    name_lower = name.lower()
+
+    if 'download' in name_lower or 'wget' in body or 'curl' in body:
+        return "Download data from remote source"
+    elif 'regrid' in name_lower:
+        return "Regrid data to target resolution"
+    elif 'preprocess' in name_lower or 'clean' in name_lower:
+        return "Preprocess and clean data"
+    elif 'merge' in name_lower or 'concat' in name_lower:
+        return "Merge multiple files"
+    elif 'normalize' in name_lower:
+        return "Normalize data values"
+    elif 'split' in name_lower:
+        return "Split into train/val/test"
+    elif name_lower == 'all':
+        return "Final target rule"
+    else:
+        return "Processing step"
+
+
+def _map_rules_to_stages(rules: List[dict]) -> dict:
+    """Map Snakemake rules to REDI pipeline stages."""
+    stage_mapping = {
+        'ingest': [],
+        'preprocess': [],
+        'transform': [],
+        'structure': [],
+        'output': [],
+    }
+
+    for rule in rules:
+        name_lower = rule['name'].lower()
+        desc_lower = rule.get('description', '').lower()
+
+        if 'download' in name_lower or 'download' in desc_lower:
+            stage_mapping['ingest'].append(rule['name'])
+        elif 'regrid' in name_lower or 'clean' in name_lower or 'preprocess' in name_lower:
+            stage_mapping['preprocess'].append(rule['name'])
+        elif 'normalize' in name_lower or 'transform' in name_lower or 'feature' in name_lower:
+            stage_mapping['transform'].append(rule['name'])
+        elif 'merge' in name_lower or 'concat' in name_lower or 'structure' in name_lower:
+            stage_mapping['structure'].append(rule['name'])
+        elif 'split' in name_lower or 'save' in name_lower or rule['name'] == 'all':
+            stage_mapping['output'].append(rule['name'])
+
+    return stage_mapping
+
+
+def _sidecar_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: str):
+    """Sidecar for Nextflow workflows."""
+    if style == "rich":
+        print(f"\n    {Colors.YELLOW}⚠ Nextflow sidecar support coming soon{Colors.END}")
+    return None
+
+
+# =============================================================================
+# DISCOVER MODE (redi discover)
+# =============================================================================
+
+def run_discover(
+    input_path: str,
+    output_dir: str = "./output",
+    style: str = "rich",
+    interactive: bool = True,
+    config: Optional[dict] = None,
+):
+    """Run REDI in discover mode - analyze unknown datasets.
+
+    Args:
+        input_path: Path to data file or directory
+        output_dir: Output directory for reports
+        style: Output style (rich, simple, json)
+        interactive: If True, prompt for user confirmation before proposing pipeline
+        config: Optional YAML configuration dict
+    """
+    config = config or {}
+    path = Path(input_path)
+
+    if not path.exists():
+        if style == "rich":
+            print(f"{Colors.RED}✗ Path not found: {input_path}{Colors.END}")
+        else:
+            print(f"Error: Path not found: {input_path}")
+        return None
+
+    if style == "rich":
+        print_banner()
+        print_section("Discovery Mode")
+        print_metric("Path", str(path))
+        print_metric("Type", "directory" if path.is_dir() else "file")
+
+    # Phase 1: Inspect
+    if style == "rich":
+        print_section("Phase 1: Inspect")
+
+    inspection = _inspect_data(path, style)
+
+    # Phase 2: Infer
+    if style == "rich":
+        print_section("Phase 2: Infer")
+
+    inference = _infer_characteristics(inspection, style)
+
+    # Phase 3: Propose
+    if style == "rich":
+        print_section("Phase 3: Propose Pipeline")
+
+    proposal = _propose_pipeline(inspection, inference, style)
+
+    # Save discovery report
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    report = {
+        "input_path": str(path),
+        "mode": "discover",
+        "inspection": inspection,
+        "inference": inference,
+        "proposal": proposal,
+    }
+
+    import json
+    report_path = out_path / "discovery_report.json"
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2, default=str)
+
+    # Generate human-readable report
+    md_report = _generate_discovery_markdown(report)
+    md_path = out_path / "DISCOVERY_REPORT.md"
+    md_path.write_text(md_report)
+
+    if style == "rich":
+        print_section("Output")
+        print(f"    📋 {Colors.BOLD}discovery_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+        print(f"    📋 {Colors.BOLD}DISCOVERY_REPORT.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+        print()
+
+        if interactive and proposal.get('pipeline_steps'):
+            print(f"{Colors.BOLD}Proposed Pipeline:{Colors.END}")
+            for i, step in enumerate(proposal['pipeline_steps'], 1):
+                print(f"  {i}. {step['name']}: {step['description']}")
+            print()
+            print(f"{Colors.DIM}To execute this pipeline:{Colors.END}")
+            print(f"    redi run {input_path} -o {output_dir}")
+
+        print()
+        print(f"{Colors.GREEN}{Colors.BOLD}✓ Discovery complete{Colors.END}")
+        print()
+
+    return report
+
+
+def _inspect_data(path: Path, style: str) -> dict:
+    """Inspect data files and gather metadata."""
+    inspection = {
+        'files': [],
+        'total_size': 0,
+        'formats': set(),
+        'sample_data': {},
+    }
+
+    if path.is_file():
+        files = [path]
+    else:
+        # Get all files in directory
+        files = list(path.rglob('*'))
+        files = [f for f in files if f.is_file()]
+
+    for f in files[:100]:  # Limit to first 100 files
+        file_info = {
+            'path': str(f),
+            'name': f.name,
+            'suffix': f.suffix.lower(),
+            'size': f.stat().st_size,
+        }
+        inspection['files'].append(file_info)
+        inspection['total_size'] += file_info['size']
+        inspection['formats'].add(f.suffix.lower())
+
+    inspection['formats'] = list(inspection['formats'])
+    inspection['file_count'] = len(files)
+
+    # Sample first file of each format
+    for fmt in inspection['formats']:
+        sample_file = next((f for f in files if f.suffix.lower() == fmt), None)
+        if sample_file:
+            inspection['sample_data'][fmt] = _sample_file(sample_file)
+
+    if style == "rich":
+        size_str = _format_size(inspection['total_size'])
+        print(f"    Files: {Colors.BOLD}{inspection['file_count']}{Colors.END}")
+        print(f"    Total size: {Colors.BOLD}{size_str}{Colors.END}")
+        print(f"    Formats: {Colors.BOLD}{', '.join(inspection['formats'])}{Colors.END}")
+
+    return inspection
+
+
+def _sample_file(path: Path) -> dict:
+    """Sample a file to understand its structure."""
+    sample = {'path': str(path), 'format': path.suffix.lower()}
+
+    try:
+        if path.suffix.lower() in ['.csv', '.tsv']:
+            import pandas as pd
+            df = pd.read_csv(path, nrows=5)
+            sample['columns'] = list(df.columns)
+            sample['dtypes'] = {col: str(dtype) for col, dtype in df.dtypes.items()}
+            sample['shape'] = list(df.shape)
+            sample['preview'] = df.head(3).to_dict()
+
+        elif path.suffix.lower() in ['.npy', '.npz']:
+            import numpy as np
+            if path.suffix.lower() == '.npy':
+                arr = np.load(path, mmap_mode='r')
+                sample['shape'] = list(arr.shape)
+                sample['dtype'] = str(arr.dtype)
+            else:
+                with np.load(path) as npz:
+                    sample['arrays'] = {k: {'shape': list(v.shape), 'dtype': str(v.dtype)}
+                                       for k, v in npz.items()}
+
+        elif path.suffix.lower() in ['.nc', '.nc4']:
+            try:
+                import xarray as xr
+                ds = xr.open_dataset(path)
+                sample['variables'] = list(ds.data_vars)
+                sample['dims'] = dict(ds.dims)
+                sample['coords'] = list(ds.coords)
+                ds.close()
+            except ImportError:
+                sample['error'] = 'xarray not installed'
+
+        elif path.suffix.lower() in ['.h5', '.hdf5']:
+            try:
+                import h5py
+                with h5py.File(path, 'r') as f:
+                    sample['keys'] = list(f.keys())
+                    sample['structure'] = _h5_structure(f)
+            except ImportError:
+                sample['error'] = 'h5py not installed'
+
+        elif path.suffix.lower() == '.json':
+            import json
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                sample['type'] = 'array'
+                sample['length'] = len(data)
+                if data:
+                    sample['first_item_keys'] = list(data[0].keys()) if isinstance(data[0], dict) else None
+            elif isinstance(data, dict):
+                sample['type'] = 'object'
+                sample['keys'] = list(data.keys())
+
+        elif path.suffix.lower() == '.parquet':
+            import pandas as pd
+            df = pd.read_parquet(path)
+            sample['columns'] = list(df.columns)
+            sample['shape'] = list(df.shape)
+            sample['dtypes'] = {col: str(dtype) for col, dtype in df.dtypes.items()}
+
+    except Exception as e:
+        sample['error'] = str(e)
+
+    return sample
+
+
+def _h5_structure(group, prefix='') -> dict:
+    """Recursively get HDF5 structure."""
+    structure = {}
+    for key in list(group.keys())[:20]:  # Limit keys
+        item = group[key]
+        full_key = f"{prefix}/{key}" if prefix else key
+        if hasattr(item, 'shape'):
+            structure[full_key] = {'shape': list(item.shape), 'dtype': str(item.dtype)}
+        elif hasattr(item, 'keys'):
+            structure.update(_h5_structure(item, full_key))
+    return structure
+
+
+def _infer_characteristics(inspection: dict, style: str) -> dict:
+    """Infer data characteristics from inspection."""
+    inference = {
+        'modality': 'unknown',
+        'likely_domain': 'general',
+        'has_labels': False,
+        'has_splits': False,
+        'sparsity': None,
+        'suggested_format': 'npz',
+    }
+
+    formats = inspection.get('formats', [])
+    samples = inspection.get('sample_data', {})
+
+    # Infer modality
+    if '.nc' in formats or '.nc4' in formats or '.grib' in formats:
+        inference['modality'] = 'gridded'
+        inference['likely_domain'] = 'climate'
+        inference['suggested_format'] = 'zarr'
+    elif '.cif' in formats or '.poscar' in formats:
+        inference['modality'] = 'structured'
+        inference['likely_domain'] = 'materials'
+        inference['suggested_format'] = 'hdf5'
+    elif '.fasta' in formats or '.pdb' in formats:
+        inference['modality'] = 'sequence'
+        inference['likely_domain'] = 'life_sciences'
+        inference['suggested_format'] = 'hdf5'
+    elif '.npy' in formats or '.npz' in formats:
+        inference['modality'] = 'array'
+        # Check shapes to infer type
+        for fmt, sample in samples.items():
+            if 'shape' in sample:
+                shape = sample['shape']
+                if len(shape) == 4:
+                    inference['modality'] = 'image_batch'
+                elif len(shape) == 3:
+                    inference['modality'] = 'sequence_or_image'
+                elif len(shape) == 2:
+                    inference['modality'] = 'tabular_or_embedding'
+    elif '.csv' in formats or '.tsv' in formats or '.parquet' in formats:
+        inference['modality'] = 'tabular'
+        # Check columns for domain hints
+        for fmt, sample in samples.items():
+            cols = sample.get('columns', [])
+            cols_lower = [c.lower() for c in cols]
+
+            if any(c in cols_lower for c in ['temperature', 'lat', 'lon', 'latitude', 'longitude']):
+                inference['likely_domain'] = 'climate'
+            elif any(c in cols_lower for c in ['formula', 'lattice', 'spacegroup', 'energy']):
+                inference['likely_domain'] = 'materials'
+            elif any(c in cols_lower for c in ['sequence', 'protein', 'gene', 'mutation']):
+                inference['likely_domain'] = 'life_sciences'
+            elif any(c in cols_lower for c in ['plasma', 'tokamak', 'disruption', 'ip']):
+                inference['likely_domain'] = 'fusion'
+            elif any(c in cols_lower for c in ['job', 'queue', 'walltime', 'nodes', 'cores']):
+                inference['likely_domain'] = 'hpc'
+
+            # Check for labels
+            if any(c in cols_lower for c in ['label', 'target', 'y', 'class', 'category']):
+                inference['has_labels'] = True
+
+            # Check for splits
+            if any(c in cols_lower for c in ['split', 'fold', 'train', 'test', 'val']):
+                inference['has_splits'] = True
+
+    if style == "rich":
+        print(f"    Modality: {Colors.BOLD}{inference['modality']}{Colors.END}")
+        print(f"    Likely domain: {Colors.BOLD}{inference['likely_domain']}{Colors.END}")
+        print(f"    Has labels: {Colors.BOLD}{'yes' if inference['has_labels'] else 'no'}{Colors.END}")
+        print(f"    Has splits: {Colors.BOLD}{'yes' if inference['has_splits'] else 'no'}{Colors.END}")
+
+    return inference
+
+
+def _propose_pipeline(inspection: dict, inference: dict, style: str) -> dict:
+    """Propose a pipeline based on inspection and inference."""
+    proposal = {
+        'pipeline_steps': [],
+        'output_format': inference.get('suggested_format', 'npz'),
+        'confidence': 'medium',
+        'notes': [],
+    }
+
+    modality = inference.get('modality', 'unknown')
+    domain = inference.get('likely_domain', 'general')
+
+    # Always start with ingest
+    proposal['pipeline_steps'].append({
+        'name': 'ingest',
+        'description': f"Load {modality} data from {', '.join(inspection.get('formats', ['files']))}",
+        'stage': 'ingest',
+    })
+
+    # Preprocessing based on modality
+    if modality == 'tabular':
+        proposal['pipeline_steps'].append({
+            'name': 'handle_missing',
+            'description': 'Handle missing values (impute or drop)',
+            'stage': 'preprocess',
+        })
+        proposal['pipeline_steps'].append({
+            'name': 'remove_duplicates',
+            'description': 'Remove duplicate rows',
+            'stage': 'preprocess',
+        })
+    elif modality == 'gridded':
+        proposal['pipeline_steps'].append({
+            'name': 'regrid',
+            'description': 'Regrid to uniform resolution',
+            'stage': 'preprocess',
+        })
+    elif modality in ['array', 'image_batch']:
+        proposal['pipeline_steps'].append({
+            'name': 'validate_shapes',
+            'description': 'Validate array shapes are consistent',
+            'stage': 'preprocess',
+        })
+
+    # Transform
+    if modality == 'tabular':
+        proposal['pipeline_steps'].append({
+            'name': 'normalize',
+            'description': 'Normalize numeric features',
+            'stage': 'transform',
+        })
+        proposal['pipeline_steps'].append({
+            'name': 'encode_categoricals',
+            'description': 'Encode categorical variables',
+            'stage': 'transform',
+        })
+    elif modality in ['array', 'gridded', 'image_batch']:
+        proposal['pipeline_steps'].append({
+            'name': 'normalize',
+            'description': 'Normalize to [0,1] or standardize',
+            'stage': 'transform',
+        })
+
+    # Output
+    if not inference.get('has_splits'):
+        proposal['pipeline_steps'].append({
+            'name': 'split',
+            'description': 'Create train/val/test splits',
+            'stage': 'output',
+        })
+
+    proposal['pipeline_steps'].append({
+        'name': 'save',
+        'description': f"Save to {proposal['output_format']} format",
+        'stage': 'output',
+    })
+
+    # Add notes
+    if inference.get('likely_domain') == 'general':
+        proposal['notes'].append("Could not confidently detect domain. Consider specifying with --domain.")
+        proposal['confidence'] = 'low'
+
+    if not inference.get('has_labels'):
+        proposal['notes'].append("No label column detected. This may be unsupervised or labels need to be added.")
+
+    if style == "rich":
+        print(f"    Steps: {Colors.BOLD}{len(proposal['pipeline_steps'])}{Colors.END}")
+        print(f"    Output format: {Colors.BOLD}{proposal['output_format']}{Colors.END}")
+        print(f"    Confidence: {Colors.BOLD}{proposal['confidence']}{Colors.END}")
+        if proposal['notes']:
+            print(f"    Notes:")
+            for note in proposal['notes']:
+                print(f"      {Colors.YELLOW}•{Colors.END} {note}")
+
+    return proposal
+
+
+def _generate_discovery_markdown(report: dict) -> str:
+    """Generate markdown report from discovery results."""
+    lines = [
+        "# REDI Discovery Report",
+        "",
+        f"**Input:** `{report['input_path']}`",
+        "",
+        "## Inspection",
+        "",
+        f"- **Files:** {report['inspection'].get('file_count', 'unknown')}",
+        f"- **Total Size:** {_format_size(report['inspection'].get('total_size', 0))}",
+        f"- **Formats:** {', '.join(report['inspection'].get('formats', []))}",
+        "",
+        "## Inference",
+        "",
+        f"- **Modality:** {report['inference'].get('modality', 'unknown')}",
+        f"- **Likely Domain:** {report['inference'].get('likely_domain', 'general')}",
+        f"- **Has Labels:** {'Yes' if report['inference'].get('has_labels') else 'No'}",
+        f"- **Has Splits:** {'Yes' if report['inference'].get('has_splits') else 'No'}",
+        "",
+        "## Proposed Pipeline",
+        "",
+    ]
+
+    for i, step in enumerate(report['proposal'].get('pipeline_steps', []), 1):
+        lines.append(f"{i}. **{step['name']}** ({step['stage']}): {step['description']}")
+
+    lines.extend([
+        "",
+        f"**Output Format:** {report['proposal'].get('output_format', 'npz')}",
+        f"**Confidence:** {report['proposal'].get('confidence', 'medium')}",
+    ])
+
+    if report['proposal'].get('notes'):
+        lines.extend(["", "### Notes", ""])
+        for note in report['proposal']['notes']:
+            lines.append(f"- {note}")
+
+    lines.extend([
+        "",
+        "---",
+        "*Generated by REDI (Readiness Engine for Data Integration)*",
+    ])
+
+    return "\n".join(lines)
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+# =============================================================================
+# CATALOG EXPORT
+# =============================================================================
 
 def run_catalog_export(
     metadata_path: str,
@@ -689,22 +1351,7 @@ def run_catalog_export(
     private: bool = True,
     style: str = "rich",
 ) -> bool:
-    """Export REDI metadata to a data catalog.
-
-    Args:
-        metadata_path: Path to REDI metadata.json file
-        catalog_type: Type of catalog (openmetadata, mlflow, intake, huggingface)
-        host: Catalog server URL (for OpenMetadata)
-        token: Authentication token
-        token_env: Environment variable name for token
-        service_name: Service name in the catalog
-        repo_id: Repository ID for HuggingFace
-        private: Make HuggingFace dataset private
-        style: Output style (rich, simple, json)
-
-    Returns:
-        True if export succeeded
-    """
+    """Export REDI metadata to a data catalog."""
     import os
 
     try:
@@ -720,13 +1367,11 @@ def run_catalog_export(
         # Get token from environment if not provided
         if not token:
             token = os.environ.get(token_env, "")
-            # Also try alternative HF token env var
             if not token and catalog_type == "huggingface":
                 token = os.environ.get("HUGGINGFACE_TOKEN", "")
 
         # Validation depends on catalog type
         if catalog_type == "huggingface":
-            # HuggingFace doesn't need host, but needs token
             if not token:
                 if style == "rich":
                     print_section("Catalog Export")
@@ -740,7 +1385,6 @@ def run_catalog_export(
                 print(f"    {Colors.DIM}Repo:{Colors.END} {repo_id or '(auto-generated)'}")
                 print(f"    {Colors.DIM}Private:{Colors.END} {private}")
 
-            # Run HuggingFace export
             result = export_to_catalog(
                 metadata_path=metadata_path,
                 catalog_type=catalog_type,
@@ -749,7 +1393,6 @@ def run_catalog_export(
                 private=private,
             )
         else:
-            # OpenMetadata and others need host
             if not host:
                 if style == "rich":
                     print_section("Catalog Export")
@@ -770,7 +1413,6 @@ def run_catalog_export(
                 print(f"    {Colors.DIM}Host:{Colors.END} {host}")
                 print(f"    {Colors.DIM}Service:{Colors.END} {service_name}")
 
-            # Run export for non-HF catalogs
             result = export_to_catalog(
                 metadata_path=metadata_path,
                 catalog_type=catalog_type,
@@ -808,6 +1450,10 @@ def run_catalog_export(
         return False
 
 
+# =============================================================================
+# FAIR ASSESSMENT
+# =============================================================================
+
 def run_fair_assessment(
     input_path: str,
     domain: Optional[str] = None,
@@ -815,18 +1461,7 @@ def run_fair_assessment(
     style: str = "rich",
     output_dir: Optional[str] = None,
 ) -> Optional[str]:
-    """Run FAIR principles assessment.
-
-    Args:
-        input_path: Path to data file
-        domain: Scientific domain
-        fair_config_path: Path to FAIR metadata YAML
-        style: Output style (rich, simple, json)
-        output_dir: Directory to save FAIR report
-
-    Returns:
-        Path to saved FAIR report or None
-    """
+    """Run FAIR principles assessment."""
     try:
         from .fair import FAIRAssessor, FAIRMetadata, FAIRRecommender, load_fair_metadata
         from .analyze import DataAnalyzer
@@ -867,7 +1502,6 @@ def run_fair_assessment(
             print(f"    {Colors.BOLD}Overall Score:{Colors.END} {fair_score.overall_score:.0%}")
             print()
 
-            # Category scores
             for category, score in fair_score.category_scores.items():
                 if score >= 0.8:
                     color = Colors.GREEN
@@ -883,7 +1517,6 @@ def run_fair_assessment(
                     status = "Poor"
                 print(f"    {category.capitalize():15} {color}{score:>5.0%}{Colors.END} ({status})")
 
-            # Quick recommendations
             recommender = FAIRRecommender(fair_score, domain=detected_domain)
             quick_wins = recommender.get_quick_wins()
             if quick_wins:
@@ -926,59 +1559,161 @@ def run_fair_assessment(
         return None
 
 
+# =============================================================================
+# MAIN CLI
+# =============================================================================
+
 def main():
     parser = argparse.ArgumentParser(
-        description="REDI - Data Readiness for AI Pipeline",
+        prog='redi',
+        description="REDI - Readiness Engine for Data Integration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Commands:
+  run        Run the pipeline (orchestrator mode) - default
+  sidecar    Observe existing workflows
+  discover   Analyze unknown datasets and propose pipelines
+
 Examples:
-  %(prog)s data.csv                      # Auto-detect and run full pipeline
-  %(prog)s data.csv --domain hpc         # Specify domain
-  %(prog)s data.csv -o ./processed       # Custom output directory
-  %(prog)s data.csv --stages ingest,preprocess  # Run specific stages
-  %(prog)s --analyze data.csv            # Generate data card only
-  %(prog)s pipeline.yaml                 # Run from YAML (input_path in config)
+  redi run data.csv                     # Run pipeline on data
+  redi data.csv                         # Same as above (run is default)
+  redi sidecar --workflow Snakefile     # Observe Snakemake workflow
+  redi discover /path/to/data/          # Analyze unknown dataset
 
-Multi-file examples:
-  %(prog)s data_*.nc                     # Process multiple NetCDF files (glob)
-  %(prog)s file1.nc file2.nc file3.nc    # Process explicit file list
-  %(prog)s "/path/to/data/*.nc"          # Quoted glob pattern
-
-Catalog export examples:
-  %(prog)s data.csv --catalog                    # Export to HuggingFace Hub
-  %(prog)s data.csv --catalog --catalog-repo org/my-dataset
-  %(prog)s data.csv --catalog --catalog-type openmetadata --catalog-host http://localhost:8585/api
+For command-specific help:
+  redi run --help
+  redi sidecar --help
+  redi discover --help
         """
     )
 
-    parser.add_argument("input", nargs="*", help="Input file path(s), glob pattern, or YAML config")
-    parser.add_argument("-d", "--domain", choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
-                       help="Scientific domain (auto-detected if not specified)")
-    parser.add_argument("-o", "--output", default="./output", help="Output directory")
-    parser.add_argument("-s", "--stages", help="Comma-separated list of stages to run")
-    parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
-                       default="npz", help="Output format: npz (default), parquet, csv, hdf5, zarr")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument("-a", "--analyze", action="store_true", help="Only analyze and generate data card")
-    parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
-                       help="Output style: rich (default), simple, or json")
-    parser.add_argument("-c", "--config", help="YAML configuration file path")
-    parser.add_argument("--fair", action="store_true", help="Run FAIR principles assessment")
-    parser.add_argument("--fair-config", help="YAML file with FAIR metadata (DOI, license, etc.)")
-    parser.add_argument("--catalog", action="store_true", help="Export to data catalog after processing")
-    parser.add_argument("--catalog-type", choices=["openmetadata", "mlflow", "intake", "huggingface"],
-                       default="huggingface", help="Data catalog type (default: huggingface)")
-    parser.add_argument("--catalog-host", help="Catalog server URL (e.g., http://localhost:8585/api)")
-    parser.add_argument("--catalog-token", help="Catalog authentication token (or set HF_TOKEN for HuggingFace)")
-    parser.add_argument("--catalog-service", default="redi", help="Service name in catalog (default: redi)")
-    parser.add_argument("--catalog-repo", help="Repository ID for HuggingFace (e.g., your-org/dataset-name)")
-    parser.add_argument("--catalog-private", action="store_true", default=True,
-                       help="Make HuggingFace dataset private (default: True)")
+    subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
+    # =========================================================================
+    # redi run (orchestrator)
+    # =========================================================================
+    run_parser = subparsers.add_parser(
+        'run',
+        help='Run the REDI pipeline (orchestrator mode)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  redi run data.csv                      # Auto-detect and run full pipeline
+  redi run data.csv --domain hpc         # Specify domain
+  redi run data.csv -o ./processed       # Custom output directory
+  redi run data.csv --stages ingest,preprocess  # Run specific stages
+  redi run "data_*.nc"                   # Process multiple files (glob)
+        """
+    )
+    run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
+    run_parser.add_argument("-d", "--domain",
+                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
+                           help="Scientific domain (auto-detected if not specified)")
+    run_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    run_parser.add_argument("-s", "--stages", help="Comma-separated list of stages to run")
+    run_parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
+                           default="npz", help="Output format")
+    run_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    run_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+                           help="Output style")
+    run_parser.add_argument("-c", "--config", help="YAML configuration file path")
+    run_parser.add_argument("--fair", action="store_true", help="Run FAIR principles assessment")
+    run_parser.add_argument("--fair-config", help="YAML file with FAIR metadata")
+    run_parser.add_argument("--catalog", action="store_true", help="Export to data catalog")
+    run_parser.add_argument("--catalog-type", choices=["openmetadata", "mlflow", "intake", "huggingface"],
+                           default="huggingface", help="Data catalog type")
+    run_parser.add_argument("--catalog-host", help="Catalog server URL")
+    run_parser.add_argument("--catalog-token", help="Catalog authentication token")
+    run_parser.add_argument("--catalog-service", default="redi", help="Service name in catalog")
+    run_parser.add_argument("--catalog-repo", help="Repository ID for HuggingFace")
+    run_parser.add_argument("--catalog-private", action="store_true", default=True,
+                           help="Make HuggingFace dataset private")
+
+    # =========================================================================
+    # redi sidecar
+    # =========================================================================
+    sidecar_parser = subparsers.add_parser(
+        'sidecar',
+        help='Observe existing workflows (sidecar mode)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  redi sidecar --workflow Snakefile
+  redi sidecar --workflow pipeline.nf --type nextflow
+  redi sidecar --workflow Snakefile --watch
+  redi sidecar -c sidecar_config.yaml
+        """
+    )
+    sidecar_parser.add_argument("-w", "--workflow",
+                                help="Path to workflow file (Snakefile, *.nf, etc.)")
+    sidecar_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
+                                choices=["auto", "snakemake", "nextflow", "bash"],
+                                help="Workflow type (auto-detected if not specified)")
+    sidecar_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    sidecar_parser.add_argument("--watch", action="store_true",
+                                help="Watch for changes and re-run")
+    sidecar_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+                                help="Output style")
+    sidecar_parser.add_argument("-c", "--config", help="YAML configuration file")
+
+    # =========================================================================
+    # redi discover
+    # =========================================================================
+    discover_parser = subparsers.add_parser(
+        'discover',
+        help='Analyze unknown datasets and propose pipelines',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  redi discover /path/to/data/
+  redi discover dataset.csv -o ./analysis
+  redi discover /data --no-interactive
+  redi discover -c discover_config.yaml
+        """
+    )
+    discover_parser.add_argument("input", nargs="?", help="Path to data file or directory")
+    discover_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    discover_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+                                help="Output style")
+    discover_parser.add_argument("--no-interactive", action="store_true",
+                                help="Don't prompt for confirmation")
+    discover_parser.add_argument("-c", "--config", help="YAML configuration file")
+
+    # Parse arguments
     args = parser.parse_args()
 
+    # Handle backward compatibility: if no command but has positional args, assume 'run'
+    if args.command is None:
+        # Check if there are any remaining args that look like input files
+        # Re-parse with 'run' as default
+        if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
+            # First arg is likely a file, treat as 'redi run'
+            sys.argv.insert(1, 'run')
+            args = parser.parse_args()
+        elif len(sys.argv) > 1:
+            # Has flags but no command - might be old-style usage
+            # Try to handle common flags
+            parser.print_help()
+            return
+        else:
+            parser.print_help()
+            return
+
+    # Dispatch to appropriate handler
+    if args.command == 'run':
+        _handle_run_command(args)
+    elif args.command == 'sidecar':
+        _handle_sidecar_command(args)
+    elif args.command == 'discover':
+        _handle_discover_command(args)
+    else:
+        parser.print_help()
+
+
+def _handle_run_command(args):
+    """Handle the 'run' subcommand."""
     config_path = args.config
-    input_args = args.input  # Now a list
+    input_args = args.input
 
     # Check if first input is a YAML config file
     if not config_path and input_args and len(input_args) == 1:
@@ -999,7 +1734,6 @@ Catalog export examples:
             yaml_config = load_yaml_config(config_path)
             config = merge_with_defaults(yaml_config)
 
-            # Validate configuration
             issues = validate_config(config)
             if issues:
                 for issue in issues:
@@ -1023,7 +1757,6 @@ Catalog export examples:
     if args.stages:
         config['stages'] = args.stages.split(',')
 
-    # Set default output_format if not in config
     if 'output_format' not in config:
         config['output_format'] = args.format
 
@@ -1037,10 +1770,8 @@ Catalog export examples:
         config_input_paths = config.get('input_paths')
 
         if config_input_paths:
-            # Multi-file from config
             input_paths = expand_input_paths(config_input_paths)
         elif config_input:
-            # Single file from config (may be a glob pattern)
             input_paths = expand_input_paths([config_input])
 
     if not input_paths:
@@ -1048,35 +1779,11 @@ Catalog export examples:
               f"'input_path' or 'input_paths' in the YAML config.{Colors.END}")
         sys.exit(1)
 
-    # For analyze mode, use first file
-    if args.analyze:
-        result = analyze_dataset(str(input_paths[0]))
-        print(result)
-        if len(input_paths) > 1:
-            print(f"\n{Colors.DIM}Note: Analyzed first file only. "
-                  f"{len(input_paths) - 1} additional files not shown.{Colors.END}")
-
-        # Run FAIR assessment if requested
-        if args.fair:
-            run_fair_assessment(
-                str(input_paths[0]),
-                domain=config.get('domain', args.domain),
-                fair_config_path=args.fair_config,
-                style=args.style,
-            )
-        return
-
-    # For FAIR-only mode (no analyze, no pipeline)
-    if args.fair and not args.analyze:
-        # Check if user wants FAIR-only (no other stages specified)
-        if args.stages is None and config.get('stages') is None:
-            # Run FAIR assessment only if --fair is the main action
-            pass  # Continue to pipeline, FAIR will be run at end
-
     # Run pipeline
     stages = config.get('stages')
     if args.stages:
         stages = args.stages.split(",")
+
     ctx = run_pipeline(
         output_dir=config.get('output_dir', args.output),
         domain=config.get('domain', args.domain),
@@ -1087,7 +1794,7 @@ Catalog export examples:
         input_paths=[str(p) for p in input_paths]
     )
 
-    # Run FAIR assessment after pipeline if requested (CLI flag or YAML config)
+    # Run FAIR assessment after pipeline if requested
     fair_enabled = args.fair or config.get('fair', {}).get('enabled', False)
     fair_config_path = args.fair_config or config.get('fair', {}).get('metadata_file')
 
@@ -1102,12 +1809,11 @@ Catalog export examples:
         if fair_path and ctx.metadata.get("saved_files") is not None:
             ctx.metadata["saved_files"].append(fair_path)
 
-    # Run catalog export after pipeline if requested (CLI flag or YAML config)
+    # Run catalog export after pipeline if requested
     catalog_config = config.get('catalog', {})
     catalog_enabled = args.catalog or catalog_config.get('enabled', False)
 
     if catalog_enabled and ctx:
-        # Get metadata.json path from output
         output_dir = Path(config.get('output_dir', args.output))
         metadata_path = output_dir / "metadata.json"
 
@@ -1126,6 +1832,82 @@ Catalog export examples:
         else:
             if args.style == "rich":
                 print(f"    {Colors.YELLOW}⚠ metadata.json not found, skipping catalog export{Colors.END}")
+
+
+def _handle_sidecar_command(args):
+    """Handle the 'sidecar' subcommand."""
+    import yaml
+
+    config = {}
+
+    # Load YAML config if provided
+    if args.config:
+        try:
+            with open(args.config) as f:
+                config = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            print(f"{Colors.RED}Error: Config file not found: {args.config}{Colors.END}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
+            sys.exit(1)
+
+    # CLI args override config
+    workflow_file = args.workflow or config.get('workflow')
+    if not workflow_file:
+        print(f"{Colors.RED}Error: workflow file required. Use -w/--workflow or set in config.{Colors.END}")
+        sys.exit(1)
+
+    workflow_type = args.workflow_type if args.workflow_type != 'auto' else config.get('workflow_type', 'auto')
+    output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    watch = args.watch or config.get('watch', False)
+    style = args.style if args.style != 'rich' else config.get('style', 'rich')
+
+    run_sidecar(
+        workflow_file=workflow_file,
+        workflow_type=workflow_type,
+        output_dir=output_dir,
+        watch=watch,
+        style=style,
+        config=config,
+    )
+
+
+def _handle_discover_command(args):
+    """Handle the 'discover' subcommand."""
+    import yaml
+
+    config = {}
+
+    # Load YAML config if provided
+    if args.config:
+        try:
+            with open(args.config) as f:
+                config = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            print(f"{Colors.RED}Error: Config file not found: {args.config}{Colors.END}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
+            sys.exit(1)
+
+    # CLI args override config
+    input_path = args.input or config.get('input')
+    if not input_path:
+        print(f"{Colors.RED}Error: input path required. Provide on CLI or set in config.{Colors.END}")
+        sys.exit(1)
+
+    output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    style = args.style if args.style != 'rich' else config.get('style', 'rich')
+    interactive = not args.no_interactive if args.no_interactive else config.get('interactive', True)
+
+    run_discover(
+        input_path=input_path,
+        output_dir=output_dir,
+        style=style,
+        interactive=interactive,
+        config=config,
+    )
 
 
 if __name__ == "__main__":

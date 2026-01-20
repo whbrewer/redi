@@ -1,0 +1,71 @@
+# REDI Discover Configuration - High Energy Physics Dataset Example
+#
+# Example configuration for analyzing an unknown HEP dataset
+# (e.g., sPHENIX TPC detector data from Zenodo)
+#
+# Use with: redi discover -c discover_hep_example.yaml
+
+input: /data/sphenix_tpc_data
+
+output_dir: ./sphenix_discovery
+
+style: rich
+interactive: true
+
+inspection:
+  max_files: 50
+  include_patterns:
+    - "**/*.npy"
+    - "**/*.npz"
+    - "**/*.csv"
+    - "**/*.tgz"
+  parse_metadata: true
+  metadata_files:
+    - "README.md"
+    - "occupancy_by_wedge.csv"
+
+inference:
+  # Custom domain hints for HEP data
+  domain_hints:
+    # This would be a new domain, but hints help REDI understand the data
+    physics:
+      - adc
+      - sector
+      - occupancy
+      - event
+      - simulation
+      - detector
+      - tpc
+      - wedge
+
+  label_patterns:
+    - "label"
+    - "target"
+    - "split"
+
+  split_patterns:
+    - "split"
+    - "train"
+    - "test"
+
+proposal:
+  target_level: 5
+
+  # For 3D detector data, HDF5 or NPZ are good choices
+  preferred_format: npz
+
+  # The data has 90% sparsity, suggest sparse handling
+  preprocessing_hints:
+    - handle_sparsity: true
+    - normalize_adc: true  # ADC values [0, 1023]
+
+  generate_code: true
+  code_format: python
+
+report:
+  markdown: true
+  json: true
+  include_samples: true
+
+actions:
+  export_python: true

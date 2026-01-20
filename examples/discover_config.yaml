@@ -1,0 +1,162 @@
+# REDI Discover Configuration
+#
+# Use with: redi discover -c discover_config.yaml
+#
+# Discover mode analyzes unknown datasets and proposes preprocessing pipelines.
+# It inspects files, infers data characteristics, and suggests transformations.
+
+# Input path - file or directory to analyze
+input: /path/to/unknown/dataset
+
+# Output directory for reports
+output_dir: ./redi_discovery
+
+# Output style: rich, simple, json
+style: rich
+
+# Interactive mode - prompt for confirmation before proposing pipeline
+interactive: true
+
+# Inspection settings
+inspection:
+  # Maximum number of files to inspect
+  max_files: 100
+
+  # Maximum file size to sample (bytes)
+  max_sample_size: 10485760  # 10 MB
+
+  # File patterns to include (glob)
+  include_patterns:
+    - "**/*.csv"
+    - "**/*.parquet"
+    - "**/*.nc"
+    - "**/*.npy"
+    - "**/*.npz"
+    - "**/*.h5"
+    - "**/*.hdf5"
+    - "**/*.json"
+
+  # File patterns to exclude (glob)
+  exclude_patterns:
+    - "**/.git/**"
+    - "**/__pycache__/**"
+    - "**/node_modules/**"
+    - "**/*.log"
+
+  # Parse README/metadata files for context
+  parse_metadata: true
+  metadata_files:
+    - "README.md"
+    - "README.txt"
+    - "metadata.json"
+    - "dataset_info.json"
+
+# Inference settings
+inference:
+  # Domain hints - help REDI detect the correct domain
+  domain_hints:
+    # Keywords that suggest specific domains
+    climate:
+      - temperature
+      - precipitation
+      - latitude
+      - longitude
+      - pressure
+      - humidity
+    materials:
+      - formula
+      - lattice
+      - bandgap
+      - energy
+      - spacegroup
+    life_sciences:
+      - sequence
+      - protein
+      - gene
+      - mutation
+      - expression
+    fusion:
+      - plasma
+      - tokamak
+      - disruption
+      - confinement
+    hpc:
+      - job_id
+      - queue
+      - walltime
+      - nodes
+      - cores
+
+  # Label column detection patterns
+  label_patterns:
+    - "label"
+    - "target"
+    - "y"
+    - "class"
+    - "category"
+    - "output"
+
+  # Split column detection patterns
+  split_patterns:
+    - "split"
+    - "fold"
+    - "partition"
+    - "subset"
+
+# Pipeline proposal settings
+proposal:
+  # Target readiness level (1-5)
+  target_level: 5
+
+  # Preferred output format (npz, parquet, hdf5, zarr)
+  preferred_format: auto  # auto-detect based on data
+
+  # Include optional preprocessing steps
+  include_optional_steps: false
+
+  # Generate executable code
+  generate_code: true
+  code_format: python  # python, snakemake, bash
+
+# LLM-assisted inference (optional)
+# Requires API key in environment or config
+llm_assist:
+  enabled: false
+
+  # Use LLM to:
+  # - Parse README/documentation for domain context
+  # - Suggest preprocessing based on data description
+  # - Generate pipeline code
+  tasks:
+    - parse_documentation
+    - suggest_preprocessing
+    - generate_code
+
+  # Model to use (if Claude Code integration available)
+  model: claude-3-sonnet
+
+# Report settings
+report:
+  # Generate markdown report
+  markdown: true
+
+  # Generate JSON report
+  json: true
+
+  # Include data samples in report
+  include_samples: true
+  max_sample_rows: 5
+
+  # Include visualizations (requires matplotlib)
+  include_visualizations: false
+
+# Post-discovery actions
+actions:
+  # Automatically run proposed pipeline (requires confirmation)
+  auto_run: false
+
+  # Export proposed pipeline as Snakefile
+  export_snakefile: false
+
+  # Export proposed pipeline as Python script
+  export_python: true

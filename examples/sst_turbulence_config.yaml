@@ -1,0 +1,90 @@
+# REDI Configuration for SST (Stably Stratified Turbulence) Data
+# Dataset: P1F4R32 from the SICKLE project
+# Format: SST-binary (files named {variable}_{timestep})
+
+# Scientific domain - auto-detected as HPC/turbulence
+domain: hpc
+
+# Input path to SST data directory
+input_path: /opt/drai/turbulence/sst/P1F4R32
+
+# Output settings
+output_dir: ./output/sst_p1f4r32
+output_format: npz  # npz, zarr, hdf5
+
+# SST-specific settings
+sickle:
+  # Grid shape (nx, ny, nz) - will be auto-detected if not specified
+  grid_shape: [514, 512, 256]
+
+  # Variables to load (null = all available)
+  # Available: u, v, w (velocity), r (density), p (pressure), pv (potential vorticity)
+  variables:
+    - u   # x-velocity
+    - v   # y-velocity
+    - w   # z-velocity
+    - p   # pressure
+    - r   # density perturbation
+
+  # Timesteps to process (null = all available)
+  timesteps: null
+
+  # Whether to load velocity as a single 3-component field
+  combine_velocity: true
+
+# Variable selection (applied after loading)
+variables:
+  select: null  # null = all loaded variables
+
+# Normalization settings
+normalize:
+  enabled: true
+  method: zscore       # zscore or minmax
+  per_variable: true   # normalize each variable independently
+  two_pass: false      # single-pass normalization
+
+# Train/val/test split
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  shuffle: true
+  random_seed: 42
+
+# Optional: Subsampling for large datasets
+subsample:
+  enabled: false
+  # Use SICKLE-style intelligent sampling
+  method: gradient     # random, uniform, gradient (gradient-based importance)
+  ratio: 0.1           # fraction of data to keep
+  seed: 42
+
+# Data augmentation (for ML training)
+augment:
+  enabled: false
+  # Turbulence-specific augmentations
+  random_rotation: false    # 90-degree rotations
+  random_flip: false        # axis flips
+  add_noise: false          # small Gaussian noise
+  noise_std: 0.01
+
+# Output format options
+save:
+  # Save as ML-ready arrays
+  format: npz
+
+  # Include coordinate arrays
+  save_coordinates: true
+
+  # Include normalization statistics
+  save_normalization: true
+
+  # Chunk large arrays for zarr output
+  chunks: [64, 64, 64]
+
+# FAIR assessment (optional)
+fair:
+  enabled: false
+  metadata_file: null  # Path to FAIR metadata YAML

@@ -2,6 +2,11 @@
 
 A modular pipeline for transforming raw scientific data into AI-ready datasets.
 
+REDI operates in three modes:
+- **Orchestrator** (`redi run`) - Run the full pipeline on your data
+- **Sidecar** (`redi sidecar`) - Observe existing workflows (Snakemake, Nextflow)
+- **Discovery** (`redi discover`) - Analyze unknown datasets and propose pipelines
+
 ## Installation
 
 ```bash
@@ -128,17 +133,49 @@ In a Claude Code conversation, type `/redi` to activate the skill. Claude will t
 
 ## Quick Start
 
-### Run Full Pipeline
+### Orchestrator Mode (Run Pipeline)
 
 ```bash
 # Auto-detect domain and process
-redi data.csv -o ./output
+redi run data.csv -o ./output
 
 # Specify domain explicitly
-redi data.nc --domain climate -o ./output
+redi run data.nc --domain climate -o ./output
 
 # Run specific stages only
-redi data.csv --stages ingest,preprocess,transform
+redi run data.csv --stages ingest,preprocess,transform
+
+# Backward compatible - 'run' is the default
+redi data.csv -o ./output
+```
+
+### Sidecar Mode (Observe Workflows)
+
+```bash
+# Observe a Snakemake workflow
+redi sidecar --workflow Snakefile
+
+# Specify workflow type
+redi sidecar --workflow pipeline.nf --type nextflow
+
+# Use YAML config
+redi sidecar -c sidecar_config.yaml
+```
+
+### Discovery Mode (Analyze Unknown Data)
+
+```bash
+# Analyze a dataset and propose pipeline
+redi discover /path/to/unknown/data/
+
+# Analyze with output directory
+redi discover dataset.csv -o ./analysis
+
+# Non-interactive mode
+redi discover /data --no-interactive
+
+# Use YAML config
+redi discover -c discover_config.yaml
 ```
 
 ### Multi-File Processing
@@ -147,34 +184,25 @@ REDI supports processing multiple files that will be concatenated together:
 
 ```bash
 # Glob pattern (quote to prevent shell expansion)
-redi "/path/to/data/*.nc" -d climate -o ./output
+redi run "/path/to/data/*.nc" -d climate -o ./output
 
 # Multiple explicit files
-redi file1.nc file2.nc file3.nc -d climate -o ./output
+redi run file1.nc file2.nc file3.nc -d climate -o ./output
 
 # Bracket patterns for ranges
-redi "/path/to/temp_18[5-9]*.nc" -d climate -o ./output
+redi run "/path/to/temp_18[5-9]*.nc" -d climate -o ./output
 ```
 
 For climate/NetCDF data, files are concatenated along the time dimension using xarray. For CSV/Parquet, files are concatenated row-wise.
 
-### Analyze Dataset Only
-
-```bash
-# Generate Data Card and recommendations (no processing)
-redi data.csv --analyze
-
-# Or use the analyze module directly
-python -m redi.analyze data.csv
-```
-
 ## YAML Workflow Configs
 
 For reproducible runs, place options in a YAML file and pass it directly to the CLI.
-Include `input_path` in the YAML to avoid supplying the dataset on the command line.
+
+### Run Mode Config
 
 ```yaml
-# pipeline.yaml - single file
+# run_config.yaml
 input_path: /path/to/data.nc
 domain: climate
 output_dir: ./output
@@ -182,26 +210,155 @@ output_format: npz
 ```
 
 ```yaml
-# pipeline.yaml - multiple files (glob pattern)
+# Multi-file with glob pattern
 input_path: "/path/to/data/*.nc"
 domain: climate
 output_dir: ./output
-output_format: npz
 ```
 
 ```yaml
-# pipeline.yaml - explicit file list
+# Explicit file list
 input_paths:
   - /path/to/data_1850.nc
   - /path/to/data_1860.nc
   - /path/to/data_1870.nc
 domain: climate
 output_dir: ./output
-output_format: npz
 ```
 
 ```bash
-redi pipeline.yaml
+redi run config.yaml
+# or just:
+redi config.yaml
+```
+
+### Sidecar Mode Config
+
+```yaml
+# sidecar_config.yaml
+workflow: ./Snakefile
+workflow_type: snakemake
+output_dir: ./redi_output
+
+# Override automatic stage mapping
+stage_mapping:
+  ingest:
+    - download
+  preprocess:
+    - regrid
+    - clean
+  output:
+    - all
+
+# Data Card settings
+data_card:
+  enabled: true
+  metadata:
+    project: "Climate Data Processing"
+```
+
+```bash
+redi sidecar -c sidecar_config.yaml
+```
+
+### Discovery Mode Config
+
+```yaml
+# discover_config.yaml
+input: /path/to/unknown/dataset
+output_dir: ./discovery_output
+
+inspection:
+  max_files: 100
+  include_patterns:
+    - "**/*.csv"
+    - "**/*.npy"
+    - "**/*.nc"
+
+inference:
+  domain_hints:
+    physics:
+      - adc
+      - detector
+      - event
+
+proposal:
+  target_level: 5
+  preferred_format: npz
+```
+
+```bash
+redi discover -c discover_config.yaml
+```
+
+See `examples/` for complete configuration examples.
+
+## CLI Reference
+
+### Main Commands
+
+```
+redi <command> [options]
+
+Commands:
+  run        Run the REDI pipeline (orchestrator mode) - default
+  sidecar    Observe existing workflows (sidecar mode)
+  discover   Analyze unknown datasets and propose pipelines
+
+For command-specific help:
+  redi run --help
+  redi sidecar --help
+  redi discover --help
+```
+
+### redi run
+
+```
+redi run <input> [input2 ...] [options]
+
+Arguments:
+  input                   Input file path(s), glob pattern, or YAML config
+
+Options:
+  -d, --domain DOMAIN     Scientific domain (auto-detected if not specified)
+                          Choices: climate, materials, life_sciences, fusion, hpc, general
+  -o, --output DIR        Output directory (default: ./output)
+  -s, --stages STAGES     Comma-separated list of stages to run
+  -f, --format FORMAT     Output format: npz, parquet, csv, hdf5, zarr (default: npz)
+  -v, --verbose           Verbose output
+  -c, --config FILE       YAML configuration file path
+  --style STYLE           Output style: rich (default), simple, or json
+  --fair                  Run FAIR principles assessment
+  --catalog               Export to data catalog after processing
+```
+
+### redi sidecar
+
+```
+redi sidecar [options]
+
+Options:
+  -w, --workflow FILE     Path to workflow file (Snakefile, *.nf, etc.)
+  -t, --type TYPE         Workflow type: auto, snakemake, nextflow, bash
+  -o, --output DIR        Output directory (default: ./output)
+  --watch                 Watch for changes and re-run
+  -c, --config FILE       YAML configuration file
+  --style STYLE           Output style: rich, simple, json
+```
+
+### redi discover
+
+```
+redi discover [input] [options]
+
+Arguments:
+  input                   Path to data file or directory
+
+Options:
+  -o, --output DIR        Output directory (default: ./output)
+  --no-interactive        Don't prompt for confirmation
+  -c, --config FILE       YAML configuration file
+  --style STYLE           Output style: rich, simple, json
 ```
 
 ## Pipeline Stages
@@ -224,34 +381,38 @@ redi pipeline.yaml
 | **fusion**        | HDF5, ADIOS        | h5py, MDSplus      |
 | **hpc**           | CSV, Parquet       | pandas, sklearn    |
 
-## CLI Options
+## REDI Modes Explained
 
-```
-redi <input> [input2 ...] [options]
+### Orchestrator Mode (`redi run`)
 
-Arguments:
-  input                   Input file path(s), glob pattern, or YAML config
-                          Multiple files can be specified and will be concatenated
-                          Glob patterns are expanded (e.g., "*.nc", "data_18[5-9]*.nc")
+Use when you want REDI to own the data processing pipeline:
+- Processes data through all stages (ingest → preprocess → transform → structure → output)
+- Auto-detects or uses specified domain
+- Generates Data Card and metadata
+- Best for: ad-hoc processing, domains without existing pipelines
 
-Options:
-  -d, --domain DOMAIN     Scientific domain (auto-detected if not specified)
-                          Choices: climate, materials, life_sciences, fusion, hpc, general
-  -o, --output DIR        Output directory (default: ./output)
-  -s, --stages STAGES     Comma-separated list of stages to run
-  -f, --format FORMAT     Output format: npz, parquet, csv, hdf5, zarr (default: npz)
-  -a, --analyze           Only analyze and generate Data Card (no processing)
-  -v, --verbose           Verbose output
-  -c, --config FILE       YAML configuration file path
-  --style STYLE           Output style: rich (default), simple, or json
-```
+### Sidecar Mode (`redi sidecar`)
+
+Use when you have an existing workflow and want consistent data readiness tracking:
+- Observes Snakemake, Nextflow, or other workflows
+- Maps workflow rules to REDI pipeline stages
+- Generates Data Card without modifying your workflow
+- Best for: established domain pipelines (ClimaX, OpenFold, etc.)
+
+### Discovery Mode (`redi discover`)
+
+Use when you encounter an unknown dataset:
+- Inspects files and gathers metadata
+- Infers data modality, domain, and characteristics
+- Proposes a preprocessing pipeline
+- Best for: new datasets, unfamiliar domains
 
 ## Module Usage
 
 ### Analyze a Dataset
 
 ```python
-from analyze import analyze_dataset, get_recommendations, generate_report
+from redi.analyze import analyze_dataset, get_recommendations, generate_report
 
 # Get a DataCard object
 data_card = analyze_dataset("data.csv")
@@ -271,7 +432,7 @@ print(report)
 ### Run Pipeline Programmatically
 
 ```python
-from cli import run_pipeline
+from redi.cli import run_pipeline
 
 # Single file
 ctx = run_pipeline(
@@ -295,9 +456,9 @@ print(f"Output files: {ctx.metadata.get('saved_files', [])}")
 ### Use Individual Pipeline Steps
 
 ```python
-from pipeline import Pipeline, create_context
-from pipeline.ingest import get_ingest_steps
-from pipeline.preprocess import get_preprocess_steps
+from redi.pipeline import Pipeline, create_context
+from redi.pipeline.ingest import get_ingest_steps
+from redi.pipeline.preprocess import get_preprocess_steps
 
 # Create context (single file)
 ctx = create_context("data.csv", "./output", "hpc")
@@ -342,8 +503,9 @@ ctx = pipeline.execute(ctx)
 
 ```
 redi/
-├── cli.py              # Command-line interface
+├── cli.py              # Command-line interface (run, sidecar, discover)
 ├── analyze.py          # Data Card generation and analysis
+├── config.py           # YAML configuration handling
 ├── pipeline/
 │   ├── __init__.py     # Pipeline, PipelineStep, PipelineContext
 │   ├── ingest.py       # Format detection, loading
@@ -351,27 +513,58 @@ redi/
 │   ├── transform.py    # Normalization, encoding
 │   ├── structure.py    # Tensorization, graphs
 │   └── output.py       # Splitting, sharding, saving
-└── domains/
-    ├── __init__.py     # Domain detection
-    ├── climate.py      # xarray/xesmf processing
-    ├── materials.py    # pymatgen/matminer features
-    ├── life_sciences.py # BioPython, PII handling
-    ├── fusion.py       # Plasma signal processing
-    └── hpc.py          # Job accounting processing
+├── domains/
+│   ├── __init__.py     # Domain detection
+│   ├── climate.py      # xarray/xesmf processing
+│   ├── materials.py    # pymatgen/matminer features
+│   ├── life_sciences.py # BioPython, PII handling
+│   ├── fusion.py       # Plasma signal processing
+│   └── hpc.py          # Job accounting processing
+├── fair/               # FAIR principles assessment
+├── catalog/            # Data catalog integrations
+└── examples/           # YAML configuration examples
+    ├── sidecar_config.yaml
+    ├── sidecar_climax_example.yaml
+    ├── discover_config.yaml
+    └── discover_hep_example.yaml
 ```
 
 ## Example: HPC Job Data
 
 ```bash
 # Process Aurora job accounting data
-redi /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
+redi run /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 
 # Output:
 # hpc_output/
 # ├── train.npz    (80% of data)
 # ├── val.npz      (10% of data)
 # ├── test.npz     (10% of data)
+# ├── DATA_CARD.md
 # └── metadata.json
+```
+
+## Example: Sidecar with ClimaX
+
+```bash
+# Observe ClimaX data preprocessing workflow
+redi sidecar -w /path/to/ClimaX/snakemake_configs/TaiESM1/Snakefile -o ./climax_redi
+
+# Output:
+# climax_redi/
+# └── sidecar_report.json (stage mapping, rule analysis)
+```
+
+## Example: Discover Unknown Dataset
+
+```bash
+# Analyze a dataset from Zenodo
+redi discover /path/to/downloaded/sphenix_data -o ./analysis
+
+# Output:
+# analysis/
+# ├── discovery_report.json
+# └── DISCOVERY_REPORT.md
 ```
 
 ## Demo Script
