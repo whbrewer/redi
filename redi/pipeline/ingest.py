@@ -36,6 +36,7 @@ class DetectFormat(PipelineStep):
         ".tsv": "tsv",
         ".parquet": "parquet",
         ".json": "json",
+        ".txt": "txt",  # For manifest files (train.txt, test.txt, etc.)
         # Climate
         ".nc": "netcdf",
         ".nc4": "netcdf",
@@ -483,6 +484,193 @@ class LoadHDF5(PipelineStep):
         return ctx
 
 
+class LoadNPY(PipelineStep):
+    """Load NumPy .npy files (single or multiple)"""
+
+    name = "load_npy"
+    stage = PipelineStage.INGEST
+    description = "Load NumPy array files"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        return ctx.metadata.get("file_format") == "npy"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import numpy as np
+
+            paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
+
+            logger.debug(f"     Loading {len(paths)} NPY file(s)")
+
+            if len(paths) == 1:
+                logger.debug(f"     Reading NPY file: {paths[0]}")
+                ctx.data = np.load(paths[0])
+            else:
+                # Stack multiple files along axis 0
+                logger.debug(f"     Reading and stacking {len(paths)} NPY files")
+                arrays = []
+                for i, p in enumerate(paths):
+                    logger.debug(f"     Loading file {i+1}/{len(paths)}: {p.name}")
+                    arr = np.load(p)
+                    arrays.append(arr)
+                ctx.data = np.stack(arrays, axis=0)
+                logger.debug(f"     Stacked into shape: {ctx.data.shape}")
+
+            ctx.metadata["array_shape"] = ctx.data.shape
+            ctx.metadata["array_dtype"] = str(ctx.data.dtype)
+            ctx.metadata["array_ndim"] = ctx.data.ndim
+            ctx.metadata["num_samples"] = ctx.data.shape[0]
+
+            # Calculate memory usage
+            memory_mb = ctx.data.nbytes / (1024 * 1024)
+            logger.debug(f"     Shape: {ctx.data.shape}")
+            logger.debug(f"     Dtype: {ctx.data.dtype}")
+            logger.debug(f"     Memory usage: {memory_mb:.2f} MB")
+
+            if len(paths) > 1:
+                logger.info(f"Loaded {len(paths)} NPY files: shape {ctx.data.shape}")
+            else:
+                logger.info(f"Loaded NPY: shape {ctx.data.shape}, dtype {ctx.data.dtype}")
+
+        except Exception as e:
+            ctx.add_error(f"Failed to load NPY: {str(e)}")
+        return ctx
+
+
+class LoadNPZ(PipelineStep):
+    """Load NumPy .npz archive files"""
+
+    name = "load_npz"
+    stage = PipelineStage.INGEST
+    description = "Load NumPy compressed archives"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        return ctx.metadata.get("file_format") == "npz"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import numpy as np
+
+            logger.debug(f"     Reading NPZ file: {ctx.input_path}")
+            data = np.load(ctx.input_path, allow_pickle=True)
+
+            # Convert to regular dict for easier handling
+            ctx.data = {key: data[key] for key in data.files}
+
+            ctx.metadata["npz_keys"] = list(ctx.data.keys())
+            ctx.metadata["array_shapes"] = {k: v.shape for k, v in ctx.data.items()}
+            ctx.metadata["array_dtypes"] = {k: str(v.dtype) for k, v in ctx.data.items()}
+
+            logger.debug(f"     NPZ keys: {', '.join(ctx.metadata['npz_keys'])}")
+            for k, v in ctx.data.items():
+                logger.debug(f"       {k}: shape {v.shape}, dtype {v.dtype}")
+
+            # If has "X" key, extract sample count and dimensions
+            if "X" in ctx.data:
+                ctx.metadata["num_samples"] = ctx.data["X"].shape[0]
+                ctx.metadata["array_ndim"] = ctx.data["X"].ndim
+                ctx.metadata["array_shape"] = ctx.data["X"].shape
+                ctx.metadata["array_dtype"] = str(ctx.data["X"].dtype)
+
+            logger.info(f"Loaded NPZ: {len(ctx.data)} arrays - {list(ctx.data.keys())}")
+
+        except Exception as e:
+            ctx.add_error(f"Failed to load NPZ: {str(e)}")
+        return ctx
+
+
+class LoadManifest(PipelineStep):
+    """Load files listed in a manifest (train.txt, test.txt, etc.)"""
+
+    name = "load_manifest"
+    stage = PipelineStage.INGEST
+    description = "Load files from a text manifest"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        # Check if input is a .txt file containing file paths
+        if ctx.metadata.get("file_format") != "txt" and ctx.input_path.suffix.lower() != ".txt":
+            return False
+        # Peek first line to see if it looks like a file path
+        try:
+            with open(ctx.input_path) as f:
+                first_line = f.readline().strip()
+            return first_line.endswith(('.npy', '.npz', '.h5', '.nc'))
+        except Exception:
+            return False
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import numpy as np
+
+            manifest_dir = ctx.input_path.parent
+
+            logger.debug(f"     Reading manifest: {ctx.input_path}")
+
+            with open(ctx.input_path) as f:
+                rel_paths = [line.strip() for line in f if line.strip()]
+
+            logger.debug(f"     Found {len(rel_paths)} file paths in manifest")
+
+            # Resolve to absolute paths
+            abs_paths = [manifest_dir / p for p in rel_paths]
+
+            # Check for missing files
+            missing = [p for p in abs_paths if not p.exists()]
+            if missing:
+                logger.warning(f"     Missing {len(missing)} file(s)")
+                for m in missing[:3]:
+                    logger.debug(f"       - {m}")
+                if len(missing) > 3:
+                    logger.debug(f"       ... and {len(missing) - 3} more")
+                # Filter to only existing files
+                abs_paths = [p for p in abs_paths if p.exists()]
+
+            if not abs_paths:
+                ctx.add_error(f"No valid files found in manifest {ctx.input_path}")
+                return ctx
+
+            # Load all files
+            arrays = []
+            for i, p in enumerate(abs_paths):
+                logger.debug(f"     Loading file {i+1}/{len(abs_paths)}: {p.name}")
+                if p.suffix == '.npy':
+                    arr = np.load(p)
+                    arrays.append(arr)
+                elif p.suffix == '.npz':
+                    data = np.load(p)
+                    # Prefer 'X' key, otherwise use first array
+                    if 'X' in data:
+                        arrays.append(data['X'])
+                    else:
+                        arrays.append(data[data.files[0]])
+                else:
+                    logger.warning(f"     Skipping unsupported format: {p.suffix}")
+
+            if not arrays:
+                ctx.add_error("No arrays loaded from manifest")
+                return ctx
+
+            # Stack arrays along axis 0
+            ctx.data = np.stack(arrays, axis=0)
+
+            ctx.metadata["manifest_file"] = str(ctx.input_path)
+            ctx.metadata["num_files"] = len(abs_paths)
+            ctx.metadata["array_shape"] = ctx.data.shape
+            ctx.metadata["array_dtype"] = str(ctx.data.dtype)
+            ctx.metadata["array_ndim"] = ctx.data.ndim
+            ctx.metadata["num_samples"] = len(arrays)
+
+            memory_mb = ctx.data.nbytes / (1024 * 1024)
+            logger.debug(f"     Stacked shape: {ctx.data.shape}")
+            logger.debug(f"     Memory usage: {memory_mb:.2f} MB")
+
+            logger.info(f"Loaded manifest: {len(arrays)} files -> shape {ctx.data.shape}")
+
+        except Exception as e:
+            ctx.add_error(f"Failed to load manifest: {str(e)}")
+        return ctx
+
+
 class LoadSICKLE(PipelineStep):
     """Load SICKLE turbulence data formats (GESTS and SST-binary)"""
 
@@ -564,7 +752,38 @@ class ValidateInput(PipelineStep):
 
         logger.debug(f"     Validating data of type: {type(ctx.data).__name__}")
 
-        # Basic validation based on data type
+        # Validate numpy arrays
+        try:
+            import numpy as np
+            if isinstance(ctx.data, np.ndarray):
+                logger.debug(f"     Array shape: {ctx.data.shape}")
+                logger.debug(f"     Array dtype: {ctx.data.dtype}")
+                if ctx.data.size == 0:
+                    ctx.add_error("Array is empty")
+                    return ctx
+                # Check for NaN values
+                nan_count = np.isnan(ctx.data).sum() if np.issubdtype(ctx.data.dtype, np.floating) else 0
+                if nan_count > 0:
+                    nan_pct = nan_count / ctx.data.size * 100
+                    logger.debug(f"     Found {nan_count} NaN values ({nan_pct:.2f}%)")
+                else:
+                    logger.debug(f"     No NaN values found")
+                logger.info("Input validation passed")
+                return ctx
+            elif isinstance(ctx.data, dict):
+                # Dict with arrays (e.g., from NPZ)
+                logger.debug(f"     Dict with keys: {list(ctx.data.keys())}")
+                for key, value in ctx.data.items():
+                    if isinstance(value, np.ndarray):
+                        logger.debug(f"       {key}: shape {value.shape}, dtype {value.dtype}")
+                        if value.size == 0:
+                            logger.warning(f"     Array '{key}' is empty")
+                logger.info("Input validation passed")
+                return ctx
+        except ImportError:
+            pass
+
+        # Basic validation based on data type - DataFrame
         try:
             import pandas as pd
             if isinstance(ctx.data, pd.DataFrame):
@@ -598,6 +817,9 @@ def get_ingest_steps() -> List[PipelineStep]:
         LoadParquet(),
         LoadNetCDF(),
         LoadHDF5(),
+        LoadNPY(),
+        LoadNPZ(),
+        LoadManifest(),
         LoadSICKLE(),
         ValidateInput(),
     ]

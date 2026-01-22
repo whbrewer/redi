@@ -48,12 +48,18 @@ class TrainValTestSplit(PipelineStep):
         try:
             import numpy as np
 
-            # Get data arrays
-            if isinstance(ctx.data, dict):
+            # Get data arrays - handle both raw arrays and dict format
+            if isinstance(ctx.data, np.ndarray):
+                # Raw numpy array - wrap in dict format
+                X = ctx.data
+                y = None
+                logger.debug(f"     Input: raw numpy array shape {X.shape}")
+            elif isinstance(ctx.data, dict):
                 X = ctx.data.get("X")
                 y = ctx.data.get("y")
+                logger.debug(f"     Input: dict with keys {list(ctx.data.keys())}")
             else:
-                ctx.add_error("Expected dict with 'X' key for splitting")
+                ctx.add_error("Expected numpy array or dict with 'X' key for splitting")
                 return ctx
 
             if X is None:

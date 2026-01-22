@@ -201,3 +201,24 @@ def create_context(
         domain=domain,
         config=config
     )
+
+
+# Convenience exports for commonly used steps
+# These are lazy-loaded to avoid circular imports
+def __getattr__(name):
+    """Lazy load pipeline step classes"""
+    if name in ('LoadNPY', 'LoadNPZ', 'LoadManifest', 'LoadCSV', 'LoadJSON',
+                'LoadParquet', 'LoadNetCDF', 'LoadHDF5', 'LoadSICKLE',
+                'DetectFormat', 'ValidateInput', 'get_ingest_steps'):
+        from . import ingest
+        return getattr(ingest, name)
+    elif name in ('NormalizeArray', 'ComputeArrayStats', 'HandleMissingValues',
+                  'RemoveDuplicates', 'ValidateDataTypes', 'HandleOutliers',
+                  'AnonymizePII', 'RegridClimate', 'get_preprocess_steps'):
+        from . import preprocess
+        return getattr(preprocess, name)
+    elif name in ('TrainValTestSplit', 'ShardData', 'SaveNPZ', 'SaveHDF5',
+                  'SaveParquet', 'SaveMetadata', 'get_output_steps'):
+        from . import output
+        return getattr(output, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

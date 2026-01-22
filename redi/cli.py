@@ -150,7 +150,9 @@ def run_pipeline(
     config: Optional[dict] = None,
     verbose: bool = False,
     style: str = "rich",
-    input_paths: Optional[List[str]] = None
+    input_paths: Optional[List[str]] = None,
+    array_mode: bool = False,
+    normalize_method: Optional[str] = None
 ):
     """Run the REDI pipeline with engaging visual output
 
@@ -163,6 +165,8 @@ def run_pipeline(
         verbose: Enable verbose output
         style: Output style (rich, simple, json)
         input_paths: List of input file paths for multi-file processing
+        array_mode: If True, optimize pipeline for array data (skip DataFrame steps)
+        normalize_method: Normalization method for array data ("minmax" or "zscore")
     """
     from .pipeline import Pipeline, PipelineStage, create_context
 
@@ -302,7 +306,7 @@ def run_pipeline(
         else:
             # Fall back to generic pipeline
             from .pipeline.ingest import get_ingest_steps
-            from .pipeline.preprocess import get_preprocess_steps
+            from .pipeline.preprocess import get_preprocess_steps, NormalizeArray, ComputeArrayStats
             from .pipeline.transform import get_transform_steps
             from .pipeline.structure import get_structure_steps
             from .pipeline.output import get_output_steps
@@ -315,22 +319,36 @@ def run_pipeline(
             if "ingest" in stages:
                 for step in get_ingest_steps():
                     pipeline.add_step(step)
+
             if "preprocess" in stages:
-                for step in get_preprocess_steps(domain):
-                    pipeline.add_step(step)
+                if array_mode:
+                    # Use array-specific preprocessing steps
+                    pipeline.add_step(ComputeArrayStats())
+                    if normalize_method:
+                        pipeline.add_step(NormalizeArray(method=normalize_method))
+                else:
+                    for step in get_preprocess_steps(domain):
+                        pipeline.add_step(step)
+
             if "transform" in stages:
-                for step in get_transform_steps(domain):
-                    pipeline.add_step(step)
+                if not array_mode:  # Skip DataFrame transforms in array mode
+                    for step in get_transform_steps(domain):
+                        pipeline.add_step(step)
+
             if "structure" in stages:
-                for step in get_structure_steps(domain):
-                    pipeline.add_step(step)
+                if not array_mode:  # Skip DataFrame structure in array mode
+                    for step in get_structure_steps(domain):
+                        pipeline.add_step(step)
+
             if "output" in stages:
                 for step in get_output_steps():
                     pipeline.add_step(step)
+
+            mode_str = " (array mode)" if array_mode else ""
             if style == "rich":
-                print(f"    ✓ Loaded {Colors.BOLD}{len(pipeline.steps)}{Colors.END} generic steps")
+                print(f"    ✓ Loaded {Colors.BOLD}{len(pipeline.steps)}{Colors.END} generic steps{mode_str}")
             elif style == "simple":
-                print(f"Pipeline: {len(pipeline.steps)} steps")
+                print(f"Pipeline: {len(pipeline.steps)} steps{mode_str}")
 
     except ImportError as e:
         if style == "rich":
@@ -1613,6 +1631,10 @@ Examples:
     run_parser.add_argument("-s", "--stages", help="Comma-separated list of stages to run")
     run_parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
                            default="npz", help="Output format")
+    run_parser.add_argument("--array", action="store_true",
+                           help="Optimize pipeline for array data (skip DataFrame-specific steps)")
+    run_parser.add_argument("--normalize", choices=["minmax", "zscore"],
+                           help="Normalization method for array data")
     run_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     run_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                            help="Output style")
@@ -1784,6 +1806,10 @@ def _handle_run_command(args):
     if args.stages:
         stages = args.stages.split(",")
 
+    # Array mode settings
+    array_mode = args.array if hasattr(args, 'array') else config.get('array_mode', False)
+    normalize_method = args.normalize if hasattr(args, 'normalize') else config.get('normalize_method')
+
     ctx = run_pipeline(
         output_dir=config.get('output_dir', args.output),
         domain=config.get('domain', args.domain),
@@ -1791,7 +1817,9 @@ def _handle_run_command(args):
         config=config,
         verbose=verbose,
         style=args.style,
-        input_paths=[str(p) for p in input_paths]
+        input_paths=[str(p) for p in input_paths],
+        array_mode=array_mode,
+        normalize_method=normalize_method
     )
 
     # Run FAIR assessment after pipeline if requested

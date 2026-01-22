@@ -388,6 +388,149 @@ class RegridClimate(PipelineStep):
         return ctx
 
 
+class NormalizeArray(PipelineStep):
+    """Normalize numpy arrays (min-max or z-score)"""
+
+    name = "normalize_array"
+    stage = PipelineStage.PREPROCESS
+    description = "Normalize array values"
+
+    def __init__(self, method: str = "minmax", axis: Optional[int] = None):
+        super().__init__()
+        self.method = method  # "minmax" or "zscore"
+        self.axis = axis  # Axis for normalization, None for global
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import numpy as np
+        return isinstance(ctx.data, np.ndarray) or (
+            isinstance(ctx.data, dict) and "X" in ctx.data
+        )
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import numpy as np
+
+            # Handle dict format (NPZ with X key) or raw array
+            if isinstance(ctx.data, dict):
+                arr = ctx.data["X"]
+                is_dict = True
+            else:
+                arr = ctx.data
+                is_dict = False
+
+            logger.debug(f"     Normalization method: {self.method}")
+            logger.debug(f"     Input shape: {arr.shape}")
+            logger.debug(f"     Input dtype: {arr.dtype}")
+            logger.debug(f"     Input range: [{arr.min():.4f}, {arr.max():.4f}]")
+
+            if self.method == "minmax":
+                arr_min = arr.min(axis=self.axis, keepdims=True)
+                arr_max = arr.max(axis=self.axis, keepdims=True)
+                normalized = (arr - arr_min) / (arr_max - arr_min + 1e-8)
+                ctx.metadata["normalization"] = {
+                    "method": "minmax",
+                    "min": float(arr_min.min()),
+                    "max": float(arr_max.max())
+                }
+                logger.debug(f"     Applied min-max normalization")
+            elif self.method == "zscore":
+                mean = arr.mean(axis=self.axis, keepdims=True)
+                std = arr.std(axis=self.axis, keepdims=True)
+                normalized = (arr - mean) / (std + 1e-8)
+                ctx.metadata["normalization"] = {
+                    "method": "zscore",
+                    "mean": float(mean.mean()),
+                    "std": float(std.mean())
+                }
+                logger.debug(f"     Applied z-score normalization")
+            else:
+                ctx.add_error(f"Unknown normalization method: {self.method}")
+                return ctx
+
+            # Convert to float32 for ML compatibility
+            normalized = normalized.astype(np.float32)
+
+            logger.debug(f"     Output range: [{normalized.min():.4f}, {normalized.max():.4f}]")
+            logger.debug(f"     Output dtype: {normalized.dtype}")
+
+            # Update data
+            if is_dict:
+                ctx.data["X"] = normalized
+            else:
+                ctx.data = normalized
+
+            logger.info(f"Normalized array using {self.method}")
+
+        except Exception as e:
+            ctx.add_error(f"Error normalizing array: {str(e)}")
+        return ctx
+
+
+class ComputeArrayStats(PipelineStep):
+    """Compute statistics for array data"""
+
+    name = "compute_array_stats"
+    stage = PipelineStage.PREPROCESS
+    description = "Compute statistics for array data"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import numpy as np
+        return isinstance(ctx.data, np.ndarray) or isinstance(ctx.data, dict)
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import numpy as np
+
+            # Handle dict format or raw array
+            if isinstance(ctx.data, dict):
+                if "X" in ctx.data:
+                    arr = ctx.data["X"]
+                else:
+                    # Use first array in dict
+                    first_key = list(ctx.data.keys())[0]
+                    arr = ctx.data[first_key]
+            else:
+                arr = ctx.data
+
+            logger.debug(f"     Computing statistics for array shape: {arr.shape}")
+
+            stats = {
+                "min": float(arr.min()),
+                "max": float(arr.max()),
+                "mean": float(arr.mean()),
+                "std": float(arr.std()),
+                "sparsity": float((arr == 0).sum() / arr.size),
+                "dtype": str(arr.dtype),
+                "shape": list(arr.shape),
+                "ndim": int(arr.ndim),
+                "size": int(arr.size),
+                "memory_mb": float(arr.nbytes / (1024 * 1024))
+            }
+
+            # Add percentiles
+            if arr.size < 10_000_000:  # Only compute for manageable arrays
+                stats["percentiles"] = {
+                    "p25": float(np.percentile(arr, 25)),
+                    "p50": float(np.percentile(arr, 50)),
+                    "p75": float(np.percentile(arr, 75)),
+                    "p95": float(np.percentile(arr, 95)),
+                    "p99": float(np.percentile(arr, 99))
+                }
+
+            ctx.metadata["array_stats"] = stats
+
+            logger.debug(f"     Min: {stats['min']:.4f}, Max: {stats['max']:.4f}")
+            logger.debug(f"     Mean: {stats['mean']:.4f}, Std: {stats['std']:.4f}")
+            logger.debug(f"     Sparsity: {stats['sparsity']:.2%}")
+            logger.debug(f"     Memory: {stats['memory_mb']:.2f} MB")
+
+            logger.info(f"Computed array stats: shape {stats['shape']}, range [{stats['min']:.2f}, {stats['max']:.2f}]")
+
+        except Exception as e:
+            ctx.add_error(f"Error computing array stats: {str(e)}")
+        return ctx
+
+
 # Convenience function to get standard preprocess steps
 def get_preprocess_steps(
     domain: str = "general",
