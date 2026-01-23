@@ -1,33 +1,24 @@
 ---
 name: redi
-description: REDI (Readiness Engine for Data Integration) transforms raw scientific data into AI-ready datasets. Use when the user wants to analyze a dataset for AI/ML readiness, generate a Data Card, get preprocessing recommendations, or process data through the full pipeline. Supports climate, materials science, life sciences, fusion, and HPC domains.
+description: REDI (Readiness Engine for Data Integration) transforms raw scientific data into AI-ready datasets. Use when the user wants to run data pipelines, observe existing workflows, or discover/analyze unknown datasets. Supports climate, materials science, life sciences, fusion, and HPC domains.
 ---
 
 # REDI - Readiness Engine for Data Integration
 
-REDI transforms raw scientific data into AI-ready datasets. Use when the user wants to:
-- Analyze a dataset for AI/ML readiness
+REDI transforms raw scientific data into AI-ready datasets. It operates in three modes:
+
+- **run** - Run the REDI pipeline (orchestrator mode) - transforms data through the full pipeline
+- **sidecar** - Observe existing workflows (Snakemake, Nextflow, bash) and generate Data Cards
+- **discover** - Analyze unknown datasets and propose pipelines
+
+Use when the user wants to:
+- Transform data through the AI-readiness pipeline
+- Observe/document an existing workflow
+- Analyze an unknown dataset and get recommendations
 - Generate a Data Card documenting a dataset
-- Get preprocessing recommendations
-- Process data through the full pipeline
-- Understand what steps are needed to make data AI-ready
+- Export datasets to a catalog (HuggingFace, MLflow, etc.)
 
 Supports climate, materials science, life sciences, fusion, and HPC domains.
-
-## Usage
-
-When the user provides a dataset path, run the REDI CLI:
-
-```bash
-# Full pipeline (auto-detects domain)
-redi /path/to/data.csv -o ./output
-
-# Analysis only (generates Data Card)
-redi --analyze /path/to/data.csv
-
-# Specific domain
-redi /path/to/data.nc --domain climate -o ./output
-```
 
 ## Quick Start
 
@@ -35,40 +26,103 @@ redi /path/to/data.nc --domain climate -o ./output
 # Activate the environment
 source /opt/venvs/drai/bin/activate
 
-# Analyze a dataset (generates Data Card)
-redi --analyze data.csv
+# Run pipeline (default mode)
+redi run data.csv -o ./output
+redi data.csv -o ./output              # 'run' is the default
 
-# Run full pipeline
-redi data.csv -o ./output
+# Observe an existing workflow
+redi sidecar --workflow Snakefile
 
-# Specify domain explicitly
-redi data.csv --domain hpc -o ./output
-
-# Run specific stages only
-redi data.csv --stages ingest,preprocess,transform
-
-# Process multiple files (glob pattern)
-redi "/path/to/data/*.nc" -d climate -o ./output
-
-# Process multiple files (explicit list)
-redi file1.nc file2.nc file3.nc -d climate -o ./output
+# Analyze unknown data and propose pipeline
+redi discover /path/to/data/
 ```
 
-## CLI Options
+## Commands
 
+### redi run
+
+Run the REDI pipeline (orchestrator mode). This is the default command.
+
+```bash
+redi run <input> [options]
+redi <input> [options]                 # 'run' is implicit
+
+# Examples
+redi run data.csv                      # Auto-detect domain, run full pipeline
+redi run data.csv --domain hpc         # Specify domain
+redi run data.csv -o ./processed       # Custom output directory
+redi run data.csv --stages ingest,preprocess  # Run specific stages
+redi run "data_*.nc"                   # Process multiple files (glob)
+redi run data.npy --array              # Optimize for array data
+redi run data.csv --catalog --catalog-type huggingface  # Export to HuggingFace
 ```
-redi <input> [input2 ...] [options]
 
-Arguments:
-  input                   Input file path(s) or glob pattern (e.g., "*.nc")
-
-Options:
+**Options:**
+```
+  input                   Input file path(s) or glob pattern
   -d, --domain DOMAIN     Domain: climate, materials, life_sciences, fusion, hpc, general
-  -o, --output DIR        Output directory (default: ./output)
+  -o, --output DIR        Output directory
   -s, --stages STAGES     Comma-separated stages to run
   -f, --format FORMAT     Output format: npz, parquet, csv, hdf5, zarr
-  -a, --analyze           Only analyze and generate Data Card
+  --array                 Optimize pipeline for array data (skip DataFrame steps)
+  --normalize METHOD      Normalization for arrays: minmax, zscore
   -v, --verbose           Verbose output
+  --style STYLE           Output style: rich, simple, json
+  -c, --config FILE       YAML configuration file
+  --fair                  Run FAIR principles assessment
+  --fair-config FILE      YAML file with FAIR metadata
+  --catalog               Export to data catalog
+  --catalog-type TYPE     Catalog type: openmetadata, mlflow, intake, huggingface
+  --catalog-host URL      Catalog server URL
+  --catalog-token TOKEN   Catalog authentication token
+  --catalog-repo REPO     Repository ID for HuggingFace
+  --catalog-private       Make HuggingFace dataset private
+```
+
+### redi sidecar
+
+Observe existing workflows and generate Data Cards without modifying the workflow.
+
+```bash
+redi sidecar --workflow <path> [options]
+
+# Examples
+redi sidecar --workflow Snakefile
+redi sidecar --workflow pipeline.nf --type nextflow
+redi sidecar --workflow Snakefile --watch    # Watch for changes
+redi sidecar -c sidecar_config.yaml
+```
+
+**Options:**
+```
+  -w, --workflow FILE     Path to workflow file (Snakefile, *.nf, etc.)
+  -t, --type TYPE         Workflow type: auto, snakemake, nextflow, bash
+  -o, --output DIR        Output directory
+  --watch                 Watch for changes and re-run
+  --style STYLE           Output style: rich, simple, json
+  -c, --config FILE       YAML configuration file
+```
+
+### redi discover
+
+Analyze unknown datasets and propose pipelines.
+
+```bash
+redi discover <path> [options]
+
+# Examples
+redi discover /path/to/data/
+redi discover dataset.csv -o ./analysis
+redi discover /data --no-interactive
+redi discover -c discover_config.yaml
+```
+
+**Options:**
+```
+  input                   Path to data file or directory
+  -o, --output DIR        Output directory
+  --style STYLE           Output style: rich, simple, json
+  --no-interactive        Don't prompt for confirmation
   -c, --config FILE       YAML configuration file
 ```
 
@@ -104,8 +158,9 @@ Options:
 
 ```
 redi/
-├── cli.py              # CLI entry point (redi command)
+├── cli.py              # CLI entry point (run, sidecar, discover commands)
 ├── analyze.py          # Data Card generation
+├── config.py           # Configuration management
 ├── pipeline/           # Pipeline stage modules
 │   ├── ingest.py
 │   ├── preprocess.py
@@ -118,6 +173,18 @@ redi/
 │   ├── life_sciences.py
 │   ├── fusion.py
 │   └── hpc.py
+├── catalog/            # Data catalog exporters
+│   ├── huggingface.py  # HuggingFace Hub export (default)
+│   ├── mlflow.py       # MLflow tracking
+│   ├── intake.py       # Intake catalogs
+│   └── openmetadata.py # OpenMetadata integration
+├── fair/               # FAIR principles assessment
+│   ├── assessment.py   # FAIR scoring
+│   ├── principles.py   # FAIR principle definitions
+│   └── validators/     # Domain-specific validators
+├── dataloaders/        # Custom data loaders
+│   ├── zarr_loader.py
+│   └── sst_binary.py
 └── tests/              # Unit and smoke tests
 ```
 
