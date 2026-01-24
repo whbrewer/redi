@@ -83,8 +83,3 @@ save:
 
   # Chunk large arrays for zarr output
   chunks: [64, 64, 64]
-
-# FAIR assessment (optional)
-fair:
-  enabled: false
-  metadata_file: null  # Path to FAIR metadata YAML

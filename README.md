@@ -328,8 +328,6 @@ Options:
   -v, --verbose           Verbose output
   -c, --config FILE       YAML configuration file path
   --style STYLE           Output style: rich (default), simple, or json
-  --fair                  Run FAIR principles assessment
-  --catalog               Export to data catalog after processing
 ```
 
 ### redi sidecar
@@ -520,8 +518,6 @@ redi/
 │   ├── life_sciences.py # BioPython, PII handling
 │   ├── fusion.py       # Plasma signal processing
 │   └── hpc.py          # Job accounting processing
-├── fair/               # FAIR principles assessment
-├── catalog/            # Data catalog integrations
 └── examples/           # YAML configuration examples
     ├── sidecar_config.yaml
     ├── sidecar_climax_example.yaml

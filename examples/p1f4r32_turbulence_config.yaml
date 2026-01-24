@@ -80,11 +80,6 @@ save:
   chunks: [64, 64, 64]
   compression: blosc
 
-# FAIR metadata assessment (optional)
-fair:
-  enabled: true
-  metadata_file: null
-
 # Pipeline execution options
 pipeline:
   # Run validation checks on input data

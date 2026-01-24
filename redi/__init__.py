@@ -10,16 +10,6 @@ __author__ = "Wes Brewer"
 from .analyze import analyze_dataset, get_recommendations, generate_report, DataCard
 from .pipeline import Pipeline, PipelineContext, PipelineStage, PipelineStep, create_context
 
-# FAIR assessment exports
-from .fair import (
-    FAIRAssessor,
-    FAIRMetadata,
-    FAIRScore,
-    FAIRRecommender,
-    assess_fair,
-    generate_fair_report,
-)
-
 # Data loaders (optional - requires numpy)
 try:
     from .dataloaders import (
@@ -47,13 +37,6 @@ __all__ = [
     "PipelineStage",
     "PipelineStep",
     "create_context",
-    # FAIR
-    "FAIRAssessor",
-    "FAIRMetadata",
-    "FAIRScore",
-    "FAIRRecommender",
-    "assess_fair",
-    "generate_fair_report",
     # Version
     "__version__",
 ]

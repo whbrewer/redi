@@ -16,7 +16,6 @@ Use when the user wants to:
 - Observe/document an existing workflow
 - Analyze an unknown dataset and get recommendations
 - Generate a Data Card documenting a dataset
-- Export datasets to a catalog (HuggingFace, MLflow, etc.)
 
 Supports climate, materials science, life sciences, fusion, and HPC domains.
 
@@ -54,7 +53,6 @@ redi run data.csv -o ./processed       # Custom output directory
 redi run data.csv --stages ingest,preprocess  # Run specific stages
 redi run "data_*.nc"                   # Process multiple files (glob)
 redi run data.npy --array              # Optimize for array data
-redi run data.csv --catalog --catalog-type huggingface  # Export to HuggingFace
 ```
 
 **Options:**
@@ -69,14 +67,6 @@ redi run data.csv --catalog --catalog-type huggingface  # Export to HuggingFace
   -v, --verbose           Verbose output
   --style STYLE           Output style: rich, simple, json
   -c, --config FILE       YAML configuration file
-  --fair                  Run FAIR principles assessment
-  --fair-config FILE      YAML file with FAIR metadata
-  --catalog               Export to data catalog
-  --catalog-type TYPE     Catalog type: openmetadata, mlflow, intake, huggingface
-  --catalog-host URL      Catalog server URL
-  --catalog-token TOKEN   Catalog authentication token
-  --catalog-repo REPO     Repository ID for HuggingFace
-  --catalog-private       Make HuggingFace dataset private
 ```
 
 ### redi sidecar
@@ -173,15 +163,6 @@ redi/
 │   ├── life_sciences.py
 │   ├── fusion.py
 │   └── hpc.py
-├── catalog/            # Data catalog exporters
-│   ├── huggingface.py  # HuggingFace Hub export (default)
-│   ├── mlflow.py       # MLflow tracking
-│   ├── intake.py       # Intake catalogs
-│   └── openmetadata.py # OpenMetadata integration
-├── fair/               # FAIR principles assessment
-│   ├── assessment.py   # FAIR scoring
-│   ├── principles.py   # FAIR principle definitions
-│   └── validators/     # Domain-specific validators
 ├── dataloaders/        # Custom data loaders
 │   ├── zarr_loader.py
 │   └── sst_binary.py

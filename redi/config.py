@@ -66,24 +66,6 @@ DEFAULTS: Dict[str, Any] = {
         'save_normalization': True,
     },
 
-    'fair': {
-        'enabled': False,
-        'metadata_file': None,  # Path to FAIR metadata YAML
-        'standards': 'auto',  # auto, or list of standards to check
-        'strict_mode': False,  # Require all assessable principles
-    },
-
-    'catalog': {
-        'enabled': False,
-        'type': 'huggingface',  # huggingface, openmetadata, mlflow, intake
-        'host': None,  # Catalog server URL (for OpenMetadata)
-        'token': None,  # Authentication token (or use env var)
-        'token_env': None,  # Env var for token (auto: HF_TOKEN or OPENMETADATA_TOKEN)
-        'service_name': 'redi',  # Service/connection name in catalog
-        'repo_id': None,  # HuggingFace repo ID (e.g., 'org/dataset-name')
-        'private': True,  # Make HuggingFace dataset private
-        'verify_ssl': True,
-    },
 }
 
 
@@ -307,23 +289,5 @@ climax_output:
   save_normalization: true   # normalize_mean.npz, normalize_std.npz
   variable_naming: name_level  # e.g., temperature_500
 
-# FAIR assessment settings
-fair:
-  enabled: false             # Run FAIR assessment
-  metadata_file: null        # Path to FAIR metadata YAML with DOI, license, etc.
-  standards: auto            # auto, or list: [cf_conventions, acdd]
-
-# Data catalog export settings
-catalog:
-  enabled: false             # Export to data catalog after processing
-  type: huggingface          # huggingface, openmetadata, mlflow, intake
-  # HuggingFace settings:
-  repo_id: null              # e.g., 'your-org/dataset-name' (auto-generated if null)
-  private: true              # Make dataset private on HuggingFace
-  # token: null              # Or set HF_TOKEN env var
-  # OpenMetadata settings (if type: openmetadata):
-  # host: http://localhost:8585/api
-  # token_env: OPENMETADATA_TOKEN
-  # service_name: redi
 """
     return example
