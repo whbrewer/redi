@@ -133,38 +133,19 @@ install_gemini() {
 # Install for Codex
 install_codex() {
     echo "Installing for Codex..."
+    local codex_home
     if $GLOBAL; then
-        # Global: add to ~/.codex/instructions.md
-        local dst="$HOME/.codex/instructions.md"
-        mkdir -p "$HOME/.codex"
-        if [[ -f "$dst" ]]; then
-            if ! grep -q "# REDI - Readiness Engine" "$dst" 2>/dev/null; then
-                echo "" >> "$dst"
-                tail -n +5 "$SKILL_FILE" >> "$dst"
-                echo "  Appended SKILL.md -> $dst"
-            else
-                echo "  REDI skill already in $dst"
-            fi
-        else
-            tail -n +5 "$SKILL_FILE" > "$dst"
-            echo "  Created $dst"
-        fi
+        codex_home="${CODEX_HOME:-$HOME/.codex}"
     else
-        # Local: create/update AGENTS.md in project root
-        local dst="$PWD/AGENTS.md"
-        if [[ -f "$dst" ]]; then
-            if ! grep -q "# REDI - Readiness Engine" "$dst" 2>/dev/null; then
-                echo "" >> "$dst"
-                tail -n +5 "$SKILL_FILE" >> "$dst"
-                echo "  Appended SKILL.md -> $dst"
-            else
-                echo "  REDI skill already in $dst"
-            fi
-        else
-            tail -n +5 "$SKILL_FILE" > "$dst"
-            echo "  Created $dst"
-        fi
+        codex_home="$PWD/.codex"
     fi
+
+    local dst_dir="$codex_home/skills/redi"
+    local dst="$dst_dir/SKILL.md"
+    mkdir -p "$dst_dir"
+
+    # Codex skills live under $CODEX_HOME/skills/<name>/SKILL.md
+    install_file "$SKILL_FILE" "$dst" "SKILL.md"
 }
 
 # Main
