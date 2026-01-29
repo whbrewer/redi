@@ -190,9 +190,9 @@ The climate domain requires ESMF for regridding:
 # Option 1: Conda (easiest)
 conda install -c conda-forge esmpy xesmf
 
-# Option 2: From source (ESMF already built at /home/w1b/drai/climate/esmf)
-export ESMFMKFILE=/home/w1b/drai/climate/esmf/lib/libO/Linux.gfortran.64.mpiuni.default/esmf.mk
-pip install /home/w1b/drai/climate/esmf/src/addon/esmpy/
+# Option 2: From source (ESMF already built at /opt/drai/esmf)
+export ESMFMKFILE=/opt/drai/esmf/lib/libO/Linux.gfortran.64.mpiuni.default/esmf.mk
+pip install /opt/drai/esmf/src/addon/esmpy/
 pip install xesmf
 ```
 
