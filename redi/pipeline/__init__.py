@@ -55,9 +55,11 @@ class PipelineContext:
     current_stage: PipelineStage = PipelineStage.INGEST
     completed_stages: List[PipelineStage] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    verification_results: List[Any] = field(default_factory=list)  # List[VerificationResult]
 
     # Configuration
     config: Dict[str, Any] = field(default_factory=dict)
+    verify_steps: bool = False  # Whether to run step verification
 
     @property
     def is_multi_file(self) -> bool:
@@ -85,6 +87,30 @@ class PipelineContext:
         logger.error(error)
 
 
+@dataclass
+class VerificationResult:
+    """Result of a step verification check"""
+    passed: bool
+    step_name: str
+    checks: List[Dict[str, Any]] = field(default_factory=list)
+    message: str = ""
+
+    def add_check(self, name: str, passed: bool, expected: Any = None, actual: Any = None, message: str = ""):
+        """Add a verification check result"""
+        self.checks.append({
+            "name": name,
+            "passed": passed,
+            "expected": expected,
+            "actual": actual,
+            "message": message
+        })
+        if not passed:
+            self.passed = False
+
+    def __bool__(self):
+        return self.passed
+
+
 class PipelineStep:
     """Base class for pipeline steps"""
 
@@ -102,6 +128,20 @@ class PipelineStep:
     def validate(self, ctx: PipelineContext) -> bool:
         """Validate prerequisites for this step"""
         return True
+
+    def verify(self, ctx: PipelineContext) -> VerificationResult:
+        """Verify step output - override in subclasses to add checks.
+
+        Returns a VerificationResult with pass/fail status and details.
+        Default implementation passes if no errors in context.
+        """
+        result = VerificationResult(passed=True, step_name=self.name)
+        result.add_check(
+            name="no_errors",
+            passed=len(ctx.errors) == 0,
+            message=f"Step completed without errors" if not ctx.errors else f"Errors: {ctx.errors}"
+        )
+        return result
 
     def __repr__(self):
         return f"{self.__class__.__name__}(name={self.name}, stage={self.stage.value})"
@@ -138,6 +178,19 @@ class Pipeline:
             try:
                 ctx = step.execute(ctx)
                 logger.info(f"Completed step: {step.name}")
+
+                # Run verification if enabled
+                if ctx.verify_steps:
+                    result = step.verify(ctx)
+                    ctx.verification_results.append(result)
+                    if result.passed:
+                        logger.info(f"Verification passed for step: {step.name}")
+                    else:
+                        logger.warning(f"Verification FAILED for step: {step.name}")
+                        for check in result.checks:
+                            if not check["passed"]:
+                                logger.warning(f"  - {check['name']}: {check.get('message', 'FAILED')}")
+
             except Exception as e:
                 ctx.add_error(f"Error in step {step.name}: {str(e)}")
                 logger.exception(f"Step {step.name} failed")

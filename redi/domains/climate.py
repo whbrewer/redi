@@ -154,7 +154,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get climate-specific preprocess steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, VerificationResult, missing_dependency_error
 
     class RegridClimate(PipelineStep):
         """Regrid to uniform lat/lon resolution using xESMF"""
@@ -202,7 +202,10 @@ def get_preprocess_steps():
 
                 # Build regridder and apply
                 regridder = xe.Regridder(ds, ds_out, self.method, periodic=True)
-                ctx.data = regridder(ds)
+                regridded = regridder(ds)
+
+                # Force computation to avoid lazy evaluation deferring work
+                ctx.data = regridded.compute()
 
                 ctx.metadata["regridded"] = {
                     "method": self.method,
@@ -220,6 +223,76 @@ def get_preprocess_steps():
                 ctx.add_error(f"Error regridding: {str(e)}")
 
             return ctx
+
+        def verify(self, ctx: PipelineContext) -> VerificationResult:
+            """Verify regridding was applied correctly"""
+            result = VerificationResult(passed=True, step_name=self.name)
+
+            # Check 1: Regrid metadata exists
+            regrid_meta = ctx.metadata.get("regridded")
+            result.add_check(
+                name="regrid_metadata_exists",
+                passed=regrid_meta is not None,
+                message="Regrid metadata recorded" if regrid_meta else "No regrid metadata found"
+            )
+
+            if not regrid_meta:
+                return result
+
+            # Check 2: Output grid dimensions match target
+            expected_lat = int(180 / self.target_resolution) + 1
+            expected_lon = int(360 / self.target_resolution)
+            actual_lat = regrid_meta.get("output_shape", {}).get("lat", 0)
+            actual_lon = regrid_meta.get("output_shape", {}).get("lon", 0)
+
+            result.add_check(
+                name="lat_dimension",
+                passed=actual_lat == expected_lat,
+                expected=expected_lat,
+                actual=actual_lat,
+                message=f"Lat dimension: expected {expected_lat}, got {actual_lat}"
+            )
+
+            result.add_check(
+                name="lon_dimension",
+                passed=actual_lon == expected_lon,
+                expected=expected_lon,
+                actual=actual_lon,
+                message=f"Lon dimension: expected {expected_lon}, got {actual_lon}"
+            )
+
+            # Check 3: Data is actually computed (not lazy)
+            if hasattr(ctx.data, 'dims'):
+                import numpy as np
+                is_computed = False
+                for var in ctx.data.data_vars:
+                    da = ctx.data[var]
+                    # Check if data is in memory (numpy array, not dask)
+                    is_computed = isinstance(da.values, np.ndarray)
+                    break
+
+                result.add_check(
+                    name="data_computed",
+                    passed=is_computed,
+                    message="Data is computed (in memory)" if is_computed else "Data is still lazy (dask)"
+                )
+
+                # Check 4: Verify actual array dimensions match metadata
+                for var in ctx.data.data_vars:
+                    da = ctx.data[var]
+                    if 'lat' in da.dims and 'lon' in da.dims:
+                        actual_shape_lat = len(ctx.data.lat)
+                        actual_shape_lon = len(ctx.data.lon)
+                        result.add_check(
+                            name="array_shape_matches_metadata",
+                            passed=(actual_shape_lat == actual_lat and actual_shape_lon == actual_lon),
+                            expected=f"({actual_lat}, {actual_lon})",
+                            actual=f"({actual_shape_lat}, {actual_shape_lon})",
+                            message=f"Array shape matches metadata"
+                        )
+                        break
+
+            return result
 
     class NormalizeClimate(PipelineStep):
         """Compute and apply per-variable normalization"""

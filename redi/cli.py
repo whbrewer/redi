@@ -152,7 +152,8 @@ def run_pipeline(
     style: str = "rich",
     input_paths: Optional[List[str]] = None,
     array_mode: bool = False,
-    normalize_method: Optional[str] = None
+    normalize_method: Optional[str] = None,
+    verify: bool = False
 ):
     """Run the REDI pipeline with engaging visual output
 
@@ -167,6 +168,7 @@ def run_pipeline(
         input_paths: List of input file paths for multi-file processing
         array_mode: If True, optimize pipeline for array data (skip DataFrame steps)
         normalize_method: Normalization method for array data ("minmax" or "zscore")
+        verify: If True, run verification checks after each pipeline step
     """
     from .pipeline import Pipeline, PipelineStage, create_context
 
@@ -275,6 +277,9 @@ def run_pipeline(
         **safe_config
     )
 
+    # Enable step verification if requested
+    ctx.verify_steps = verify
+
     # Load domain-specific pipeline
     if style == "rich":
         print_section("Loading Pipeline")
@@ -296,8 +301,15 @@ def run_pipeline(
         if get_full_pipeline:
             pipeline = Pipeline(domain)
             steps = get_full_pipeline()
+
+            # Expand stages to include prerequisites (pipeline stages are sequential)
+            all_stages = ["ingest", "preprocess", "transform", "structure", "output"]
+            if stages is not None:
+                max_idx = max(all_stages.index(s) for s in stages if s in all_stages)
+                stages = all_stages[:max_idx + 1]
+
             for step in steps:
-                if stages is None or step.stage.value in (stages if isinstance(stages, list) else [stages]):
+                if stages is None or step.stage.value in stages:
                     pipeline.add_step(step)
             if style == "rich":
                 print(f"    ✓ Loaded {Colors.BOLD}{len(pipeline.steps)}{Colors.END} steps for {domain} domain")
@@ -315,6 +327,11 @@ def run_pipeline(
             all_stages = ["ingest", "preprocess", "transform", "structure", "output"]
             if stages is None:
                 stages = all_stages
+            else:
+                # Expand stages to include prerequisites (pipeline stages are sequential)
+                # e.g., "-s preprocess" becomes ["ingest", "preprocess"]
+                max_idx = max(all_stages.index(s) for s in stages if s in all_stages)
+                stages = all_stages[:max_idx + 1]
 
             if "ingest" in stages:
                 for step in get_ingest_steps():
@@ -462,6 +479,19 @@ def run_pipeline(
                     print(f"  [OK] {step.name}{detail_str}")
                 step_results.append(("success", step.name, detail, step_time))
 
+                # Run verification if enabled
+                if ctx.verify_steps:
+                    verify_result = step.verify(ctx)
+                    ctx.verification_results.append(verify_result)
+                    if not verify_result.passed:
+                        if style == "rich":
+                            print(f"       {Colors.YELLOW}⚠ Verification issues:{Colors.END}")
+                            for check in verify_result.checks:
+                                if not check["passed"]:
+                                    print(f"         {Colors.DIM}└─{Colors.END} {check['name']}: {check.get('message', 'FAILED')}")
+                        elif style == "simple":
+                            print(f"    [VERIFY WARN] {step.name}")
+
         except Exception as e:
             step_time = time.time() - step_start
             ctx.add_error(f"Error in step {step.name}: {str(e)}")
@@ -498,6 +528,28 @@ def run_pipeline(
 
         print(f"    {' │ '.join(status_parts)}")
         print(f"    {Colors.DIM}Total time: {total_time:.2f}s{Colors.END}")
+
+        # Verification results
+        if ctx.verify_steps and ctx.verification_results:
+            print_section("Verification")
+            all_passed = all(r.passed for r in ctx.verification_results)
+            if all_passed:
+                print(f"    {Colors.GREEN}✓ All {len(ctx.verification_results)} verification checks passed{Colors.END}")
+            else:
+                failed = [r for r in ctx.verification_results if not r.passed]
+                print(f"    {Colors.YELLOW}⚠ {len(failed)}/{len(ctx.verification_results)} steps have verification issues{Colors.END}")
+
+            for result in ctx.verification_results:
+                if result.passed:
+                    print(f"    {Colors.GREEN}✓{Colors.END} {result.step_name}")
+                else:
+                    print(f"    {Colors.RED}✗{Colors.END} {result.step_name}")
+                    for check in result.checks:
+                        if not check["passed"]:
+                            msg = check.get("message", "FAILED")
+                            if check.get("expected") is not None:
+                                msg = f"expected {check['expected']}, got {check['actual']}"
+                            print(f"      {Colors.DIM}└─{Colors.END} {check['name']}: {msg}")
 
         # Output files
         if ctx.metadata.get("saved_files"):
@@ -615,6 +667,19 @@ def run_pipeline(
 
     elif style == "simple":
         print(f"Done: {success_count} ok, {warning_count} warnings, {error_count} errors ({total_time:.2f}s)")
+
+        # Verification results for simple style
+        if ctx.verify_steps and ctx.verification_results:
+            all_passed = all(r.passed for r in ctx.verification_results)
+            if all_passed:
+                print(f"Verification: {len(ctx.verification_results)} checks passed")
+            else:
+                for result in ctx.verification_results:
+                    if not result.passed:
+                        print(f"Verification FAILED: {result.step_name}")
+                        for check in result.checks:
+                            if not check["passed"]:
+                                print(f"  - {check['name']}: {check.get('message', 'FAILED')}")
 
         # Save metadata.json and DATA_CARD.md for simple/json modes too
         try:
@@ -1405,7 +1470,10 @@ Examples:
                            choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
                            help="Scientific domain (auto-detected if not specified)")
     run_parser.add_argument("-o", "--output", default="./output", help="Output directory")
-    run_parser.add_argument("-s", "--stages", help="Comma-separated list of stages to run")
+    run_parser.add_argument("-s", "--stages",
+                           help="Comma-separated list of stages to run. "
+                                "Available: ingest, preprocess, transform, structure, output. "
+                                "Prerequisites are auto-included (e.g., -s preprocess runs ingest,preprocess)")
     run_parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
                            default="npz", help="Output format")
     run_parser.add_argument("--array", action="store_true",
@@ -1413,6 +1481,8 @@ Examples:
     run_parser.add_argument("--normalize", choices=["minmax", "zscore"],
                            help="Normalization method for array data")
     run_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    run_parser.add_argument("--verify", action="store_true",
+                           help="Run verification checks after each pipeline step")
     run_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                            help="Output style")
     run_parser.add_argument("-c", "--config", help="YAML configuration file path")
@@ -1576,6 +1646,8 @@ def _handle_run_command(args):
     array_mode = args.array if hasattr(args, 'array') else config.get('array_mode', False)
     normalize_method = args.normalize if hasattr(args, 'normalize') else config.get('normalize_method')
 
+    verify = args.verify if hasattr(args, 'verify') else config.get('verify', False)
+
     ctx = run_pipeline(
         output_dir=config.get('output_dir', args.output),
         domain=config.get('domain', args.domain),
@@ -1585,7 +1657,8 @@ def _handle_run_command(args):
         style=args.style,
         input_paths=[str(p) for p in input_paths],
         array_mode=array_mode,
-        normalize_method=normalize_method
+        normalize_method=normalize_method,
+        verify=verify
     )
 
 
