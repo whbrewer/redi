@@ -768,6 +768,7 @@ def run_sidecar(
     watch: bool = False,
     style: str = "rich",
     config: Optional[dict] = None,
+    data_dir: Optional[str] = None,
 ):
     """Run REDI in sidecar mode - observe existing workflows.
 
@@ -778,9 +779,11 @@ def run_sidecar(
         watch: If True, watch for changes and re-run
         style: Output style (rich, simple, json)
         config: Optional YAML configuration dict
+        data_dir: Optional path to data directory to scan for intermediate files
     """
     config = config or {}
     workflow_path = Path(workflow_file)
+    data_path = Path(data_dir) if data_dir else None
 
     if not workflow_path.exists():
         if style == "rich":
@@ -808,10 +811,12 @@ def run_sidecar(
     if style == "rich":
         print_metric("Type", workflow_type)
         print_metric("Watch", "enabled" if watch else "disabled")
+        if data_path:
+            print_metric("Data Dir", str(data_path))
 
     # Parse workflow to understand structure
     if workflow_type == "snakemake":
-        return _sidecar_snakemake(workflow_path, output_dir, watch, style)
+        return _sidecar_snakemake(workflow_path, output_dir, watch, style, data_path)
     elif workflow_type == "nextflow":
         return _sidecar_nextflow(workflow_path, output_dir, watch, style)
     else:
@@ -823,7 +828,7 @@ def run_sidecar(
         return None
 
 
-def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style: str):
+def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style: str, data_dir: Optional[Path] = None):
     """Sidecar for Snakemake workflows."""
     if style == "rich":
         print_section("Parsing Snakemake Workflow")
@@ -845,6 +850,55 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
             if mapped_rules:
                 print(f"    {stage}: {', '.join(mapped_rules)}")
 
+    # Scan data files if data_dir provided
+    snapshots = []
+    quality_reports = []
+
+    if data_dir and data_dir.exists():
+        if style == "rich":
+            print_section("Scanning Data Files")
+
+        from .sidecar import capture_snapshot, check_snapshot
+
+        # Find all data files
+        data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr'}
+        data_files = []
+        for ext in data_extensions:
+            data_files.extend(data_dir.rglob(f'*{ext}'))
+
+        # Sort by modification time (oldest first = earlier in pipeline)
+        data_files = sorted(data_files, key=lambda f: f.stat().st_mtime)
+
+        if style == "rich":
+            print(f"    Found {Colors.BOLD}{len(data_files)}{Colors.END} data files")
+
+        # Capture snapshots (limit to first 20 for speed)
+        for f in data_files[:20]:
+            try:
+                if style == "rich":
+                    print(f"    📊 Scanning {f.name}...", end="", flush=True)
+
+                snapshot = capture_snapshot(f)
+                snapshots.append(snapshot)
+
+                # Run quality checks
+                qr = check_snapshot(snapshot)
+                quality_reports.append(qr)
+
+                if style == "rich":
+                    if qr.passed:
+                        print(f"\r    ✅ {f.name}: {len(snapshot.variables)} vars, {qr.summary()}")
+                    else:
+                        print(f"\r    ⚠️  {f.name}: {len(snapshot.variables)} vars, {qr.summary()}")
+
+            except Exception as e:
+                if style == "rich":
+                    print(f"\r    ❌ {f.name}: {str(e)[:50]}")
+
+        if len(data_files) > 20:
+            if style == "rich":
+                print(f"    {Colors.DIM}... and {len(data_files) - 20} more files{Colors.END}")
+
     # Create output directory and save analysis
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -858,21 +912,145 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
         "mode": "sidecar",
     }
 
+    # Add data snapshots if we scanned
+    if snapshots:
+        report["data_snapshots"] = [s.to_dict() for s in snapshots]
+        report["quality_summary"] = {
+            "files_scanned": len(snapshots),
+            "passed": sum(1 for qr in quality_reports if qr.passed),
+            "with_warnings": sum(1 for qr in quality_reports if qr.has_warnings),
+            "failed": sum(1 for qr in quality_reports if not qr.passed),
+            "issues": [issue.to_dict() for qr in quality_reports for issue in qr.issues]
+        }
+
     import json
     report_path = out_path / "sidecar_report.json"
     with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2)
+        json.dump(report, f, indent=2, default=str)
+
+    # Generate Data Card markdown if we have snapshots
+    if snapshots:
+        datacard_path = out_path / "DATA_CARD.md"
+        datacard_content = _generate_sidecar_datacard(workflow_path, rules, stage_mapping, snapshots, quality_reports)
+        datacard_path.write_text(datacard_content)
+
+        if style == "rich":
+            print_section("Output")
+            print(f"    📋 {Colors.BOLD}sidecar_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+            print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+    else:
+        if style == "rich":
+            print_section("Output")
+            print(f"    📋 {Colors.BOLD}sidecar_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
     if style == "rich":
-        print_section("Output")
-        print(f"    📋 {Colors.BOLD}sidecar_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
         print()
         print(f"{Colors.GREEN}{Colors.BOLD}✓ Sidecar analysis complete{Colors.END}")
-        print(f"{Colors.DIM}  To observe pipeline execution, run:{Colors.END}")
-        print(f"    snakemake --snakefile {workflow_path} --notemp 2>&1 | redi sidecar --stdin")
+        if not data_dir:
+            print(f"{Colors.DIM}  Tip: Use --data-dir to scan intermediate data files{Colors.END}")
         print()
 
     return report
+
+
+def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: dict,
+                                snapshots: list, quality_reports: list) -> str:
+    """Generate a Data Card markdown from sidecar analysis."""
+    lines = [
+        f"# Data Card: {workflow_path.parent.name}",
+        "",
+        f"**Generated by:** REDI Sidecar",
+        f"**Workflow:** `{workflow_path.name}`",
+        f"**Files Analyzed:** {len(snapshots)}",
+        "",
+        "## Pipeline Structure",
+        "",
+    ]
+
+    # Rules table
+    lines.append("| Rule | Description | Stage |")
+    lines.append("|------|-------------|-------|")
+    for rule in rules:
+        stage = next((s for s, r in stage_mapping.items() if rule['name'] in r), '-')
+        lines.append(f"| {rule['name']} | {rule.get('description', '-')} | {stage} |")
+
+    lines.append("")
+
+    # Data snapshots summary
+    lines.extend([
+        "## Data Files",
+        "",
+        "| File | Format | Size | Variables | Quality |",
+        "|------|--------|------|-----------|---------|",
+    ])
+
+    for snapshot, qr in zip(snapshots, quality_reports):
+        size_mb = snapshot.size_bytes / (1024 * 1024)
+        size_str = f"{size_mb:.1f} MB" if size_mb >= 1 else f"{snapshot.size_bytes / 1024:.1f} KB"
+        quality = "✓" if qr.passed else "⚠" if qr.has_warnings else "✗"
+        lines.append(f"| {snapshot.filename} | {snapshot.format} | {size_str} | {len(snapshot.variables)} | {quality} |")
+
+    lines.append("")
+
+    # Variable statistics
+    lines.extend([
+        "## Variables Summary",
+        "",
+    ])
+
+    # Collect all unique variables across snapshots
+    all_vars = {}
+    for snapshot in snapshots:
+        for name, var in snapshot.variables.items():
+            if name not in all_vars:
+                all_vars[name] = var
+
+    if all_vars:
+        lines.append("| Variable | Shape | Dtype | Min | Max | Mean | Std |")
+        lines.append("|----------|-------|-------|-----|-----|------|-----|")
+
+        for name, var in list(all_vars.items())[:15]:
+            shape_str = str(var.shape)
+            min_str = f"{var.min:.4g}" if var.min is not None else "-"
+            max_str = f"{var.max:.4g}" if var.max is not None else "-"
+            mean_str = f"{var.mean:.4g}" if var.mean is not None else "-"
+            std_str = f"{var.std:.4g}" if var.std is not None else "-"
+            lines.append(f"| {name} | {shape_str} | {var.dtype} | {min_str} | {max_str} | {mean_str} | {std_str} |")
+
+        if len(all_vars) > 15:
+            lines.append(f"| *... {len(all_vars) - 15} more* | | | | | | |")
+
+    lines.append("")
+
+    # Quality issues
+    all_issues = [issue for qr in quality_reports for issue in qr.issues]
+    if all_issues:
+        lines.extend([
+            "## Quality Issues",
+            "",
+        ])
+
+        errors = [i for i in all_issues if i.severity.value == 'error']
+        warnings = [i for i in all_issues if i.severity.value == 'warning']
+
+        if errors:
+            lines.append("### Errors")
+            for issue in errors[:5]:
+                lines.append(f"- **{issue.check_name}** [{issue.variable}]: {issue.message}")
+
+        if warnings:
+            lines.append("")
+            lines.append("### Warnings")
+            for issue in warnings[:10]:
+                lines.append(f"- **{issue.check_name}** [{issue.variable}]: {issue.message}")
+
+    lines.extend([
+        "",
+        "---",
+        "*Generated by REDI Sidecar - Observability for Data Pipelines*",
+    ])
+
+    return "\n".join(lines)
 
 
 def _parse_snakefile(path: Path) -> List[dict]:
@@ -1463,6 +1641,10 @@ Examples:
   redi run data.csv -o ./processed       # Custom output directory
   redi run data.csv --stages ingest,preprocess  # Run specific stages
   redi run "data_*.nc"                   # Process multiple files (glob)
+
+Download examples (climate domain):
+  redi run --download --source esgf --variable tas --model TaiESM1
+  redi run --download --source cds --variable 2m_temperature --year 2020
         """
     )
     run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
@@ -1487,6 +1669,24 @@ Examples:
                            help="Output style")
     run_parser.add_argument("-c", "--config", help="YAML configuration file path")
 
+    # Download options (for climate domain)
+    download_group = run_parser.add_argument_group("download options",
+        "Download data from remote sources (ESGF for CMIP6, CDS for ERA5)")
+    download_group.add_argument("--download", action="store_true",
+                               help="Download data before processing")
+    download_group.add_argument("--source", choices=["esgf", "cds"], default="esgf",
+                               help="Data source: esgf (CMIP6) or cds (ERA5)")
+    download_group.add_argument("--variable",
+                               help="Variable to download (e.g., tas, pr, t2m)")
+    download_group.add_argument("--model",
+                               help="Climate model/source_id (e.g., TaiESM1, MPI-ESM1-2-HR)")
+    download_group.add_argument("--experiment", default="historical",
+                               help="Experiment ID (e.g., historical, ssp585)")
+    download_group.add_argument("--frequency", default="6hr",
+                               help="Time frequency (e.g., 6hr, day, mon)")
+    download_group.add_argument("--year", type=int,
+                               help="Year to download (for CDS/ERA5)")
+
     # =========================================================================
     # redi sidecar
     # =========================================================================
@@ -1508,6 +1708,8 @@ Examples:
                                 choices=["auto", "snakemake", "nextflow", "bash"],
                                 help="Workflow type (auto-detected if not specified)")
     sidecar_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    sidecar_parser.add_argument("--data-dir", dest="data_dir",
+                                help="Directory containing data files to scan for statistics")
     sidecar_parser.add_argument("--watch", action="store_true",
                                 help="Watch for changes and re-run")
     sidecar_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
@@ -1618,6 +1820,20 @@ def _handle_run_command(args):
     if 'output_format' not in config:
         config['output_format'] = args.format
 
+    # Build download config from CLI args
+    if hasattr(args, 'download') and args.download:
+        config['download'] = {
+            'enabled': True,
+            'source': args.source,
+            'variable': args.variable,
+            'model': args.model,
+            'experiment': args.experiment,
+            'frequency': args.frequency,
+            'year': args.year,
+        }
+        # Remove None values
+        config['download'] = {k: v for k, v in config['download'].items() if v is not None}
+
     verbose = args.verbose or config.get('verbose', False)
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -1632,9 +1848,12 @@ def _handle_run_command(args):
         elif config_input:
             input_paths = expand_input_paths([config_input])
 
-    if not input_paths:
+    # Check for input paths (not required if download mode is enabled)
+    download_enabled = config.get('download', {}).get('enabled', False)
+    if not input_paths and not download_enabled:
         print(f"{Colors.RED}Error: input file path(s) required. Provide on CLI or set "
               f"'input_path' or 'input_paths' in the YAML config.{Colors.END}")
+        print(f"{Colors.DIM}Tip: Use --download to fetch data from ESGF or CDS{Colors.END}")
         sys.exit(1)
 
     # Run pipeline
@@ -1691,6 +1910,7 @@ def _handle_sidecar_command(args):
     output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
     watch = args.watch or config.get('watch', False)
     style = args.style if args.style != 'rich' else config.get('style', 'rich')
+    data_dir = args.data_dir or config.get('data_dir')
 
     run_sidecar(
         workflow_file=workflow_file,
@@ -1699,6 +1919,7 @@ def _handle_sidecar_command(args):
         watch=watch,
         style=style,
         config=config,
+        data_dir=data_dir,
     )
 
 
