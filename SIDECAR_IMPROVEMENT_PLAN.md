@@ -1,7 +1,22 @@
 # REDI Sidecar Improvement Plan
 
 **Date:** 2026-02-02
+**Updated:** 2026-02-02
 **Goal:** Transform `redi sidecar` from a static workflow parser into a useful observability layer for AI practitioners.
+
+## Progress Summary
+
+### DONE (Committed)
+- **4fd3f48** - `redi/sidecar/snapshot.py`: DataSnapshot captures file stats (shape, dtype, min/max/mean/std)
+- **4fd3f48** - `redi/sidecar/quality.py`: Quality checks (NaN, outliers, distribution shift)
+- **4fd3f48** - CLI `--data-dir` option scans files and generates Data Card
+- **4b05104** - `redi/sidecar/transforms.py`: Detects normalization/split/regrid params (NOT YET WIRED INTO CLI)
+
+### TODO (Next Session)
+1. **Wire transforms.py into CLI** - Update `_sidecar_snakemake()` in cli.py to call `detect_transformations()` and display results
+2. **Update Data Card generation** - Include transformation parameters section
+3. **Snakemake log parsing** - Parse execution logs to correlate rules with files
+4. **Test on real ClimaX output** - Find actual normalize_mean.npz files to test detection
 
 ## Context
 
