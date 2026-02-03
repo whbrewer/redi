@@ -25,10 +25,23 @@
   - Data Card includes "File Provenance" section from execution logs
 - **Tested on real ClimaX workflow** - Parsed logs show download/regrid rules and file provenance
 
+- **Data leakage detection** - Added `_detect_computed_on()` in transforms.py:
+  - Checks if normalize files are inside train directory (safe)
+  - Checks for train_mean/train_stats naming patterns
+  - Compares timestamps of normalize files vs split directories
+  - Looks for config files with `computed_on` or `fit_on` settings
+  - Returns 'train', 'full', or 'unknown'
+- **Transformation quality checks** - Added `check_transformation_report()` in quality.py:
+  - Warns about potential data leakage when `computed_on == 'full'`
+  - Warns about missing test split when train/val exist
+  - Warns about very small validation sets (<5%)
+- **CLI integration** - Displays transformation quality issues in sidecar output
+- **JSON report** - Includes `transformation_quality` with any detected issues
+
 ### TODO (Next Session)
 1. **Test on real ClimaX output with normalize files** - Find actual normalize_mean.npz files to test full transformation detection
-2. **Add computed_on detection** - Detect if normalization was computed on full data or training set only (data leakage check)
-3. **Improve log parsing** - Handle "Finished job X" patterns to track completed jobs better
+2. **Improve log parsing** - Handle "Finished job X" patterns to track completed jobs better
+3. **Add watch mode** - Monitor file changes and automatically re-analyze
 
 ## Context
 

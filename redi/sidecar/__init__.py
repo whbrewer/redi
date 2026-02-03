@@ -12,6 +12,7 @@ from .quality import (
     Severity,
     check_snapshot,
     check_transformation,
+    check_transformation_report,
     detect_normalization_params,
 )
 from .transforms import (
@@ -38,6 +39,7 @@ __all__ = [
     "Severity",
     "check_snapshot",
     "check_transformation",
+    "check_transformation_report",
     "detect_normalization_params",
     "NormalizationParams",
     "SplitParams",

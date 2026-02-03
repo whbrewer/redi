@@ -974,6 +974,24 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
             if style == "rich":
                 print(f"    {Colors.DIM}No transformation parameters detected{Colors.END}")
 
+    # Check for data quality issues in transformation report
+    transform_issues = []
+    if transform_report:
+        from .sidecar import check_transformation_report
+        transform_issues = check_transformation_report(transform_report)
+
+        if transform_issues:
+            if style == "rich":
+                print_section("Transformation Quality Checks")
+                for issue in transform_issues:
+                    if issue.severity.value == 'error':
+                        icon = f"{Colors.RED}✗{Colors.END}"
+                    elif issue.severity.value == 'warning':
+                        icon = f"{Colors.YELLOW}⚠{Colors.END}"
+                    else:
+                        icon = f"{Colors.DIM}ℹ{Colors.END}"
+                    print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
+
     # Create output directory and save analysis
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -1001,6 +1019,10 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     # Add transformation parameters if detected
     if transform_report:
         report["transformations"] = transform_report.to_dict()
+
+    # Add transformation quality issues
+    if transform_issues:
+        report["transformation_quality"] = [issue.to_dict() for issue in transform_issues]
 
     # Add execution log info if parsed
     if log_report:

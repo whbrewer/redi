@@ -320,7 +320,86 @@ def _detect_normalization(data_dir: Path, snapshots: Optional[List[DataSnapshot]
     if not params.mean_file and not params.std_file and not params.mean_values:
         return None
 
+    # Try to detect what data the normalization was computed on
+    params.computed_on = _detect_computed_on(data_dir, params)
+
     return params
+
+
+def _detect_computed_on(data_dir: Path, params: NormalizationParams) -> Optional[str]:
+    """
+    Detect whether normalization stats were computed on training data or full dataset.
+
+    Returns:
+        'train' - Stats likely computed on training set only (safe)
+        'full' - Stats likely computed on full dataset (potential leakage)
+        'unknown' - Cannot determine
+    """
+    import os
+
+    # Pattern 1: Check if normalize files are inside a "train" directory
+    if params.mean_file:
+        mean_path = Path(params.mean_file)
+        path_parts = [p.lower() for p in mean_path.parts]
+        if 'train' in path_parts or 'training' in path_parts:
+            return 'train'
+
+    # Pattern 2: Check for naming patterns suggesting train-only stats
+    train_stat_patterns = ['train_mean', 'train_stats', 'training_mean', 'train_normalize']
+    if params.mean_file:
+        filename = Path(params.mean_file).stem.lower()
+        if any(p in filename for p in train_stat_patterns):
+            return 'train'
+
+    # Pattern 3: Check file timestamps relative to split directories
+    # If normalize files are newer than train dir creation, stats were computed after split
+    try:
+        train_dirs = list(data_dir.rglob('train/')) + list(data_dir.rglob('training/'))
+        if train_dirs and params.mean_file:
+            mean_mtime = Path(params.mean_file).stat().st_mtime
+            train_dir = train_dirs[0]
+            train_mtime = train_dir.stat().st_mtime
+
+            # If mean file was modified after train dir was created, likely computed on train
+            # (This is a heuristic and not always accurate)
+            if mean_mtime > train_mtime:
+                return 'train'
+    except (OSError, FileNotFoundError):
+        pass
+
+    # Pattern 4: Look for config files that might indicate the computation scope
+    config_patterns = ['config.json', 'config.yaml', 'config.yml', 'params.json']
+    for pattern in config_patterns:
+        for config_file in data_dir.rglob(pattern):
+            try:
+                if config_file.suffix == '.json':
+                    import json
+                    with open(config_file) as f:
+                        config = json.load(f)
+                else:
+                    import yaml
+                    with open(config_file) as f:
+                        config = yaml.safe_load(f)
+
+                # Look for normalization settings
+                norm_config = config.get('normalization') or config.get('normalize') or {}
+                if isinstance(norm_config, dict):
+                    computed_on = norm_config.get('computed_on') or norm_config.get('fit_on')
+                    if computed_on:
+                        return computed_on.lower()
+            except Exception:
+                pass
+
+    # Pattern 5: If we found splits but stats are at root level, likely full dataset
+    has_splits = bool(list(data_dir.rglob('train/')) or list(data_dir.rglob('val/')) or list(data_dir.rglob('test/')))
+    if has_splits and params.mean_file:
+        mean_path = Path(params.mean_file)
+        # If mean file is at or near root (not inside train), likely computed on full
+        rel_path = mean_path.relative_to(data_dir) if mean_path.is_relative_to(data_dir) else mean_path
+        if len(rel_path.parts) <= 2:  # At root or one level deep
+            return 'full'
+
+    return 'unknown'
 
 
 def _detect_splits(data_dir: Path, snapshots: Optional[List[DataSnapshot]] = None) -> Optional[SplitParams]:

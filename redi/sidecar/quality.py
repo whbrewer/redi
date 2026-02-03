@@ -487,3 +487,91 @@ def detect_normalization_params(snapshot: DataSnapshot) -> Optional[Dict[str, An
         }
 
     return None
+
+
+def check_transformation_report(transform_report) -> List[QualityIssue]:
+    """
+    Check a TransformationReport for potential data quality issues.
+
+    Args:
+        transform_report: TransformationReport from transforms.py
+
+    Returns:
+        List of QualityIssue objects
+    """
+    issues = []
+
+    if transform_report is None:
+        return issues
+
+    # Check for data leakage in normalization
+    if transform_report.normalization:
+        norm = transform_report.normalization
+        computed_on = norm.computed_on
+
+        if computed_on == 'full':
+            issues.append(QualityIssue(
+                check_name="potential_data_leakage",
+                severity=Severity.WARNING,
+                message="Normalization appears to be computed on full dataset, not just training set. "
+                        "This may cause data leakage if train/val/test splits exist.",
+                details={
+                    'normalization_method': norm.method,
+                    'mean_file': norm.mean_file,
+                    'computed_on': computed_on,
+                }
+            ))
+        elif computed_on == 'train':
+            issues.append(QualityIssue(
+                check_name="normalization_scope",
+                severity=Severity.INFO,
+                message="Normalization computed on training set only (no data leakage detected).",
+                details={
+                    'normalization_method': norm.method,
+                    'computed_on': computed_on,
+                }
+            ))
+        elif computed_on == 'unknown':
+            issues.append(QualityIssue(
+                check_name="normalization_scope_unknown",
+                severity=Severity.INFO,
+                message="Could not determine if normalization was computed on training set or full dataset.",
+                details={
+                    'normalization_method': norm.method,
+                    'computed_on': computed_on,
+                }
+            ))
+
+    # Check for missing test split when train/val exist
+    if transform_report.splits:
+        splits = transform_report.splits
+        has_train = splits.train_size is not None or 'train' in splits.split_files
+        has_val = splits.val_size is not None or 'val' in splits.split_files
+        has_test = splits.test_size is not None or 'test' in splits.split_files
+
+        if has_train and has_val and not has_test:
+            issues.append(QualityIssue(
+                check_name="missing_test_split",
+                severity=Severity.WARNING,
+                message="Train and validation splits detected, but no test split found.",
+                details={
+                    'train_size': splits.train_size,
+                    'val_size': splits.val_size,
+                    'test_size': splits.test_size,
+                }
+            ))
+
+        # Check for very small validation set
+        if has_train and has_val and splits.val_ratio and splits.val_ratio < 0.05:
+            issues.append(QualityIssue(
+                check_name="small_validation_set",
+                severity=Severity.WARNING,
+                message=f"Validation set is only {splits.val_ratio:.1%} of total data. "
+                        "Consider using a larger validation set for reliable metrics.",
+                details={
+                    'val_ratio': splits.val_ratio,
+                    'val_size': splits.val_size,
+                }
+            ))
+
+    return issues
