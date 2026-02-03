@@ -38,10 +38,20 @@
 - **CLI integration** - Displays transformation quality issues in sidecar output
 - **JSON report** - Includes `transformation_quality` with any detected issues
 
+- **Improved log parsing** - Fixed "Finished job" pattern matching:
+  - Now matches both "Finished job X." and "Finished jobid: X (Rule: name)"
+  - Added "Error in rule" and "WorkflowError" patterns
+  - Correctly tracks completed/failed jobs in real ClimaX logs
+- **Watch mode** - Added `_run_watch_mode()` function:
+  - Monitors workflow file, data files, and Snakemake logs
+  - Polls every 2 seconds for changes
+  - Re-runs analysis when files are modified or added
+  - Usage: `redi sidecar --workflow Snakefile --data-dir ./data --watch`
+
 ### TODO (Next Session)
 1. **Test on real ClimaX output with normalize files** - Find actual normalize_mean.npz files to test full transformation detection
-2. **Improve log parsing** - Handle "Finished job X" patterns to track completed jobs better
-3. **Add watch mode** - Monitor file changes and automatically re-analyze
+2. **Add Nextflow support** - Implement `_sidecar_nextflow()` for Nextflow workflows
+3. **Add bash script support** - Parse bash scripts to extract data flow
 
 ## Context
 

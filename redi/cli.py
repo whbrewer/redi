@@ -1067,7 +1067,105 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
             print(f"{Colors.DIM}  Tip: Use --data-dir to scan intermediate data files{Colors.END}")
         print()
 
+    # Watch mode: monitor for changes and re-analyze
+    if watch:
+        _run_watch_mode(workflow_path, data_dir, output_dir, style)
+
     return report
+
+
+def _run_watch_mode(workflow_path: Path, data_dir: Optional[Path], output_dir: str, style: str):
+    """Run watch mode - monitor for file changes and re-analyze."""
+    import time
+
+    # Collect files to watch
+    watch_files = [workflow_path]
+    if data_dir and data_dir.exists():
+        data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr'}
+        for ext in data_extensions:
+            watch_files.extend(data_dir.rglob(f'*{ext}'))
+
+    # Also watch Snakemake logs
+    log_dir = workflow_path.parent / ".snakemake" / "log"
+    if log_dir.exists():
+        watch_files.extend(log_dir.glob("*.snakemake.log"))
+
+    # Record initial timestamps
+    file_mtimes = {}
+    for f in watch_files:
+        if f.exists():
+            try:
+                file_mtimes[str(f)] = f.stat().st_mtime
+            except OSError:
+                pass
+
+    if style == "rich":
+        print(f"\n{Colors.CYAN}👁 Watch mode active{Colors.END}")
+        print(f"  Monitoring {Colors.BOLD}{len(file_mtimes)}{Colors.END} files for changes")
+        print(f"  {Colors.DIM}Press Ctrl+C to stop{Colors.END}\n")
+
+    poll_interval = 2.0  # seconds
+
+    try:
+        while True:
+            time.sleep(poll_interval)
+
+            # Check for changes
+            changed_files = []
+            new_files = []
+
+            # Check existing files for modifications
+            for path_str, old_mtime in list(file_mtimes.items()):
+                path = Path(path_str)
+                if path.exists():
+                    try:
+                        new_mtime = path.stat().st_mtime
+                        if new_mtime > old_mtime:
+                            changed_files.append(path)
+                            file_mtimes[path_str] = new_mtime
+                    except OSError:
+                        pass
+
+            # Check for new files in data_dir
+            if data_dir and data_dir.exists():
+                for ext in data_extensions:
+                    for f in data_dir.rglob(f'*{ext}'):
+                        if str(f) not in file_mtimes:
+                            new_files.append(f)
+                            try:
+                                file_mtimes[str(f)] = f.stat().st_mtime
+                            except OSError:
+                                pass
+
+            # Check for new log files
+            if log_dir.exists():
+                for f in log_dir.glob("*.snakemake.log"):
+                    if str(f) not in file_mtimes:
+                        new_files.append(f)
+                        try:
+                            file_mtimes[str(f)] = f.stat().st_mtime
+                        except OSError:
+                            pass
+
+            # Re-run analysis if changes detected
+            if changed_files or new_files:
+                if style == "rich":
+                    timestamp = time.strftime("%H:%M:%S")
+                    print(f"\n{Colors.YELLOW}[{timestamp}] Changes detected:{Colors.END}")
+                    for f in changed_files[:3]:
+                        print(f"  {Colors.DIM}modified:{Colors.END} {f.name}")
+                    for f in new_files[:3]:
+                        print(f"  {Colors.DIM}new:{Colors.END} {f.name}")
+                    if len(changed_files) + len(new_files) > 6:
+                        print(f"  {Colors.DIM}... and {len(changed_files) + len(new_files) - 6} more{Colors.END}")
+                    print()
+
+                # Re-run the analysis
+                _sidecar_snakemake(workflow_path, output_dir, False, style, data_dir)
+
+    except KeyboardInterrupt:
+        if style == "rich":
+            print(f"\n{Colors.DIM}Watch mode stopped{Colors.END}")
 
 
 def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: dict,
