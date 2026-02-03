@@ -28,6 +28,105 @@ CLIMATE_VARIABLES = {
 }
 
 
+def get_download_steps():
+    """Get climate-specific download steps"""
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class DownloadClimateData(PipelineStep):
+        """Download climate data from ESGF or CDS"""
+
+        name = "download_climate"
+        stage = PipelineStage.INGEST
+        description = "Download climate data from ESGF (CMIP6) or CDS (ERA5)"
+
+        def __init__(
+            self,
+            source: str = "esgf",
+            variable: str = None,
+            model: str = None,
+            experiment: str = "historical",
+            frequency: str = "6hr",
+            year: int = None,
+            **kwargs
+        ):
+            super().__init__()
+            self.source = source
+            self.variable = variable
+            self.model = model
+            self.experiment = experiment
+            self.frequency = frequency
+            self.year = year
+            self.download_kwargs = kwargs
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            # Only run if download is requested and no input files exist
+            download_config = ctx.config.get("download", {})
+            if not download_config.get("enabled", False):
+                return False
+            return True
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                from ..downloaders import get_downloader
+
+                download_config = ctx.config.get("download", {})
+                source = download_config.get("source", self.source)
+                output_dir = str(ctx.output_dir / "downloads")
+
+                logger.info(f"Downloading climate data from {source}")
+
+                downloader = get_downloader(source, output_dir=output_dir)
+
+                # Build query from config
+                query = {
+                    "variable": download_config.get("variable", self.variable),
+                    "model": download_config.get("model", self.model),
+                    "experiment": download_config.get("experiment", self.experiment),
+                    "frequency": download_config.get("frequency", self.frequency),
+                }
+
+                if download_config.get("year"):
+                    query["year"] = download_config["year"]
+
+                # Remove None values
+                query = {k: v for k, v in query.items() if v is not None}
+
+                # Search and download
+                datasets = downloader.search(**query)
+
+                if not datasets:
+                    ctx.add_error(f"No datasets found for query: {query}")
+                    return ctx
+
+                logger.info(f"Found {len(datasets)} files to download")
+                result = downloader.download(datasets)
+
+                if result.files:
+                    # Update context to use downloaded files
+                    ctx.input_paths = result.files
+                    ctx.input_path = result.files[0]
+                    ctx.metadata["downloaded_files"] = [str(f) for f in result.files]
+                    ctx.metadata["download_source"] = source
+                    ctx.metadata["download_query"] = query
+                    ctx.metadata["download_size_bytes"] = result.total_size_bytes
+                    logger.info(f"Downloaded {len(result.files)} files ({result.total_size_bytes / 1024 / 1024:.1f} MB)")
+                else:
+                    ctx.add_error(f"Download failed: {result.message}")
+
+                if result.errors:
+                    for err in result.errors:
+                        logger.warning(f"Download error: {err}")
+
+            except ImportError as e:
+                ctx.add_error(f"Download dependencies not available: {e}")
+            except Exception as e:
+                ctx.add_error(f"Download failed: {str(e)}")
+
+            return ctx
+
+    return [DownloadClimateData()]
+
+
 def get_ingest_steps():
     """Get climate-specific ingest steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
@@ -603,6 +702,7 @@ def get_output_steps():
 def get_full_pipeline():
     """Get the complete climate preprocessing pipeline"""
     return (
+        get_download_steps() +
         get_ingest_steps() +
         get_preprocess_steps() +
         get_transform_steps() +
