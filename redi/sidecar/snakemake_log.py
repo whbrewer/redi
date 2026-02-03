@@ -109,8 +109,10 @@ def parse_snakemake_log(log_path: Path) -> SnakemakeLogReport:
     jobid_pattern = re.compile(r'^\s+jobid:\s*(\d+)')
     reason_pattern = re.compile(r'^\s+reason:\s*(.+)$')
     wildcards_pattern = re.compile(r'^\s+wildcards:\s*(.+)$')
-    finished_pattern = re.compile(r'^Finished job (\d+)\.')
-    error_pattern = re.compile(r'^(RuleException|Error|CalledProcessError)')
+    # Match both formats: "Finished job X." and "Finished jobid: X (Rule: name)"
+    finished_pattern = re.compile(r'^Finished job(?:id)?[:\s]+(\d+)')
+    # Match various error patterns
+    error_pattern = re.compile(r'^(RuleException|Error in rule|Error:|CalledProcessError|WorkflowError)')
     job_stats_pattern = re.compile(r'^(\w+)\s+(\d+)$')
 
     # Parse job stats section
