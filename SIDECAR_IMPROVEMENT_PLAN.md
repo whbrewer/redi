@@ -1,7 +1,7 @@
 # REDI Sidecar Improvement Plan
 
 **Date:** 2026-02-02
-**Updated:** 2026-02-02
+**Updated:** 2026-02-03
 **Goal:** Transform `redi sidecar` from a static workflow parser into a useful observability layer for AI practitioners.
 
 ## Progress Summary
@@ -10,13 +10,18 @@
 - **4fd3f48** - `redi/sidecar/snapshot.py`: DataSnapshot captures file stats (shape, dtype, min/max/mean/std)
 - **4fd3f48** - `redi/sidecar/quality.py`: Quality checks (NaN, outliers, distribution shift)
 - **4fd3f48** - CLI `--data-dir` option scans files and generates Data Card
-- **4b05104** - `redi/sidecar/transforms.py`: Detects normalization/split/regrid params (NOT YET WIRED INTO CLI)
+- **4b05104** - `redi/sidecar/transforms.py`: Detects normalization/split/regrid params
+
+### DONE (This Session)
+- **Wired transforms.py into CLI** - `_sidecar_snakemake()` now calls `detect_transformations()` and displays results
+- **Updated Data Card generation** - Includes transformation parameters section (normalization, splits, regrid)
+- **Updated JSON report** - Includes `transformations` key with full parameter details
+- **Tested** - Verified with mock data (normalize_mean.npz, train/val/test splits)
 
 ### TODO (Next Session)
-1. **Wire transforms.py into CLI** - Update `_sidecar_snakemake()` in cli.py to call `detect_transformations()` and display results
-2. **Update Data Card generation** - Include transformation parameters section
-3. **Snakemake log parsing** - Parse execution logs to correlate rules with files
-4. **Test on real ClimaX output** - Find actual normalize_mean.npz files to test detection
+1. **Snakemake log parsing** - Parse execution logs to correlate rules with files
+2. **Test on real ClimaX output** - Find actual normalize_mean.npz files to test detection
+3. **Add computed_on detection** - Detect if normalization was computed on full data or training set only (data leakage check)
 
 ## Context
 

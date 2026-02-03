@@ -858,7 +858,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
         if style == "rich":
             print_section("Scanning Data Files")
 
-        from .sidecar import capture_snapshot, check_snapshot
+        from .sidecar import capture_snapshot, check_snapshot, detect_transformations
 
         # Find all data files
         data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr'}
@@ -899,6 +899,55 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
             if style == "rich":
                 print(f"    {Colors.DIM}... and {len(data_files) - 20} more files{Colors.END}")
 
+    # Detect transformation parameters
+    transform_report = None
+    if data_dir and data_dir.exists():
+        if style == "rich":
+            print_section("Detecting Transformation Parameters")
+
+        transform_report = detect_transformations(data_dir, snapshots)
+
+        if transform_report.normalization:
+            norm = transform_report.normalization
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Normalization detected: {Colors.BOLD}{norm.method}{Colors.END}")
+                if norm.mean_file:
+                    print(f"      Mean file: {Path(norm.mean_file).name}")
+                if norm.std_file:
+                    print(f"      Std file: {Path(norm.std_file).name}")
+                if norm.mean_values:
+                    print(f"      Variables: {len(norm.mean_values)}")
+                    for var, mean in list(norm.mean_values.items())[:3]:
+                        std = norm.std_values.get(var, 'N/A')
+                        if isinstance(std, (int, float)):
+                            print(f"        {var}: mean={mean:.4g}, std={std:.4g}")
+                        else:
+                            print(f"        {var}: mean={mean:.4g}")
+                    if len(norm.mean_values) > 3:
+                        print(f"        {Colors.DIM}... and {len(norm.mean_values) - 3} more{Colors.END}")
+
+        if transform_report.splits:
+            splits = transform_report.splits
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Train/val/test split detected: {Colors.BOLD}{splits.method}{Colors.END}")
+                if splits.train_size:
+                    print(f"      Train: {splits.train_size:,} samples")
+                if splits.val_size:
+                    print(f"      Val: {splits.val_size:,} samples")
+                if splits.test_size:
+                    print(f"      Test: {splits.test_size:,} samples")
+
+        if transform_report.regrid:
+            regrid = transform_report.regrid
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Regridding detected: {Colors.BOLD}{regrid.method}{Colors.END}")
+                if regrid.target_resolution:
+                    print(f"      Target resolution: {regrid.target_resolution[0]}° x {regrid.target_resolution[1]}°")
+
+        if not transform_report.normalization and not transform_report.splits and not transform_report.regrid:
+            if style == "rich":
+                print(f"    {Colors.DIM}No transformation parameters detected{Colors.END}")
+
     # Create output directory and save analysis
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -923,6 +972,10 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
             "issues": [issue.to_dict() for qr in quality_reports for issue in qr.issues]
         }
 
+    # Add transformation parameters if detected
+    if transform_report:
+        report["transformations"] = transform_report.to_dict()
+
     import json
     report_path = out_path / "sidecar_report.json"
     with open(report_path, 'w') as f:
@@ -931,7 +984,9 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     # Generate Data Card markdown if we have snapshots
     if snapshots:
         datacard_path = out_path / "DATA_CARD.md"
-        datacard_content = _generate_sidecar_datacard(workflow_path, rules, stage_mapping, snapshots, quality_reports)
+        datacard_content = _generate_sidecar_datacard(
+            workflow_path, rules, stage_mapping, snapshots, quality_reports, transform_report
+        )
         datacard_path.write_text(datacard_content)
 
         if style == "rich":
@@ -954,7 +1009,8 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
 
 
 def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: dict,
-                                snapshots: list, quality_reports: list) -> str:
+                                snapshots: list, quality_reports: list,
+                                transform_report=None) -> str:
     """Generate a Data Card markdown from sidecar analysis."""
     lines = [
         f"# Data Card: {workflow_path.parent.name}",
@@ -1021,6 +1077,13 @@ def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: 
             lines.append(f"| *... {len(all_vars) - 15} more* | | | | | | |")
 
     lines.append("")
+
+    # Transformation parameters section
+    if transform_report:
+        transform_md = transform_report.to_markdown()
+        if transform_md:
+            lines.append(transform_md)
+            lines.append("")
 
     # Quality issues
     all_issues = [issue for qr in quality_reports for issue in qr.issues]
