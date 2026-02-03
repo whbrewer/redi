@@ -21,6 +21,13 @@ from .transforms import (
     TransformationReport,
     detect_transformations,
 )
+from .snakemake_log import (
+    RuleExecution,
+    SnakemakeLogReport,
+    parse_snakemake_log,
+    find_latest_log,
+    find_all_logs,
+)
 
 __all__ = [
     "DataSnapshot",
@@ -37,4 +44,9 @@ __all__ = [
     "RegridParams",
     "TransformationReport",
     "detect_transformations",
+    "RuleExecution",
+    "SnakemakeLogReport",
+    "parse_snakemake_log",
+    "find_latest_log",
+    "find_all_logs",
 ]

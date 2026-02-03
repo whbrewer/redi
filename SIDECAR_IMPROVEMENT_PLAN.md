@@ -17,11 +17,18 @@
 - **Updated Data Card generation** - Includes transformation parameters section (normalization, splits, regrid)
 - **Updated JSON report** - Includes `transformations` key with full parameter details
 - **Tested** - Verified with mock data (normalize_mean.npz, train/val/test splits)
+- **Snakemake log parsing** - Created `redi/sidecar/snakemake_log.py` module:
+  - `parse_snakemake_log()` extracts rule executions, job stats, file provenance
+  - `find_latest_log()` and `find_all_logs()` locate logs in .snakemake/log/
+  - CLI now displays log parsing results (jobs, completed, failed, provenance)
+  - JSON report includes `execution_log` with file provenance mapping
+  - Data Card includes "File Provenance" section from execution logs
+- **Tested on real ClimaX workflow** - Parsed logs show download/regrid rules and file provenance
 
 ### TODO (Next Session)
-1. **Snakemake log parsing** - Parse execution logs to correlate rules with files
-2. **Test on real ClimaX output** - Find actual normalize_mean.npz files to test detection
-3. **Add computed_on detection** - Detect if normalization was computed on full data or training set only (data leakage check)
+1. **Test on real ClimaX output with normalize files** - Find actual normalize_mean.npz files to test full transformation detection
+2. **Add computed_on detection** - Detect if normalization was computed on full data or training set only (data leakage check)
+3. **Improve log parsing** - Handle "Finished job X" patterns to track completed jobs better
 
 ## Context
 
