@@ -1,7 +1,7 @@
 # REDI Sidecar Improvement Plan
 
 **Date:** 2026-02-02
-**Updated:** 2026-02-03
+**Updated:** 2026-02-03 (Nextflow support added)
 **Goal:** Transform `redi sidecar` from a static workflow parser into a useful observability layer for AI practitioners.
 
 ## Progress Summary
@@ -48,10 +48,48 @@
   - Re-runs analysis when files are modified or added
   - Usage: `redi sidecar --workflow Snakefile --data-dir ./data --watch`
 
+- **Nextflow support** - Full implementation of `_sidecar_nextflow()`:
+  - `redi/sidecar/nextflow_parser.py` - DSL2 workflow parser:
+    - `parse_nextflow_file()` - Parses .nf files to extract processes, workflows, includes, params
+    - `_extract_process_blocks()` - Uses brace counting for proper nested parsing
+    - `_parse_io_declarations()` - Extracts path/val/file input/output declarations
+    - `_infer_process_description()` - Generates descriptions from process names (download, align, predict, relax, etc.)
+    - `map_processes_to_stages()` - Maps Nextflow processes to REDI pipeline stages
+    - `find_nextflow_logs()` - Locates .nextflow.log and trace files
+  - CLI integration:
+    - `_sidecar_nextflow()` - Full sidecar implementation mirroring Snakemake
+    - Parses workflow, shows processes/workflows/includes/params
+    - Stage mapping (ingest/preprocess/transform/structure/output)
+    - Data file scanning with snapshots and quality checks
+    - Transformation detection (normalization, splits, regrid)
+    - Generates `sidecar_report.json` and `DATA_CARD.md`
+  - `_generate_nextflow_datacard()` - Markdown Data Card with:
+    - Processes table (name, description, inputs, outputs)
+    - Stage mapping table
+    - Workflows section with process calls, inputs, outputs
+    - Parameters table from params.* declarations
+    - Transformations section (normalization, splits, regrid)
+    - Data files table with quality status
+  - `_run_nextflow_watch_mode()` - Watch mode for Nextflow:
+    - Monitors workflow file, data files, .nextflow.log, work/ directory
+    - Re-runs analysis on changes
+  - Updated `redi/sidecar/__init__.py` to export Nextflow parser functions
+  - Tested with sample AlphaFold-style Nextflow workflow
+  - **Tested with real nf-core modules** (fastqc, bwa_mem, samtools_sort, star_align, multiqc):
+    - Fixed `_extract_process_blocks()` to use brace counting for complex nested scripts
+    - Fixed script extraction to handle Groovy variable definitions before triple-quoted blocks
+    - Fixed container parsing for nf-core ternary expressions (`${ ... ? 'singularity' : 'docker' }`)
+    - Fixed output section parsing to stop at `when:` directive
+    - Improved `_parse_io_declarations()` to handle tuple declarations with `emit:` directives
+    - Added 60+ bioinformatics tool descriptions (fastqc, bwa, star, samtools, gatk, salmon, etc.)
+    - Fixed stage mapping priority (output keywords checked first to avoid "multiqc" matching "qc")
+    - Added 6 new nf-core specific tests (15 total tests, all passing)
+
 ### TODO (Next Session)
 1. **Test on real ClimaX output with normalize files** - Find actual normalize_mean.npz files to test full transformation detection
-2. **Add Nextflow support** - Implement `_sidecar_nextflow()` for Nextflow workflows
-3. **Add bash script support** - Parse bash scripts to extract data flow
+2. **Add bash script support** - Parse bash scripts to extract data flow
+3. **Nextflow log parsing** - Parse .nextflow.log and trace.txt for execution history (similar to Snakemake log parsing)
+4. **Test with full nf-core pipelines** - Download and test against complete nf-core/rnaseq, nf-core/sarek pipelines (with subworkflows)
 
 ## Context
 
