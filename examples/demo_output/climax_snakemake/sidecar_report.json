@@ -1,0 +1,115 @@
+{
+  "workflow_file": "/home/w1b/drai/domains/climate/ClimaX/snakemake_configs/TaiESM1/Snakefile",
+  "workflow_type": "snakemake",
+  "rules": [
+    {
+      "name": "download",
+      "input": null,
+      "output": "\"{dataset}/raw/{name}/{name}_{year_str}_raw.nc\",",
+      "description": "Download data from remote source"
+    },
+    {
+      "name": "regrid",
+      "input": "\"{dataset}/raw/{name}/{name}_{year_str}_raw.nc\"",
+      "output": "\"{dataset}/{res}deg/{name}/{name}_{year_str}_{res}deg.nc.tmp\"",
+      "description": "Regrid data to target resolution"
+    },
+    {
+      "name": "delete",
+      "input": "expand(\"{{dataset}}/{res}deg/{{name}}/{{name}}_{{year_str}}_{res}deg.nc.tmp\",\n                 res=config['res']),",
+      "output": "expand(\"{{dataset}}/{res}deg/{{name}}/{{name}}_{{year_str}}_{res}deg.nc\",\n                 res=config['res'])",
+      "description": "Processing step"
+    },
+    {
+      "name": "all",
+      "input": "expand(\"{datadir}/{res}deg/{name}/{name}_{year_str}_{res}deg.nc\",\n                datadir=config['datadir'], res=config['res'], name=config['name'], year_str=year_strings)",
+      "output": null,
+      "description": "Final target rule"
+    }
+  ],
+  "stage_mapping": {
+    "ingest": [
+      "download"
+    ],
+    "preprocess": [
+      "regrid"
+    ],
+    "transform": [],
+    "structure": [],
+    "output": [
+      "all"
+    ]
+  },
+  "mode": "sidecar",
+  "suggestions": [
+    {
+      "category": "best_practices",
+      "title": "Add explicit transformation stage",
+      "description": "No explicit transformation stage detected. Consider adding steps for: normalization, feature engineering, encoding categoricals, or handling missing values.",
+      "priority": 3,
+      "related_issue": null,
+      "code_example": null,
+      "references": []
+    },
+    {
+      "category": "best_practices",
+      "title": "Add data validation steps",
+      "description": "No validation or QC steps detected in the workflow. Consider adding validation after each major transformation to catch issues early.",
+      "priority": 2,
+      "related_issue": null,
+      "code_example": "# Snakemake example\nrule validate_data:\n    input: \"{dataset}/processed/data.nc\"\n    output: \"{dataset}/processed/validation_report.json\"\n    shell:\n        \"\"\"\n        python scripts/validate.py {input} --output {output}\n        \"\"\"\n",
+      "references": []
+    },
+    {
+      "category": "reproducibility",
+      "title": "Record random seeds for reproducibility",
+      "description": "Set and record random seeds for any stochastic operations (train/test splits, data augmentation, shuffling). This ensures experiments can be exactly reproduced.",
+      "priority": 3,
+      "related_issue": null,
+      "code_example": "import numpy as np\nimport random\n\nSEED = 42\nnp.random.seed(SEED)\nrandom.seed(SEED)\n\n# Document in config or Data Card\n# random_seed: 42",
+      "references": []
+    },
+    {
+      "category": "documentation",
+      "title": "Generate a Data Card for the output dataset",
+      "description": "Create a Data Card documenting: data source, preprocessing steps, normalization parameters, split ratios, and known limitations. REDI can generate this automatically with --data-dir.",
+      "priority": 3,
+      "related_issue": null,
+      "code_example": null,
+      "references": [
+        "https://arxiv.org/abs/2204.01075"
+      ]
+    }
+  ],
+  "suggestions_summary": {
+    "total": 4,
+    "high_priority": 0,
+    "medium_priority": 1,
+    "low_priority": 3
+  },
+  "execution_log": {
+    "log_file": "/home/w1b/drai/domains/climate/ClimaX/snakemake_configs/TaiESM1/.snakemake/log/2026-01-26T235419.428358.snakemake.log",
+    "job_stats": {
+      "all": 1,
+      "delete": 17,
+      "download": 17,
+      "regrid": 17,
+      "total": 52
+    },
+    "total_jobs": 52,
+    "completed_jobs": 0,
+    "failed_jobs": 0,
+    "executions_count": 8,
+    "file_provenance": {
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_197001010600-198001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_198001010600-199001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_196001010600-197001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_195001010600-196001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_193001010600-194001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_194001020000-195001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_192001010600-193001010000_raw.nc": "download",
+      "/opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_186001010600-187001010000_raw.nc": "download"
+    },
+    "errors": []
+  }
+}

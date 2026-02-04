@@ -1,0 +1,452 @@
+{
+  "workflow_file": "examples/nextflow/climate_processing.nf",
+  "workflow_type": "nextflow",
+  "dsl_version": "2",
+  "processes": [
+    {
+      "name": "DOWNLOAD_DATA",
+      "inputs": [
+        "val:source"
+      ],
+      "outputs": [
+        "*.nc"
+      ],
+      "script": "# Simulate data download (in practice, use wget/curl to ESGF/CDS)\n    echo \"Downloading from ${source}...\"\n\n    # Create a simple NetCDF-like file (placeholder)\n    echo \"NetCDF placeholder for ${sour",
+      "container": null,
+      "description": "Download data from remote source"
+    },
+    {
+      "name": "INSPECT_DATA",
+      "inputs": [
+        "data"
+      ],
+      "outputs": [
+        "${data.baseName}_metadata.json",
+        "data"
+      ],
+      "script": "# Extract metadata (simplified)\n    echo '{\n        \"filename\": \"${data}\",\n        \"variables\": [\"tas\", \"pr\", \"psl\"],\n        \"dimensions\": {\"time\": 365, \"lat\": 128, \"lon\": 256},\n        \"time_range\":",
+      "container": "continuumio/miniconda3:latest",
+      "description": "Processing step"
+    },
+    {
+      "name": "REGRID_DATA",
+      "inputs": [
+        "data"
+      ],
+      "outputs": [
+        "regridded_*.nc",
+        "regrid_params.json"
+      ],
+      "script": "# Regrid using xESMF (simplified)\n    echo \"Regridding to ${resolution} degrees...\"\n\n    cp ${data} regridded_${data.baseName}.nc\n\n    echo '{\n        \"method\": \"bilinear\",\n        \"source_resolution\"",
+      "container": "pangeo/pangeo-notebook:latest",
+      "description": "Processing step"
+    },
+    {
+      "name": "COMPUTE_NORM_STATS",
+      "inputs": [
+        "data_files"
+      ],
+      "outputs": [
+        "normalize_mean.npz",
+        "normalize_std.npz",
+        "norm_params.json"
+      ],
+      "script": "# Compute mean and std across all data (simplified)\n    echo \"Computing ${method} normalization statistics...\"\n\n    # Create placeholder NPZ files\n    python3 -c \"\nimport numpy as np\nvariables = '${va",
+      "container": "pangeo/pangeo-notebook:latest",
+      "description": "Processing step"
+    },
+    {
+      "name": "NORMALIZE_DATA",
+      "inputs": [
+        "data",
+        "mean_file",
+        "std_file"
+      ],
+      "outputs": [
+        "normalized_*.nc"
+      ],
+      "script": "# Apply z-score normalization\n    echo \"Normalizing ${data}...\"\n\n    cp ${data} normalized_${data.baseName}.nc",
+      "container": "pangeo/pangeo-notebook:latest",
+      "description": "Processing step"
+    },
+    {
+      "name": "SPLIT_DATA",
+      "inputs": [
+        "data_files",
+        "mean_file",
+        "std_file"
+      ],
+      "outputs": [
+        "train/*.nc",
+        "val/*.nc",
+        "test/*.nc",
+        "split_info.json"
+      ],
+      "script": "mkdir -p train val test\n\n    # Split files by temporal order (simplified)\n    files=(\\$(ls ${data_files} | sort))\n    total=\\${#files[@]}\n    train_end=\\$((total * ${train_ratio} / 1))\n    val_end=\\$(",
+      "container": null,
+      "description": "Processing step"
+    },
+    {
+      "name": "GENERATE_DATACARD",
+      "inputs": [
+        "split_info",
+        "norm_params",
+        "regrid_params"
+      ],
+      "outputs": [
+        "DATA_CARD.md"
+      ],
+      "script": "cat > DATA_CARD.md << 'DATACARD'\n# Climate Data Card\n\n## Overview\nProcessed climate data ready for ML training.\n\n## Transformations\n- **Regridding**: See regrid_params.json\n- **Normalization**: See no",
+      "container": null,
+      "description": "Processing step"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "workflow",
+      "processes": [],
+      "inputs": [],
+      "outputs": []
+    }
+  ],
+  "includes": [],
+  "params": {
+    "input": "\"data/*.nc\"",
+    "output_dir": "\"output\"",
+    "target_resolution": "\"1.40625\"",
+    "normalize_method": "\"zscore\"",
+    "train_ratio": "0.7",
+    "val_ratio": "0.15",
+    "variables": "\"tas,pr,psl\""
+  },
+  "stage_mapping": {
+    "ingest": [
+      "DOWNLOAD_DATA"
+    ],
+    "preprocess": [],
+    "transform": [
+      "INSPECT_DATA",
+      "REGRID_DATA",
+      "COMPUTE_NORM_STATS",
+      "NORMALIZE_DATA",
+      "SPLIT_DATA",
+      "GENERATE_DATACARD"
+    ],
+    "structure": [],
+    "output": []
+  },
+  "mode": "sidecar",
+  "data_snapshots": [
+    {
+      "path": "/tmp/climate_demo_data/normalize_mean.npz",
+      "filename": "normalize_mean.npz",
+      "format": "npz",
+      "size_bytes": 131332,
+      "checksum": "0b13fa762272c3ad",
+      "captured_at": "2026-02-04T12:14:32.897955",
+      "dimensions": {
+        "dim_0": 128,
+        "dim_1": 256
+      },
+      "coordinates": [],
+      "attributes": {},
+      "variables": {
+        "tas": {
+          "name": "tas",
+          "shape": [
+            128,
+            256
+          ],
+          "dtype": "float32",
+          "size": 32768,
+          "min": -3.913809061050415,
+          "max": 3.9309651851654053,
+          "mean": -0.006448505446314812,
+          "std": 1.0017341375350952,
+          "null_count": 0,
+          "nan_count": 0,
+          "inf_count": 0
+        }
+      }
+    },
+    {
+      "path": "/tmp/climate_demo_data/normalize_std.npz",
+      "filename": "normalize_std.npz",
+      "format": "npz",
+      "size_bytes": 131332,
+      "checksum": "5283c6b44fc16123",
+      "captured_at": "2026-02-04T12:14:32.900978",
+      "dimensions": {
+        "dim_0": 128,
+        "dim_1": 256
+      },
+      "coordinates": [],
+      "attributes": {},
+      "variables": {
+        "tas": {
+          "name": "tas",
+          "shape": [
+            128,
+            256
+          ],
+          "dtype": "float32",
+          "size": 32768,
+          "min": 0.1000271588563919,
+          "max": 4.721187114715576,
+          "mean": 0.8963606953620911,
+          "std": 0.5988379716873169,
+          "null_count": 0,
+          "nan_count": 0,
+          "inf_count": 0
+        }
+      }
+    },
+    {
+      "path": "/tmp/climate_demo_data/train_data.npz",
+      "filename": "train_data.npz",
+      "format": "npz",
+      "size_bytes": 13107460,
+      "checksum": "f0ebfd59535aaaad",
+      "captured_at": "2026-02-04T12:14:32.901824",
+      "dimensions": {
+        "dim_0": 100,
+        "dim_1": 128,
+        "dim_2": 256
+      },
+      "coordinates": [],
+      "attributes": {},
+      "variables": {
+        "tas": {
+          "name": "tas",
+          "shape": [
+            100,
+            128,
+            256
+          ],
+          "dtype": "float32",
+          "size": 3276800,
+          "min": -5.397122383117676,
+          "max": 5.244845390319824,
+          "mean": 0.0006539614405483007,
+          "std": 1.0002689361572266,
+          "null_count": 0,
+          "nan_count": 0,
+          "inf_count": 0
+        }
+      }
+    },
+    {
+      "path": "/tmp/climate_demo_data/val_data.npz",
+      "filename": "val_data.npz",
+      "format": "npz",
+      "size_bytes": 1310980,
+      "checksum": "f60c59cdef09720e",
+      "captured_at": "2026-02-04T12:14:32.947623",
+      "dimensions": {
+        "dim_0": 10,
+        "dim_1": 128,
+        "dim_2": 256
+      },
+      "coordinates": [],
+      "attributes": {},
+      "variables": {
+        "tas": {
+          "name": "tas",
+          "shape": [
+            10,
+            128,
+            256
+          ],
+          "dtype": "float32",
+          "size": 327680,
+          "min": -4.452193260192871,
+          "max": 4.322083950042725,
+          "mean": -0.0032679804135113955,
+          "std": 0.9990407824516296,
+          "null_count": 0,
+          "nan_count": 0,
+          "inf_count": 0
+        }
+      }
+    },
+    {
+      "path": "/tmp/climate_demo_data/processed_data.npz",
+      "filename": "processed_data.npz",
+      "format": "npz",
+      "size_bytes": 6553860,
+      "checksum": "90cd0242ccfe540f",
+      "captured_at": "2026-02-04T12:14:32.951151",
+      "dimensions": {
+        "dim_0": 50,
+        "dim_1": 128,
+        "dim_2": 256
+      },
+      "coordinates": [],
+      "attributes": {},
+      "variables": {
+        "tas": {
+          "name": "tas",
+          "shape": [
+            50,
+            128,
+            256
+          ],
+          "dtype": "float32",
+          "size": 1638400,
+          "min": -5.02743673324585,
+          "max": 4.629738807678223,
+          "mean": 0.0004762446042150259,
+          "std": 0.9999793171882629,
+          "null_count": 0,
+          "nan_count": 2,
+          "inf_count": 0
+        }
+      }
+    }
+  ],
+  "quality_summary": {
+    "files_scanned": 5,
+    "passed": 5,
+    "with_warnings": 1,
+    "failed": 0,
+    "issues": [
+      {
+        "check": "outlier",
+        "severity": "warning",
+        "message": "Extreme maximum: 4.721 (6.4\u03c3 from mean)",
+        "variable": "tas",
+        "details": {
+          "value": 4.721187114715576,
+          "z_score": 6.3870806465001815,
+          "type": "max"
+        }
+      },
+      {
+        "check": "nan_values",
+        "severity": "info",
+        "message": "2 NaN values (0.0%)",
+        "variable": "tas",
+        "details": {
+          "nan_count": 2,
+          "percentage": 0.0001220703125
+        }
+      }
+    ]
+  },
+  "transformations": {
+    "normalization": {
+      "method": "zscore",
+      "mean_file": "/tmp/climate_demo_data/normalize_mean.npz",
+      "std_file": "/tmp/climate_demo_data/normalize_std.npz",
+      "mean_values": {
+        "tas": -0.006448505446314812
+      },
+      "std_values": {
+        "tas": 0.8963606953620911
+      },
+      "min_values": {},
+      "max_values": {},
+      "computed_on": "unknown"
+    },
+    "splits": {
+      "method": "unknown",
+      "train_size": 100,
+      "val_size": 10,
+      "test_size": null,
+      "train_ratio": 0.9090909090909091,
+      "val_ratio": 0.09090909090909091,
+      "test_ratio": null,
+      "split_files": {
+        "train": "/tmp/climate_demo_data/train_data.npz",
+        "val": "/tmp/climate_demo_data/val_data.npz"
+      }
+    }
+  },
+  "transformation_quality": [
+    {
+      "check": "normalization_scope_unknown",
+      "severity": "info",
+      "message": "Could not determine if normalization was computed on training set or full dataset.",
+      "variable": null,
+      "details": {
+        "normalization_method": "zscore",
+        "computed_on": "unknown"
+      }
+    },
+    {
+      "check": "missing_test_split",
+      "severity": "warning",
+      "message": "Train and validation splits detected, but no test split found.",
+      "variable": null,
+      "details": {
+        "train_size": 100,
+        "val_size": 10,
+        "test_size": null
+      }
+    }
+  ],
+  "suggestions": [
+    {
+      "category": "splits",
+      "title": "Add a held-out test split",
+      "description": "A test split is essential for unbiased final model evaluation. The test set should only be used once, after all hyperparameter tuning is complete. Recommended split: 70% train, 15% validation, 15% test.",
+      "priority": 1,
+      "related_issue": "Train and validation splits detected, but no test split found.",
+      "code_example": "# Example split ratios\ntrain_ratio = 0.70\nval_ratio = 0.15\ntest_ratio = 0.15\n\n# For time series, use temporal splits (not random)\n# train: earliest data, val: middle, test: most recent",
+      "references": []
+    },
+    {
+      "category": "data_quality",
+      "title": "Investigate and handle outliers",
+      "description": "Variable 'tas' has extreme outliers. Investigate if these are data errors or valid extreme values. Consider clipping, log transform, or robust scaling.",
+      "priority": 2,
+      "related_issue": "Extreme maximum: 4.721 (6.4\u03c3 from mean)",
+      "code_example": "# Option 1: Clip to percentiles\nlower, upper = df['col'].quantile([0.01, 0.99])\ndf['col'] = df['col'].clip(lower, upper)\n\n# Option 2: Robust scaling (uses median/IQR)\nfrom sklearn.preprocessing import RobustScaler\nscaler = RobustScaler()\ndf['col'] = scaler.fit_transform(df[['col']])",
+      "references": []
+    },
+    {
+      "category": "reproducibility",
+      "title": "Document normalization scope",
+      "description": "Could not determine if normalization was computed on training data only. Add a config file or naming convention (e.g., 'train_mean.npz') to make this explicit for reproducibility.",
+      "priority": 2,
+      "related_issue": null,
+      "code_example": null,
+      "references": []
+    },
+    {
+      "category": "reproducibility",
+      "title": "Document split method",
+      "description": "The train/val/test split method is not documented. For time series data, use temporal splits. For i.i.d. data, random splits with a fixed seed. Add this to your config or Data Card.",
+      "priority": 2,
+      "related_issue": null,
+      "code_example": null,
+      "references": []
+    },
+    {
+      "category": "best_practices",
+      "title": "Add data validation steps",
+      "description": "No validation or QC steps detected in the workflow. Consider adding validation after each major transformation to catch issues early.",
+      "priority": 2,
+      "related_issue": null,
+      "code_example": "# Snakemake example\nrule validate_data:\n    input: \"{dataset}/processed/data.nc\"\n    output: \"{dataset}/processed/validation_report.json\"\n    shell:\n        \"\"\"\n        python scripts/validate.py {input} --output {output}\n        \"\"\"\n",
+      "references": []
+    },
+    {
+      "category": "documentation",
+      "title": "Generate a Data Card for the output dataset",
+      "description": "Create a Data Card documenting: data source, preprocessing steps, normalization parameters, split ratios, and known limitations. REDI can generate this automatically with --data-dir.",
+      "priority": 3,
+      "related_issue": null,
+      "code_example": null,
+      "references": [
+        "https://arxiv.org/abs/2204.01075"
+      ]
+    }
+  ],
+  "suggestions_summary": {
+    "total": 6,
+    "high_priority": 1,
+    "medium_priority": 4,
+    "low_priority": 1
+  }
+}

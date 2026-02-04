@@ -1,0 +1,180 @@
+{
+  "workflow_file": "examples/nextflow/bioinformatics_pipeline.nf",
+  "workflow_type": "nextflow",
+  "dsl_version": "2",
+  "processes": [
+    {
+      "name": "VALIDATE_SEQUENCES",
+      "inputs": [
+        "fasta"
+      ],
+      "outputs": [
+        "validated_*.fasta",
+        "seq_stats.json"
+      ],
+      "script": "# Validate FASTA format\n    seqkit stats ${fasta} -T > seq_stats.tsv\n\n    # Convert to JSON\n    echo '{\"num_seqs\": '\"\\$(tail -1 seq_stats.tsv | cut -f4)\"', \"total_len\": '\"\\$(tail -1 seq_stats.tsv | cu",
+      "container": "biocontainers/seqkit:2.3.1--h9ee0642_0",
+      "description": "Processing step"
+    },
+    {
+      "name": "FASTQC",
+      "inputs": [
+        "sequences"
+      ],
+      "outputs": [
+        "*.html",
+        "*.zip"
+      ],
+      "script": "# Note: FastQC is typically for FASTQ, this is illustrative\n    echo \"QC report for ${prefix}\" > ${prefix}_qc_report.html\n    zip ${prefix}_qc.zip ${prefix}_qc_report.html",
+      "container": "biocontainers/fastqc:0.12.1--hdfd78af_0",
+      "description": "Sequence quality control"
+    },
+    {
+      "name": "RUN_MSA",
+      "inputs": [
+        "sequences"
+      ],
+      "outputs": [
+        "*.a3m",
+        "msa_stats.json"
+      ],
+      "script": "# Run Clustal Omega for MSA\n    clustalo -i ${sequences} -o ${prefix}.a3m --threads=${threads} --force\n\n    # Generate stats\n    num_seqs=\\$(grep -c \"^>\" ${sequences})\n    echo '{\"num_sequences\": '\\$n",
+      "container": "biocontainers/clustalo:1.2.4--h87f3376_5",
+      "description": "Sequence alignment"
+    },
+    {
+      "name": "SEARCH_TEMPLATES",
+      "inputs": [
+        "msa"
+      ],
+      "outputs": [
+        "*.hhr",
+        "template_hits.json"
+      ],
+      "script": "# Search for templates (simplified - normally uses hhblits)\n    echo \"Template search results for ${prefix}\" > ${prefix}.hhr\n    echo '{\"num_hits\": 10, \"database\": \"${database}\"}' > template_hits.json",
+      "container": "biocontainers/hhsuite:3.3.0--py39pl5321h67e14b5_5",
+      "description": "Search sequence database"
+    },
+    {
+      "name": "PREDICT_STRUCTURE",
+      "inputs": [
+        "msa",
+        "templates"
+      ],
+      "outputs": [
+        "ranked_*.pdb",
+        "ranking_debug.json",
+        "timings.json"
+      ],
+      "script": "# Simulate structure prediction\n    echo \"HEADER PREDICTED STRUCTURE\" > ranked_0_${prefix}.pdb\n    echo \"ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C\" >> ranked_0_${p",
+      "container": "nvcr.io/nvidia/clara/alphafold:2.3.1",
+      "description": "Run prediction"
+    },
+    {
+      "name": "AMBER_RELAX",
+      "inputs": [
+        "structure"
+      ],
+      "outputs": [
+        "relaxed_*.pdb"
+      ],
+      "script": "# Simulate AMBER relaxation\n    cp ${structure} relaxed_${prefix}.pdb",
+      "container": "nvcr.io/nvidia/clara/alphafold:2.3.1",
+      "description": "Molecular dynamics relaxation"
+    },
+    {
+      "name": "MULTIQC",
+      "inputs": [
+        "qc_files",
+        "stats_files"
+      ],
+      "outputs": [
+        "multiqc_report.html",
+        "multiqc_data"
+      ],
+      "script": "mkdir -p multiqc_data\n\n    # Create summary report\n    echo \"<html><body><h1>MultiQC Report</h1>\" > multiqc_report.html\n    echo \"<h2>Processed Files</h2><ul>\" >> multiqc_report.html\n    for f in ${qc",
+      "container": "biocontainers/multiqc:1.14--pyhdfd78af_0",
+      "description": "Aggregate QC reports"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "STRUCTURE_PREDICTION",
+      "processes": [
+        "PREDICT_STRUCTURE",
+        "AMBER_RELAX",
+        "SEARCH_TEMPLATES",
+        "RUN_MSA"
+      ],
+      "inputs": [
+        "sequences"
+      ],
+      "outputs": [
+        "structures = AMBER_RELAX.out.relaxed",
+        "msa = RUN_MSA.out.msa",
+        "rankings = PREDICT_STRUCTURE.out.ranking"
+      ]
+    },
+    {
+      "name": "workflow",
+      "processes": [],
+      "inputs": [],
+      "outputs": []
+    }
+  ],
+  "includes": [],
+  "params": {
+    "input": "\"data/sequences.fasta\"",
+    "output_dir": "\"output\"",
+    "database": "\"uniref90\"",
+    "skip_msa": "false",
+    "max_cpus": "4"
+  },
+  "stage_mapping": {
+    "ingest": [],
+    "preprocess": [
+      "FASTQC",
+      "RUN_MSA",
+      "SEARCH_TEMPLATES"
+    ],
+    "transform": [
+      "VALIDATE_SEQUENCES",
+      "PREDICT_STRUCTURE"
+    ],
+    "structure": [
+      "AMBER_RELAX"
+    ],
+    "output": [
+      "MULTIQC"
+    ]
+  },
+  "mode": "sidecar",
+  "suggestions": [
+    {
+      "category": "reproducibility",
+      "title": "Record random seeds for reproducibility",
+      "description": "Set and record random seeds for any stochastic operations (train/test splits, data augmentation, shuffling). This ensures experiments can be exactly reproduced.",
+      "priority": 3,
+      "related_issue": null,
+      "code_example": "import numpy as np\nimport random\n\nSEED = 42\nnp.random.seed(SEED)\nrandom.seed(SEED)\n\n# Document in config or Data Card\n# random_seed: 42",
+      "references": []
+    },
+    {
+      "category": "documentation",
+      "title": "Generate a Data Card for the output dataset",
+      "description": "Create a Data Card documenting: data source, preprocessing steps, normalization parameters, split ratios, and known limitations. REDI can generate this automatically with --data-dir.",
+      "priority": 3,
+      "related_issue": null,
+      "code_example": null,
+      "references": [
+        "https://arxiv.org/abs/2204.01075"
+      ]
+    }
+  ],
+  "suggestions_summary": {
+    "total": 2,
+    "high_priority": 0,
+    "medium_priority": 0,
+    "low_priority": 2
+  }
+}
