@@ -2534,6 +2534,19 @@ Download examples (climate domain):
     download_group.add_argument("--year", type=int,
                                help="Year to download (for CDS/ERA5)")
 
+    # Publish options (catalog integration via SetGo)
+    publish_group = run_parser.add_argument_group("publish options",
+        "Publish processed dataset to a data catalog (requires SetGo)")
+    publish_group.add_argument("--publish", dest="publish_catalog",
+                              choices=["huggingface", "openmetadata"],
+                              help="Publish to catalog after processing")
+    publish_group.add_argument("--repo",
+                              help="Repository/dataset ID (e.g., org/dataset-name)")
+    publish_group.add_argument("--private", action="store_true",
+                              help="Make dataset private (default: public)")
+    publish_group.add_argument("--token",
+                              help="Auth token (or use HF_TOKEN env var)")
+
     # =========================================================================
     # redi sidecar
     # =========================================================================
@@ -2727,6 +2740,52 @@ def _handle_run_command(args):
         verify=verify
     )
 
+    # Handle publish to catalog if requested
+    publish_catalog = getattr(args, 'publish_catalog', None) or config.get('publish')
+    if publish_catalog and ctx:
+        output_dir = config.get('output_dir', args.output)
+        _handle_publish(
+            output_dir=output_dir,
+            catalog_type=publish_catalog,
+            repo_id=getattr(args, 'repo', None) or config.get('repo'),
+            private=getattr(args, 'private', False) or config.get('private', False),
+            token=getattr(args, 'token', None) or config.get('token'),
+            style=args.style
+        )
+
+
+def _handle_publish(output_dir: str, catalog_type: str, repo_id: str = None,
+                    private: bool = False, token: str = None, style: str = "rich"):
+    """Handle publishing to a data catalog via SetGo."""
+    from .publish import publish_to_catalog, format_publish_result, check_setgo_available
+
+    if style == "rich":
+        print_section("Publishing to Catalog")
+
+    if not check_setgo_available():
+        if style == "rich":
+            print(f"    {Colors.YELLOW}⚠ SetGo not installed{Colors.END}")
+            print(f"    {Colors.DIM}Install with: pip install setgo{Colors.END}")
+        return
+
+    result = publish_to_catalog(
+        output_dir=output_dir,
+        catalog_type=catalog_type,
+        repo_id=repo_id,
+        private=private,
+        token=token
+    )
+
+    if style == "rich":
+        print(format_publish_result(result, use_color=True))
+    elif style == "json":
+        import json
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        if result.success:
+            print(f"Published to {catalog_type}: {result.entity_url}")
+        else:
+            print(f"Publish failed: {result.message}")
 
 
 def _handle_sidecar_command(args):
