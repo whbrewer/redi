@@ -7,7 +7,7 @@
 #
 # The workflow is at: climate/ClimaX/snakemake_configs/TaiESM1/Snakefile
 
-workflow: /home/w1b/drai/domains/climate/ClimaX/snakemake_configs/TaiESM1/Snakefile
+workflow: /opt/drai/ClimaX/snakemake_configs/TaiESM1/Snakefile
 
 workflow_type: snakemake
 
