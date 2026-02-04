@@ -818,7 +818,7 @@ def run_sidecar(
     if workflow_type == "snakemake":
         return _sidecar_snakemake(workflow_path, output_dir, watch, style, data_path)
     elif workflow_type == "nextflow":
-        return _sidecar_nextflow(workflow_path, output_dir, watch, style)
+        return _sidecar_nextflow(workflow_path, output_dir, watch, style, data_path)
     else:
         if style == "rich":
             print(f"\n    {Colors.YELLOW}⚠ Workflow type '{workflow_type}' not yet supported{Colors.END}")
@@ -992,6 +992,21 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
                         icon = f"{Colors.DIM}ℹ{Colors.END}"
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
+    # Generate improvement suggestions
+    from .sidecar import generate_suggestions, format_suggestions_cli
+    all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
+    workflow_info = {'rules': rules, 'stage_mapping': stage_mapping}
+    suggestions = generate_suggestions(
+        quality_issues=all_quality_issues,
+        transformation_report=transform_report,
+        workflow_info=workflow_info,
+        data_snapshots=snapshots,
+    )
+
+    if suggestions and style == "rich":
+        print_section("Suggestions for Improvement")
+        print(format_suggestions_cli(suggestions, use_color=True))
+
     # Create output directory and save analysis
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -1024,6 +1039,16 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     if transform_issues:
         report["transformation_quality"] = [issue.to_dict() for issue in transform_issues]
 
+    # Add suggestions
+    if suggestions:
+        report["suggestions"] = [s.to_dict() for s in suggestions]
+        report["suggestions_summary"] = {
+            "total": len(suggestions),
+            "high_priority": sum(1 for s in suggestions if s.priority == 1),
+            "medium_priority": sum(1 for s in suggestions if s.priority == 2),
+            "low_priority": sum(1 for s in suggestions if s.priority == 3),
+        }
+
     # Add execution log info if parsed
     if log_report:
         report["execution_log"] = {
@@ -1047,7 +1072,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
         datacard_path = out_path / "DATA_CARD.md"
         datacard_content = _generate_sidecar_datacard(
             workflow_path, rules, stage_mapping, snapshots, quality_reports,
-            transform_report, log_report
+            transform_report, log_report, suggestions
         )
         datacard_path.write_text(datacard_content)
 
@@ -1170,7 +1195,8 @@ def _run_watch_mode(workflow_path: Path, data_dir: Optional[Path], output_dir: s
 
 def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: dict,
                                 snapshots: list, quality_reports: list,
-                                transform_report=None, log_report=None) -> str:
+                                transform_report=None, log_report=None,
+                                suggestions=None) -> str:
     """Generate a Data Card markdown from sidecar analysis."""
     lines = [
         f"# Data Card: {workflow_path.parent.name}",
@@ -1304,6 +1330,12 @@ def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: 
             for issue in warnings[:10]:
                 lines.append(f"- **{issue.check_name}** [{issue.variable}]: {issue.message}")
 
+    # Suggestions section
+    if suggestions:
+        from .sidecar import format_suggestions_markdown
+        lines.append("")
+        lines.append(format_suggestions_markdown(suggestions))
+
     lines.extend([
         "",
         "---",
@@ -1395,11 +1427,566 @@ def _map_rules_to_stages(rules: List[dict]) -> dict:
     return stage_mapping
 
 
-def _sidecar_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: str):
+def _sidecar_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: str, data_dir: Optional[Path] = None):
     """Sidecar for Nextflow workflows."""
     if style == "rich":
-        print(f"\n    {Colors.YELLOW}⚠ Nextflow sidecar support coming soon{Colors.END}")
-    return None
+        print_section("Parsing Nextflow Workflow")
+
+    # Parse the Nextflow file to extract processes and workflows
+    from .sidecar import (
+        parse_nextflow_file,
+        map_processes_to_stages as nf_map_processes_to_stages,
+        find_nextflow_logs,
+        capture_snapshot,
+        check_snapshot,
+        detect_transformations,
+        check_transformation_report,
+    )
+
+    parse_result = parse_nextflow_file(workflow_path)
+
+    if parse_result.errors:
+        if style == "rich":
+            for err in parse_result.errors:
+                print(f"    {Colors.RED}✗ {err}{Colors.END}")
+        return None
+
+    if style == "rich":
+        print(f"    DSL version: {Colors.BOLD}{parse_result.dsl_version}{Colors.END}")
+        print(f"    Found {Colors.BOLD}{len(parse_result.processes)}{Colors.END} processes:")
+        for proc in parse_result.processes:
+            print(f"      • {proc.name}: {proc.description}")
+        if parse_result.workflows:
+            print(f"    Found {Colors.BOLD}{len(parse_result.workflows)}{Colors.END} workflows:")
+            for wf in parse_result.workflows:
+                print(f"      • {wf.name}: {len(wf.processes)} process calls")
+        if parse_result.includes:
+            print(f"    Found {Colors.BOLD}{len(parse_result.includes)}{Colors.END} includes")
+
+    # Map processes to REDI pipeline stages
+    stage_mapping = nf_map_processes_to_stages(parse_result.processes)
+
+    if style == "rich":
+        print_section("Stage Mapping")
+        for stage, mapped_procs in stage_mapping.items():
+            if mapped_procs:
+                print(f"    {stage}: {', '.join(mapped_procs)}")
+
+    # Find and parse Nextflow logs
+    logs = find_nextflow_logs(workflow_path.parent)
+    log_info = None
+    if logs:
+        if style == "rich":
+            print_section("Nextflow Logs Found")
+            for log in logs[:5]:
+                print(f"    • {log.name}")
+            if len(logs) > 5:
+                print(f"    {Colors.DIM}... and {len(logs) - 5} more{Colors.END}")
+        log_info = {"logs_found": len(logs), "log_files": [str(l) for l in logs[:10]]}
+    else:
+        if style == "rich":
+            print_section("Nextflow Logs")
+            print(f"    {Colors.DIM}No Nextflow logs found{Colors.END}")
+
+    # Scan data files if data_dir provided
+    snapshots = []
+    quality_reports = []
+
+    if data_dir and data_dir.exists():
+        if style == "rich":
+            print_section("Scanning Data Files")
+
+        # Find all data files
+        data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr', '.fasta', '.fa', '.pdb'}
+        data_files = []
+        for ext in data_extensions:
+            data_files.extend(data_dir.rglob(f'*{ext}'))
+
+        # Sort by modification time (oldest first = earlier in pipeline)
+        data_files = sorted(data_files, key=lambda f: f.stat().st_mtime)
+
+        if style == "rich":
+            print(f"    Found {Colors.BOLD}{len(data_files)}{Colors.END} data files")
+
+        # Capture snapshots (limit to first 20 for speed)
+        for f in data_files[:20]:
+            try:
+                if style == "rich":
+                    print(f"    📊 Scanning {f.name}...", end="", flush=True)
+
+                snapshot = capture_snapshot(f)
+                snapshots.append(snapshot)
+
+                # Run quality checks
+                qr = check_snapshot(snapshot)
+                quality_reports.append(qr)
+
+                if style == "rich":
+                    if qr.passed:
+                        print(f"\r    ✅ {f.name}: {len(snapshot.variables)} vars, {qr.summary()}")
+                    else:
+                        print(f"\r    ⚠️  {f.name}: {len(snapshot.variables)} vars, {qr.summary()}")
+
+            except Exception as e:
+                if style == "rich":
+                    print(f"\r    ❌ {f.name}: {str(e)[:50]}")
+
+        if len(data_files) > 20:
+            if style == "rich":
+                print(f"    {Colors.DIM}... and {len(data_files) - 20} more files{Colors.END}")
+
+    # Detect transformation parameters
+    transform_report = None
+    if data_dir and data_dir.exists():
+        if style == "rich":
+            print_section("Detecting Transformation Parameters")
+
+        transform_report = detect_transformations(data_dir, snapshots)
+
+        if transform_report.normalization:
+            norm = transform_report.normalization
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Normalization detected: {Colors.BOLD}{norm.method}{Colors.END}")
+                if norm.mean_file:
+                    print(f"      Mean file: {Path(norm.mean_file).name}")
+                if norm.std_file:
+                    print(f"      Std file: {Path(norm.std_file).name}")
+                if norm.mean_values:
+                    print(f"      Variables: {len(norm.mean_values)}")
+                    for var, mean in list(norm.mean_values.items())[:3]:
+                        std = norm.std_values.get(var, 'N/A')
+                        if isinstance(std, (int, float)):
+                            print(f"        {var}: mean={mean:.4g}, std={std:.4g}")
+                        else:
+                            print(f"        {var}: mean={mean:.4g}")
+                    if len(norm.mean_values) > 3:
+                        print(f"        {Colors.DIM}... and {len(norm.mean_values) - 3} more{Colors.END}")
+
+        if transform_report.splits:
+            splits = transform_report.splits
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Train/val/test split detected: {Colors.BOLD}{splits.method}{Colors.END}")
+                if splits.train_size:
+                    print(f"      Train: {splits.train_size:,} samples")
+                if splits.val_size:
+                    print(f"      Val: {splits.val_size:,} samples")
+                if splits.test_size:
+                    print(f"      Test: {splits.test_size:,} samples")
+
+        if transform_report.regrid:
+            regrid = transform_report.regrid
+            if style == "rich":
+                print(f"    {Colors.GREEN}✓{Colors.END} Regridding detected: {Colors.BOLD}{regrid.method}{Colors.END}")
+                if regrid.target_resolution:
+                    print(f"      Target resolution: {regrid.target_resolution[0]}° x {regrid.target_resolution[1]}°")
+
+        if not transform_report.normalization and not transform_report.splits and not transform_report.regrid:
+            if style == "rich":
+                print(f"    {Colors.DIM}No transformation parameters detected{Colors.END}")
+
+    # Check for data quality issues in transformation report
+    transform_issues = []
+    if transform_report:
+        transform_issues = check_transformation_report(transform_report)
+
+        if transform_issues:
+            if style == "rich":
+                print_section("Transformation Quality Checks")
+                for issue in transform_issues:
+                    if issue.severity.value == 'error':
+                        icon = f"{Colors.RED}✗{Colors.END}"
+                    elif issue.severity.value == 'warning':
+                        icon = f"{Colors.YELLOW}⚠{Colors.END}"
+                    else:
+                        icon = f"{Colors.DIM}ℹ{Colors.END}"
+                    print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
+
+    # Generate improvement suggestions
+    from .sidecar import generate_suggestions, format_suggestions_cli
+    all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
+    # Convert processes to rules-like format for workflow_info
+    rules_like = [{'name': p.name, 'description': p.description} for p in parse_result.processes]
+    workflow_info = {'rules': rules_like, 'stage_mapping': stage_mapping}
+    suggestions = generate_suggestions(
+        quality_issues=all_quality_issues,
+        transformation_report=transform_report,
+        workflow_info=workflow_info,
+        data_snapshots=snapshots,
+    )
+
+    if suggestions and style == "rich":
+        print_section("Suggestions for Improvement")
+        print(format_suggestions_cli(suggestions, use_color=True))
+
+    # Create output directory and save analysis
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate sidecar report
+    report = {
+        "workflow_file": str(workflow_path),
+        "workflow_type": "nextflow",
+        "dsl_version": parse_result.dsl_version,
+        "processes": [p.to_dict() for p in parse_result.processes],
+        "workflows": [w.to_dict() for w in parse_result.workflows],
+        "includes": [{"module": i.module_name, "from": i.source_path, "alias": i.alias} for i in parse_result.includes],
+        "params": parse_result.params,
+        "stage_mapping": stage_mapping,
+        "mode": "sidecar",
+    }
+
+    # Add data snapshots if we scanned
+    if snapshots:
+        report["data_snapshots"] = [s.to_dict() for s in snapshots]
+        report["quality_summary"] = {
+            "files_scanned": len(snapshots),
+            "passed": sum(1 for qr in quality_reports if qr.passed),
+            "with_warnings": sum(1 for qr in quality_reports if qr.has_warnings),
+            "failed": sum(1 for qr in quality_reports if not qr.passed),
+            "issues": [issue.to_dict() for qr in quality_reports for issue in qr.issues]
+        }
+
+    # Add transformation parameters if detected
+    if transform_report:
+        report["transformations"] = transform_report.to_dict()
+
+    # Add transformation quality issues
+    if transform_issues:
+        report["transformation_quality"] = [issue.to_dict() for issue in transform_issues]
+
+    # Add suggestions
+    if suggestions:
+        report["suggestions"] = [s.to_dict() for s in suggestions]
+        report["suggestions_summary"] = {
+            "total": len(suggestions),
+            "high_priority": sum(1 for s in suggestions if s.priority == 1),
+            "medium_priority": sum(1 for s in suggestions if s.priority == 2),
+            "low_priority": sum(1 for s in suggestions if s.priority == 3),
+        }
+
+    # Add log info
+    if log_info:
+        report["execution_logs"] = log_info
+
+    import json
+    report_path = out_path / "sidecar_report.json"
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2, default=str)
+
+    # Generate Data Card markdown if we have snapshots or processes
+    if snapshots or parse_result.processes:
+        datacard_path = out_path / "DATA_CARD.md"
+        datacard_content = _generate_nextflow_datacard(
+            workflow_path, parse_result, stage_mapping, snapshots, quality_reports,
+            transform_report, suggestions
+        )
+        datacard_path.write_text(datacard_content)
+
+        if style == "rich":
+            print_section("Output")
+            print(f"    📋 {Colors.BOLD}sidecar_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+            print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+    else:
+        if style == "rich":
+            print_section("Output")
+            print(f"    📋 {Colors.BOLD}sidecar_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+
+    if style == "rich":
+        print()
+        print(f"{Colors.GREEN}{Colors.BOLD}✓ Nextflow sidecar analysis complete{Colors.END}")
+        if not data_dir:
+            print(f"{Colors.DIM}  Tip: Use --data-dir to scan intermediate data files{Colors.END}")
+        print()
+
+    # Watch mode: monitor for changes and re-analyze
+    if watch:
+        _run_nextflow_watch_mode(workflow_path, data_dir, output_dir, style)
+
+    return report
+
+
+def _generate_nextflow_datacard(workflow_path: Path, parse_result, stage_mapping: dict,
+                                 snapshots: list, quality_reports: list,
+                                 transform_report=None, suggestions=None) -> str:
+    """Generate a Data Card markdown from Nextflow sidecar analysis."""
+    from datetime import datetime
+
+    lines = [
+        f"# Data Card: {workflow_path.parent.name}",
+        "",
+        f"**Generated by:** REDI Sidecar",
+        f"**Workflow:** `{workflow_path.name}`",
+        f"**Workflow Type:** Nextflow DSL{parse_result.dsl_version}",
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+    ]
+
+    # Processes section
+    if parse_result.processes:
+        lines.extend([
+            "## Processes",
+            "",
+            "| Process | Description | Inputs | Outputs |",
+            "|---------|-------------|--------|---------|",
+        ])
+        for proc in parse_result.processes:
+            inputs = ", ".join(proc.inputs[:3]) if proc.inputs else "-"
+            if len(proc.inputs) > 3:
+                inputs += f" (+{len(proc.inputs) - 3})"
+            outputs = ", ".join(proc.outputs[:3]) if proc.outputs else "-"
+            if len(proc.outputs) > 3:
+                outputs += f" (+{len(proc.outputs) - 3})"
+            lines.append(f"| {proc.name} | {proc.description or 'Processing step'} | {inputs} | {outputs} |")
+        lines.append("")
+
+    # Stage mapping section
+    has_mapping = any(procs for procs in stage_mapping.values())
+    if has_mapping:
+        lines.extend([
+            "## Stage Mapping",
+            "",
+            "| REDI Stage | Nextflow Processes |",
+            "|------------|-------------------|",
+        ])
+        for stage, procs in stage_mapping.items():
+            if procs:
+                lines.append(f"| {stage} | {', '.join(procs)} |")
+        lines.append("")
+
+    # Workflows section
+    if parse_result.workflows:
+        lines.extend([
+            "## Workflows",
+            "",
+        ])
+        for wf in parse_result.workflows:
+            lines.append(f"### {wf.name}")
+            if wf.processes:
+                lines.append(f"- **Process calls:** {', '.join(wf.processes)}")
+            if wf.inputs:
+                lines.append(f"- **Inputs:** {', '.join(wf.inputs)}")
+            if wf.outputs:
+                lines.append(f"- **Outputs:** {', '.join(wf.outputs)}")
+            lines.append("")
+
+    # Params section
+    if parse_result.params:
+        lines.extend([
+            "## Parameters",
+            "",
+            "| Parameter | Value |",
+            "|-----------|-------|",
+        ])
+        for name, value in list(parse_result.params.items())[:20]:
+            # Truncate long values
+            val_str = str(value)[:50] + "..." if len(str(value)) > 50 else str(value)
+            lines.append(f"| `params.{name}` | `{val_str}` |")
+        if len(parse_result.params) > 20:
+            lines.append(f"| ... | ({len(parse_result.params) - 20} more) |")
+        lines.append("")
+
+    # Transformations section
+    if transform_report:
+        lines.extend([
+            "## Transformations",
+            "",
+        ])
+
+        if transform_report.normalization:
+            norm = transform_report.normalization
+            lines.extend([
+                "### Normalization",
+                f"- **Method:** {norm.method}",
+            ])
+            if norm.mean_file:
+                lines.append(f"- **Mean file:** `{Path(norm.mean_file).name}`")
+            if norm.std_file:
+                lines.append(f"- **Std file:** `{Path(norm.std_file).name}`")
+            if norm.computed_on:
+                lines.append(f"- **Computed on:** {norm.computed_on}")
+            lines.append("")
+
+        if transform_report.splits:
+            splits = transform_report.splits
+            lines.extend([
+                "### Train/Val/Test Split",
+                f"- **Method:** {splits.method}",
+            ])
+            if splits.train_size:
+                lines.append(f"- **Train:** {splits.train_size:,} samples")
+            if splits.val_size:
+                lines.append(f"- **Val:** {splits.val_size:,} samples")
+            if splits.test_size:
+                lines.append(f"- **Test:** {splits.test_size:,} samples")
+            lines.append("")
+
+        if transform_report.regrid:
+            regrid = transform_report.regrid
+            lines.extend([
+                "### Regridding",
+                f"- **Method:** {regrid.method}",
+            ])
+            if regrid.target_resolution:
+                lines.append(f"- **Target resolution:** {regrid.target_resolution[0]}° x {regrid.target_resolution[1]}°")
+            lines.append("")
+
+    # Data files section
+    if snapshots:
+        lines.extend([
+            "## Data Files",
+            "",
+            "| File | Variables | Shape | Issues |",
+            "|------|-----------|-------|--------|",
+        ])
+        for i, snap in enumerate(snapshots[:15]):
+            fname = Path(snap.path).name
+            nvars = len(snap.variables)
+            # Get shape from first variable if available
+            if snap.variables:
+                first_var = list(snap.variables.values())[0]
+                shape = str(first_var.shape) if first_var.shape else "-"
+            else:
+                shape = "-"
+            # Get issues from quality report
+            if i < len(quality_reports):
+                qr = quality_reports[i]
+                issues = qr.summary() if not qr.passed else "✓ OK"
+            else:
+                issues = "-"
+            lines.append(f"| `{fname}` | {nvars} | {shape} | {issues} |")
+        if len(snapshots) > 15:
+            lines.append(f"| ... | | | ({len(snapshots) - 15} more files) |")
+        lines.append("")
+
+    # Quality summary
+    if quality_reports:
+        passed = sum(1 for qr in quality_reports if qr.passed)
+        warned = sum(1 for qr in quality_reports if qr.has_warnings)
+        failed = sum(1 for qr in quality_reports if not qr.passed)
+        lines.extend([
+            "## Quality Summary",
+            "",
+            f"- **Files scanned:** {len(quality_reports)}",
+            f"- **Passed:** {passed}",
+            f"- **With warnings:** {warned}",
+            f"- **Failed:** {failed}",
+            "",
+        ])
+
+    # Includes section
+    if parse_result.includes:
+        lines.extend([
+            "## Module Includes",
+            "",
+        ])
+        for inc in parse_result.includes:
+            if inc.alias:
+                lines.append(f"- `{inc.module_name}` as `{inc.alias}` from `{inc.source_path}`")
+            else:
+                lines.append(f"- `{inc.module_name}` from `{inc.source_path}`")
+        lines.append("")
+
+    # Suggestions section
+    if suggestions:
+        from .sidecar import format_suggestions_markdown
+        lines.append(format_suggestions_markdown(suggestions))
+
+    lines.extend([
+        "",
+        "---",
+        "*Generated by REDI Sidecar - Observability for Data Pipelines*",
+    ])
+
+    return "\n".join(lines)
+
+
+def _run_nextflow_watch_mode(workflow_path: Path, data_dir: Optional[Path], output_dir: str, style: str):
+    """Run watch mode for Nextflow - monitor for file changes and re-analyze."""
+    import time
+
+    # Collect files to watch
+    watch_files = [workflow_path]
+    if data_dir and data_dir.exists():
+        data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr', '.fasta', '.fa', '.pdb'}
+        for ext in data_extensions:
+            watch_files.extend(data_dir.rglob(f'*{ext}'))
+
+    # Also watch Nextflow logs
+    nextflow_log = workflow_path.parent / ".nextflow.log"
+    if nextflow_log.exists():
+        watch_files.append(nextflow_log)
+
+    # Watch work directory for new outputs
+    work_dir = workflow_path.parent / "work"
+    if work_dir.exists():
+        watch_files.extend(list(work_dir.rglob(".command.log"))[:20])
+
+    # Record initial timestamps
+    file_mtimes = {}
+    for f in watch_files:
+        if f.exists():
+            try:
+                file_mtimes[str(f)] = f.stat().st_mtime
+            except OSError:
+                pass
+
+    if style == "rich":
+        print(f"\n{Colors.CYAN}👁 Watch mode active{Colors.END}")
+        print(f"  Monitoring {Colors.BOLD}{len(file_mtimes)}{Colors.END} files for changes")
+        print(f"  {Colors.DIM}Press Ctrl+C to stop{Colors.END}\n")
+
+    poll_interval = 2.0  # seconds
+
+    try:
+        while True:
+            time.sleep(poll_interval)
+
+            # Check for changes
+            changed_files = []
+            new_files = []
+
+            # Check existing files for modifications
+            for path_str, old_mtime in list(file_mtimes.items()):
+                path = Path(path_str)
+                if path.exists():
+                    try:
+                        new_mtime = path.stat().st_mtime
+                        if new_mtime > old_mtime:
+                            changed_files.append(path)
+                            file_mtimes[path_str] = new_mtime
+                    except OSError:
+                        pass
+
+            # Check for new files in data_dir
+            if data_dir and data_dir.exists():
+                for ext in data_extensions:
+                    for f in data_dir.rglob(f'*{ext}'):
+                        if str(f) not in file_mtimes:
+                            new_files.append(f)
+                            try:
+                                file_mtimes[str(f)] = f.stat().st_mtime
+                            except OSError:
+                                pass
+
+            # Re-run analysis if changes detected
+            if changed_files or new_files:
+                if style == "rich":
+                    timestamp = time.strftime("%H:%M:%S")
+                    print(f"\n{Colors.YELLOW}[{timestamp}] Changes detected:{Colors.END}")
+                    for f in changed_files[:3]:
+                        print(f"  {Colors.DIM}modified:{Colors.END} {f.name}")
+                    for f in new_files[:3]:
+                        print(f"  {Colors.DIM}new:{Colors.END} {f.name}")
+                    if len(changed_files) + len(new_files) > 6:
+                        print(f"  {Colors.DIM}... and {len(changed_files) + len(new_files) - 6} more{Colors.END}")
+                    print()
+
+                # Re-run the analysis
+                _sidecar_nextflow(workflow_path, output_dir, False, style, data_dir)
+
+    except KeyboardInterrupt:
+        if style == "rich":
+            print(f"\n{Colors.DIM}Watch mode stopped{Colors.END}")
 
 
 # =============================================================================

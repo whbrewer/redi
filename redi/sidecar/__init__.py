@@ -29,6 +29,23 @@ from .snakemake_log import (
     find_latest_log,
     find_all_logs,
 )
+from .nextflow_parser import (
+    NextflowProcess,
+    NextflowWorkflow,
+    NextflowInclude,
+    NextflowParseResult,
+    parse_nextflow_file,
+    map_processes_to_stages,
+    find_nextflow_logs,
+)
+from .suggestions import (
+    Suggestion,
+    SuggestionCategory,
+    SuggestionsReport,
+    generate_suggestions,
+    format_suggestions_markdown,
+    format_suggestions_cli,
+)
 
 __all__ = [
     "DataSnapshot",
@@ -51,4 +68,17 @@ __all__ = [
     "parse_snakemake_log",
     "find_latest_log",
     "find_all_logs",
+    "NextflowProcess",
+    "NextflowWorkflow",
+    "NextflowInclude",
+    "NextflowParseResult",
+    "parse_nextflow_file",
+    "map_processes_to_stages",
+    "find_nextflow_logs",
+    "Suggestion",
+    "SuggestionCategory",
+    "SuggestionsReport",
+    "generate_suggestions",
+    "format_suggestions_markdown",
+    "format_suggestions_cli",
 ]
