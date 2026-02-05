@@ -2559,7 +2559,7 @@ Download examples (climate domain):
     run_parser.add_argument("-d", "--domain",
                            choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
                            help="Scientific domain (auto-detected if not specified)")
-    run_parser.add_argument("-o", "--output", default="./output", help="Output directory (base path)")
+    run_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     run_parser.add_argument("--unique", action="store_true",
                            help="Append timestamp to output dir for unique runs")
     run_parser.add_argument("--hash-content", action="store_true", dest="hash_content",
@@ -2632,7 +2632,7 @@ Examples:
     sidecar_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
                                 choices=["auto", "snakemake", "nextflow", "bash"],
                                 help="Workflow type (auto-detected if not specified)")
-    sidecar_parser.add_argument("-o", "--output", default="./output", help="Output directory (base path)")
+    sidecar_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     sidecar_parser.add_argument("--unique", action="store_true",
                                 help="Append timestamp to output dir for unique runs")
     sidecar_parser.add_argument("--data-dir", dest="data_dir",
@@ -2659,7 +2659,7 @@ Examples:
         """
     )
     discover_parser.add_argument("input", nargs="?", help="Path to data file or directory")
-    discover_parser.add_argument("-o", "--output", default="./output", help="Output directory (base path)")
+    discover_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     discover_parser.add_argument("--unique", action="store_true",
                                 help="Append timestamp to output dir for unique runs")
     discover_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
@@ -2786,21 +2786,21 @@ def _handle_run_command(args):
         sys.exit(1)
 
     # Determine output directory
-    # If user explicitly set -o to something other than default, use it directly
-    # Otherwise, generate hash-based output dir from input files
-    explicit_output = args.output != './output' or config.get('output_dir')
-    if explicit_output:
-        output_dir = config.get('output_dir', args.output)
+    # If -o is explicitly set, use it directly (no hash)
+    # Otherwise, generate hash-based output dir
+    if args.output:
+        output_dir = args.output
     elif input_paths:
+        base_dir = config.get('output_dir') or './output'
         output_dir = generate_output_dir(
             input_paths=input_paths,
-            base_dir=args.output,
+            base_dir=base_dir,
             unique=getattr(args, 'unique', False),
             hash_content=getattr(args, 'hash_content', False),
         )
     else:
-        # Download mode without input files - use default
-        output_dir = args.output
+        # Download mode without input files - use config or default
+        output_dir = config.get('output_dir') or './output'
 
     config['output_dir'] = output_dir
 
@@ -2902,14 +2902,16 @@ def _handle_sidecar_command(args):
 
     workflow_type = args.workflow_type if args.workflow_type != 'auto' else config.get('workflow_type', 'auto')
 
-    # Determine output directory - use hash-based naming if not explicitly set
-    explicit_output = args.output != './output' or config.get('output_dir')
-    if explicit_output:
-        output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    # Determine output directory
+    # If -o is explicitly set, use it directly (no hash)
+    # Otherwise, generate hash-based output dir
+    if args.output:
+        output_dir = args.output
     else:
+        base_dir = config.get('output_dir') or './output'
         output_dir = generate_output_dir(
             input_paths=[Path(workflow_file)],
-            base_dir=args.output,
+            base_dir=base_dir,
             unique=getattr(args, 'unique', False),
         )
 
@@ -2952,14 +2954,16 @@ def _handle_discover_command(args):
         print(f"{Colors.RED}Error: input path required. Provide on CLI or set in config.{Colors.END}")
         sys.exit(1)
 
-    # Determine output directory - use hash-based naming if not explicitly set
-    explicit_output = args.output != './output' or config.get('output_dir')
-    if explicit_output:
-        output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    # Determine output directory
+    # If -o is explicitly set, use it directly (no hash)
+    # Otherwise, generate hash-based output dir
+    if args.output:
+        output_dir = args.output
     else:
+        base_dir = config.get('output_dir') or './output'
         output_dir = generate_output_dir(
             input_paths=[Path(input_path)],
-            base_dir=args.output,
+            base_dir=base_dir,
             unique=getattr(args, 'unique', False),
         )
 
