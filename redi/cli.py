@@ -138,6 +138,67 @@ def expand_input_paths(input_args: List[str]) -> List[Path]:
     return expanded_paths
 
 
+def generate_output_dir(
+    input_paths: List[Path],
+    base_dir: str = "./output",
+    unique: bool = False,
+    hash_content: bool = False,
+) -> str:
+    """Generate a hash-based output directory name.
+
+    Creates deterministic output directories based on input file characteristics.
+    Same inputs will produce the same output directory (unless --unique is used).
+
+    Args:
+        input_paths: List of input file paths
+        base_dir: Base output directory (default: ./output)
+        unique: If True, append timestamp to ensure uniqueness
+        hash_content: If True, hash file content (slower but more accurate)
+
+    Returns:
+        Path string like "./output/mydata_a3f2b1c" or "./output/mydata_a3f2b1c_0204_1430"
+    """
+    import hashlib
+    from datetime import datetime
+
+    if not input_paths:
+        return base_dir
+
+    # Use first file for the base name
+    primary = input_paths[0]
+    basename = primary.stem  # filename without extension
+
+    # Build hash input: path + size for each file
+    hash_input = []
+    for p in input_paths:
+        try:
+            if hash_content and p.stat().st_size < 100 * 1024 * 1024:  # < 100MB
+                # Hash first 64KB of content
+                with open(p, 'rb') as f:
+                    content_sample = f.read(65536)
+                hash_input.append(f"{p}:{p.stat().st_size}:{hashlib.md5(content_sample).hexdigest()}")
+            else:
+                # Just path + size (fast)
+                hash_input.append(f"{p}:{p.stat().st_size}")
+        except (OSError, IOError):
+            # File doesn't exist yet or can't be read - use path only
+            hash_input.append(str(p))
+
+    # Generate short hash
+    combined = "|".join(hash_input)
+    hash_digest = hashlib.sha256(combined.encode()).hexdigest()[:7]
+
+    # Build output directory name
+    dir_name = f"{basename}_{hash_digest}"
+
+    if unique:
+        # Append timestamp for uniqueness: MMDD_HHMM
+        timestamp = datetime.now().strftime("%m%d_%H%M")
+        dir_name = f"{dir_name}_{timestamp}"
+
+    return str(Path(base_dir) / dir_name)
+
+
 # =============================================================================
 # ORCHESTRATOR MODE (redi run)
 # =============================================================================
@@ -2498,7 +2559,11 @@ Download examples (climate domain):
     run_parser.add_argument("-d", "--domain",
                            choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
                            help="Scientific domain (auto-detected if not specified)")
-    run_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    run_parser.add_argument("-o", "--output", default="./output", help="Output directory (base path)")
+    run_parser.add_argument("--unique", action="store_true",
+                           help="Append timestamp to output dir for unique runs")
+    run_parser.add_argument("--hash-content", action="store_true", dest="hash_content",
+                           help="Hash file content (not just path+size) for output dir naming")
     run_parser.add_argument("-s", "--stages",
                            help="Comma-separated list of stages to run. "
                                 "Available: ingest, preprocess, transform, structure, output. "
@@ -2567,7 +2632,9 @@ Examples:
     sidecar_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
                                 choices=["auto", "snakemake", "nextflow", "bash"],
                                 help="Workflow type (auto-detected if not specified)")
-    sidecar_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    sidecar_parser.add_argument("-o", "--output", default="./output", help="Output directory (base path)")
+    sidecar_parser.add_argument("--unique", action="store_true",
+                                help="Append timestamp to output dir for unique runs")
     sidecar_parser.add_argument("--data-dir", dest="data_dir",
                                 help="Directory containing data files to scan for statistics")
     sidecar_parser.add_argument("--watch", action="store_true",
@@ -2592,7 +2659,9 @@ Examples:
         """
     )
     discover_parser.add_argument("input", nargs="?", help="Path to data file or directory")
-    discover_parser.add_argument("-o", "--output", default="./output", help="Output directory")
+    discover_parser.add_argument("-o", "--output", default="./output", help="Output directory (base path)")
+    discover_parser.add_argument("--unique", action="store_true",
+                                help="Append timestamp to output dir for unique runs")
     discover_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                                 help="Output style")
     discover_parser.add_argument("--no-interactive", action="store_true",
@@ -2716,6 +2785,25 @@ def _handle_run_command(args):
         print(f"{Colors.DIM}Tip: Use --download to fetch data from ESGF or CDS{Colors.END}")
         sys.exit(1)
 
+    # Determine output directory
+    # If user explicitly set -o to something other than default, use it directly
+    # Otherwise, generate hash-based output dir from input files
+    explicit_output = args.output != './output' or config.get('output_dir')
+    if explicit_output:
+        output_dir = config.get('output_dir', args.output)
+    elif input_paths:
+        output_dir = generate_output_dir(
+            input_paths=input_paths,
+            base_dir=args.output,
+            unique=getattr(args, 'unique', False),
+            hash_content=getattr(args, 'hash_content', False),
+        )
+    else:
+        # Download mode without input files - use default
+        output_dir = args.output
+
+    config['output_dir'] = output_dir
+
     # Run pipeline
     stages = config.get('stages')
     if args.stages:
@@ -2813,7 +2901,18 @@ def _handle_sidecar_command(args):
         sys.exit(1)
 
     workflow_type = args.workflow_type if args.workflow_type != 'auto' else config.get('workflow_type', 'auto')
-    output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+
+    # Determine output directory - use hash-based naming if not explicitly set
+    explicit_output = args.output != './output' or config.get('output_dir')
+    if explicit_output:
+        output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    else:
+        output_dir = generate_output_dir(
+            input_paths=[Path(workflow_file)],
+            base_dir=args.output,
+            unique=getattr(args, 'unique', False),
+        )
+
     watch = args.watch or config.get('watch', False)
     style = args.style if args.style != 'rich' else config.get('style', 'rich')
     data_dir = args.data_dir or config.get('data_dir')
@@ -2853,7 +2952,17 @@ def _handle_discover_command(args):
         print(f"{Colors.RED}Error: input path required. Provide on CLI or set in config.{Colors.END}")
         sys.exit(1)
 
-    output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    # Determine output directory - use hash-based naming if not explicitly set
+    explicit_output = args.output != './output' or config.get('output_dir')
+    if explicit_output:
+        output_dir = args.output if args.output != './output' else config.get('output_dir', './output')
+    else:
+        output_dir = generate_output_dir(
+            input_paths=[Path(input_path)],
+            base_dir=args.output,
+            unique=getattr(args, 'unique', False),
+        )
+
     style = args.style if args.style != 'rich' else config.get('style', 'rich')
     interactive = not args.no_interactive if args.no_interactive else config.get('interactive', True)
 
