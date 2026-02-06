@@ -2804,6 +2804,18 @@ def _handle_run_command(args):
 
     config['output_dir'] = output_dir
 
+    # Log command for reproducibility
+    from .repro import log_pipeline_run
+    log_pipeline_run(
+        output_dir=output_dir,
+        input_paths=[str(p) for p in input_paths],
+        domain=config.get('domain', args.domain),
+        stages=stages if args.stages else config.get('stages'),
+        array_mode=args.array if hasattr(args, 'array') else config.get('array_mode', False),
+        normalize_method=args.normalize if hasattr(args, 'normalize') else config.get('normalize_method'),
+        config_file=config_path,
+    )
+
     # Run pipeline
     stages = config.get('stages')
     if args.stages:
@@ -2919,6 +2931,14 @@ def _handle_sidecar_command(args):
     style = args.style if args.style != 'rich' else config.get('style', 'rich')
     data_dir = args.data_dir or config.get('data_dir')
 
+    # Log command for reproducibility
+    from .repro import log_sidecar_run
+    log_sidecar_run(
+        output_dir=output_dir,
+        workflow_file=workflow_file,
+        workflow_type=workflow_type,
+    )
+
     run_sidecar(
         workflow_file=workflow_file,
         workflow_type=workflow_type,
@@ -2969,6 +2989,13 @@ def _handle_discover_command(args):
 
     style = args.style if args.style != 'rich' else config.get('style', 'rich')
     interactive = not args.no_interactive if args.no_interactive else config.get('interactive', True)
+
+    # Log command for reproducibility
+    from .repro import log_discover_run
+    log_discover_run(
+        output_dir=output_dir,
+        input_path=input_path,
+    )
 
     run_discover(
         input_path=input_path,
