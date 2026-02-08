@@ -4,7 +4,7 @@ A modular pipeline for transforming raw scientific data into AI-ready datasets.
 
 REDI operates in three modes:
 - **Orchestrator** (`redi run`) - Run the full pipeline on your data
-- **Sidecar** (`redi sidecar`) - Observe existing workflows (Snakemake, Nextflow)
+- **Analyze** (`redi analyze`) - Observe existing workflows (Snakemake, Nextflow)
 - **Discovery** (`redi discover`) - Analyze unknown datasets and propose pipelines
 
 ## Installation
@@ -149,17 +149,17 @@ redi run data.csv --stages ingest,preprocess,transform
 redi data.csv -o ./output
 ```
 
-### Sidecar Mode (Observe Workflows)
+### Analyze Mode (Observe Workflows)
 
 ```bash
 # Observe a Snakemake workflow
-redi sidecar --workflow Snakefile
+redi analyze Snakefile
 
 # Specify workflow type
-redi sidecar --workflow pipeline.nf --type nextflow
+redi analyze pipeline.nf --type nextflow
 
 # Use YAML config
-redi sidecar -c sidecar_config.yaml
+redi analyze -c analyze_config.yaml
 ```
 
 ### Discovery Mode (Analyze Unknown Data)
@@ -232,10 +232,10 @@ redi run config.yaml
 redi config.yaml
 ```
 
-### Sidecar Mode Config
+### Analyze Mode Config
 
 ```yaml
-# sidecar_config.yaml
+# analyze_config.yaml
 workflow: ./Snakefile
 workflow_type: snakemake
 output_dir: ./redi_output
@@ -250,7 +250,7 @@ stage_mapping:
   output:
     - all
 
-# Data Card settings
+# Workflow card settings
 data_card:
   enabled: true
   metadata:
@@ -258,7 +258,7 @@ data_card:
 ```
 
 ```bash
-redi sidecar -c sidecar_config.yaml
+redi analyze -c analyze_config.yaml
 ```
 
 ### Discovery Mode Config
@@ -302,12 +302,12 @@ redi <command> [options]
 
 Commands:
   run        Run the REDI pipeline (orchestrator mode) - default
-  sidecar    Observe existing workflows (sidecar mode)
+  analyze    Observe existing workflows (analyze mode)
   discover   Analyze unknown datasets and propose pipelines
 
 For command-specific help:
   redi run --help
-  redi sidecar --help
+  redi analyze --help
   redi discover --help
 ```
 
@@ -330,13 +330,14 @@ Options:
   --style STYLE           Output style: rich (default), simple, or json
 ```
 
-### redi sidecar
+### redi analyze
 
 ```
-redi sidecar [options]
+redi analyze [workflow] [options]
 
 Options:
-  -w, --workflow FILE     Path to workflow file (Snakefile, *.nf, etc.)
+  workflow               Path to workflow file (Snakefile, *.nf, etc.)
+  -w, --workflow FILE     Path to workflow file (Snakefile, *.nf, etc.) (optional)
   -t, --type TYPE         Workflow type: auto, snakemake, nextflow, bash
   -o, --output DIR        Output directory (default: ./output)
   --watch                 Watch for changes and re-run
@@ -389,12 +390,12 @@ Use when you want REDI to own the data processing pipeline:
 - Generates Data Card and metadata
 - Best for: ad-hoc processing, domains without existing pipelines
 
-### Sidecar Mode (`redi sidecar`)
+### Analyze Mode (`redi analyze`)
 
 Use when you have an existing workflow and want consistent data readiness tracking:
 - Observes Snakemake, Nextflow, or other workflows
 - Maps workflow rules to REDI pipeline stages
-- Generates Data Card without modifying your workflow
+- Generates workflow report and WORKFLOW.md without modifying your workflow
 - Best for: established domain pipelines (ClimaX, OpenFold, etc.)
 
 ### Discovery Mode (`redi discover`)
@@ -501,7 +502,7 @@ ctx = pipeline.execute(ctx)
 
 ```
 redi/
-├── cli.py              # Command-line interface (run, sidecar, discover)
+├── cli.py              # Command-line interface (run, analyze, discover)
 ├── analyze.py          # Data Card generation and analysis
 ├── config.py           # YAML configuration handling
 ├── pipeline/
@@ -518,11 +519,7 @@ redi/
 │   ├── life_sciences.py # BioPython, PII handling
 │   ├── fusion.py       # Plasma signal processing
 │   └── hpc.py          # Job accounting processing
-└── examples/           # YAML configuration examples
-    ├── sidecar_config.yaml
-    ├── sidecar_climax_example.yaml
-    ├── discover_config.yaml
-    └── discover_hep_example.yaml
+└── examples/           # YAML configuration examples (run/analyze/discover)
 ```
 
 ## Example: HPC Job Data
@@ -540,15 +537,16 @@ redi run /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 # └── metadata.json
 ```
 
-## Example: Sidecar with ClimaX
+## Example: Analyze a ClimaX Workflow
 
 ```bash
 # Observe ClimaX data preprocessing workflow
-redi sidecar -w /path/to/ClimaX/snakemake_configs/TaiESM1/Snakefile -o ./climax_redi
+redi analyze /path/to/ClimaX/snakemake_configs/TaiESM1/Snakefile -o ./climax_redi
 
 # Output:
 # climax_redi/
-# └── sidecar_report.json (stage mapping, rule analysis)
+# ├── analyze_report.json (stage mapping, rule analysis)
+# └── WORKFLOW.md
 ```
 
 ## Example: Discover Unknown Dataset
