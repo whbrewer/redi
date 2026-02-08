@@ -237,12 +237,12 @@ def log_pipeline_run(
     return log_command(output_dir, comment=comment)
 
 
-def log_sidecar_run(
+def log_analyze_run(
     output_dir: str,
     workflow_file: str,
     workflow_type: str = "auto",
 ) -> Path:
-    """Log a sidecar run command.
+    """Log an analyze run command.
 
     Args:
         output_dir: Output directory
@@ -252,7 +252,7 @@ def log_sidecar_run(
     Returns:
         Path to the repro.sh file
     """
-    comment = f"Sidecar mode: observing {workflow_file}"
+    comment = f"Analyze mode: observing {workflow_file}"
     if workflow_type != "auto":
         comment += f" (type: {workflow_type})"
 

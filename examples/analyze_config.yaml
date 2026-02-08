@@ -1,8 +1,8 @@
-# REDI Sidecar Configuration
+# REDI Analyze Configuration
 #
-# Use with: redi sidecar -c sidecar_config.yaml
+# Use with: redi analyze -c analyze_config.yaml
 #
-# Sidecar mode observes existing workflows (Snakemake, Nextflow, etc.)
+# Analyze mode observes existing workflows (Snakemake, Nextflow, etc.)
 # and provides consistent data readiness tracking without replacing the workflow.
 
 # Workflow file to observe

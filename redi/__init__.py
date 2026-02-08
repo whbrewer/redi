@@ -7,7 +7,8 @@ A modular pipeline for transforming raw scientific data into AI-ready datasets.
 __version__ = "0.1.0"
 __author__ = "Wes Brewer"
 
-from .analyze import analyze_dataset, get_recommendations, generate_report, DataCard
+from .assess import analyze_dataset, get_recommendations, generate_report
+from .datacard import DataCard
 from .pipeline import Pipeline, PipelineContext, PipelineStage, PipelineStep, create_context
 
 # Data loaders (optional - requires numpy)

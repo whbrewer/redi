@@ -8,7 +8,7 @@ description: REDI (Readiness Engine for Data Integration) transforms raw scienti
 REDI transforms raw scientific data into AI-ready datasets. It operates in three modes:
 
 - **run** - Run the REDI pipeline (orchestrator mode) - transforms data through the full pipeline
-- **sidecar** - Observe existing workflows (Snakemake, Nextflow, bash) and generate Data Cards
+- **analyze** - Observe existing workflows (Snakemake, Nextflow, bash) and generate Data Cards
 - **discover** - Analyze unknown datasets and propose pipelines
 
 Use when the user wants to:
@@ -30,7 +30,7 @@ redi run data.csv -o ./output
 redi data.csv -o ./output              # 'run' is the default
 
 # Observe an existing workflow
-redi sidecar --workflow Snakefile
+redi analyze --workflow Snakefile
 
 # Analyze unknown data and propose pipeline
 redi discover /path/to/data/
@@ -69,18 +69,18 @@ redi run data.npy --array              # Optimize for array data
   -c, --config FILE       YAML configuration file
 ```
 
-### redi sidecar
+### redi analyze
 
 Observe existing workflows and generate Data Cards without modifying the workflow.
 
 ```bash
-redi sidecar --workflow <path> [options]
+redi analyze --workflow <path> [options]
 
 # Examples
-redi sidecar --workflow Snakefile
-redi sidecar --workflow pipeline.nf --type nextflow
-redi sidecar --workflow Snakefile --watch    # Watch for changes
-redi sidecar -c sidecar_config.yaml
+redi analyze --workflow Snakefile
+redi analyze --workflow pipeline.nf --type nextflow
+redi analyze --workflow Snakefile --watch    # Watch for changes
+redi analyze -c analyze_config.yaml
 ```
 
 **Options:**
@@ -148,8 +148,10 @@ redi discover -c discover_config.yaml
 
 ```
 redi/
-├── cli.py              # CLI entry point (run, sidecar, discover commands)
-├── analyze.py          # Data Card generation
+├── cli.py              # CLI entry point (run, analyze, discover commands)
+├── datacard.py         # Data Card data model (enums, dataclasses)
+├── assess.py           # Data analysis and pipeline recommendations
+├── analyze.py          # Backwards-compat shim (re-exports datacard + assess)
 ├── config.py           # Configuration management
 ├── pipeline/           # Pipeline stage modules
 │   ├── ingest.py
