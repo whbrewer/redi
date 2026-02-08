@@ -822,7 +822,7 @@ def run_pipeline(
 # ANALYZE MODE (redi analyze)
 # =============================================================================
 
-def run_sidecar(
+def run_analyze(
     workflow_file: str,
     workflow_type: str = "auto",
     output_dir: str = "./output",
@@ -831,7 +831,7 @@ def run_sidecar(
     config: Optional[dict] = None,
     data_dir: Optional[str] = None,
 ):
-    """Run REDI in sidecar mode - observe existing workflows.
+    """Run REDI in analyze mode - observe existing workflows.
 
     Args:
         workflow_file: Path to workflow file (Snakefile, Nextflow, etc.)
@@ -877,9 +877,9 @@ def run_sidecar(
 
     # Parse workflow to understand structure
     if workflow_type == "snakemake":
-        return _sidecar_snakemake(workflow_path, output_dir, watch, style, data_path)
+        return _analyze_snakemake(workflow_path, output_dir, watch, style, data_path)
     elif workflow_type == "nextflow":
-        return _sidecar_nextflow(workflow_path, output_dir, watch, style, data_path)
+        return _analyze_nextflow(workflow_path, output_dir, watch, style, data_path)
     else:
         if style == "rich":
             print(f"\n    {Colors.YELLOW}⚠ Workflow type '{workflow_type}' not yet supported{Colors.END}")
@@ -889,8 +889,8 @@ def run_sidecar(
         return None
 
 
-def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style: str, data_dir: Optional[Path] = None):
-    """Sidecar for Snakemake workflows."""
+def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style: str, data_dir: Optional[Path] = None):
+    """Analyze Snakemake workflows."""
     if style == "rich":
         print_section("Parsing Snakemake Workflow")
 
@@ -913,7 +913,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
 
     # Parse Snakemake logs for execution history
     log_report = None
-    from .sidecar import find_latest_log, parse_snakemake_log
+    from .observability import find_latest_log, parse_snakemake_log
 
     latest_log = find_latest_log(workflow_path.parent)
     if latest_log:
@@ -945,7 +945,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
         if style == "rich":
             print_section("Scanning Data Files")
 
-        from .sidecar import capture_snapshot, check_snapshot, detect_transformations
+        from .observability import capture_snapshot, check_snapshot, detect_transformations
 
         # Find all data files
         data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr'}
@@ -1038,7 +1038,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     # Check for data quality issues in transformation report
     transform_issues = []
     if transform_report:
-        from .sidecar import check_transformation_report
+        from .observability import check_transformation_report
         transform_issues = check_transformation_report(transform_report)
 
         if transform_issues:
@@ -1054,7 +1054,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
     # Generate improvement suggestions
-    from .sidecar import generate_suggestions, format_suggestions_cli
+    from .observability import generate_suggestions, format_suggestions_cli
     all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
     workflow_info = {'rules': rules, 'stage_mapping': stage_mapping}
     suggestions = generate_suggestions(
@@ -1131,7 +1131,7 @@ def _sidecar_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     # Generate Data Card markdown if we have snapshots
     if snapshots:
         datacard_path = out_path / "DATA_CARD.md"
-        datacard_content = _generate_sidecar_datacard(
+        datacard_content = _generate_analyze_datacard(
             workflow_path, rules, stage_mapping, snapshots, quality_reports,
             transform_report, log_report, suggestions
         )
@@ -1247,18 +1247,18 @@ def _run_watch_mode(workflow_path: Path, data_dir: Optional[Path], output_dir: s
                     print()
 
                 # Re-run the analysis
-                _sidecar_snakemake(workflow_path, output_dir, False, style, data_dir)
+                _analyze_snakemake(workflow_path, output_dir, False, style, data_dir)
 
     except KeyboardInterrupt:
         if style == "rich":
             print(f"\n{Colors.DIM}Watch mode stopped{Colors.END}")
 
 
-def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: dict,
+def _generate_analyze_datacard(workflow_path: Path, rules: list, stage_mapping: dict,
                                 snapshots: list, quality_reports: list,
                                 transform_report=None, log_report=None,
                                 suggestions=None) -> str:
-    """Generate a Data Card markdown from sidecar analysis."""
+    """Generate a Data Card markdown from analyze mode."""
     lines = [
         f"# Data Card: {workflow_path.parent.name}",
         "",
@@ -1393,7 +1393,7 @@ def _generate_sidecar_datacard(workflow_path: Path, rules: list, stage_mapping: 
 
     # Suggestions section
     if suggestions:
-        from .sidecar import format_suggestions_markdown
+        from .observability import format_suggestions_markdown
         lines.append("")
         lines.append(format_suggestions_markdown(suggestions))
 
@@ -1488,13 +1488,13 @@ def _map_rules_to_stages(rules: List[dict]) -> dict:
     return stage_mapping
 
 
-def _sidecar_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: str, data_dir: Optional[Path] = None):
-    """Sidecar for Nextflow workflows."""
+def _analyze_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: str, data_dir: Optional[Path] = None):
+    """Analyze Nextflow workflows."""
     if style == "rich":
         print_section("Parsing Nextflow Workflow")
 
     # Parse the Nextflow file to extract processes and workflows
-    from .sidecar import (
+    from .observability import (
         parse_nextflow_file,
         map_processes_to_stages as nf_map_processes_to_stages,
         find_nextflow_logs,
@@ -1663,7 +1663,7 @@ def _sidecar_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
     # Generate improvement suggestions
-    from .sidecar import generate_suggestions, format_suggestions_cli
+    from .observability import generate_suggestions, format_suggestions_cli
     all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
     # Convert processes to rules-like format for workflow_info
     rules_like = [{'name': p.name, 'description': p.description} for p in parse_result.processes]
@@ -1769,7 +1769,7 @@ def _sidecar_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
 def _generate_nextflow_datacard(workflow_path: Path, parse_result, stage_mapping: dict,
                                  snapshots: list, quality_reports: list,
                                  transform_report=None, suggestions=None) -> str:
-    """Generate a Data Card markdown from Nextflow sidecar analysis."""
+    """Generate a Data Card markdown from Nextflow analyze mode."""
     from datetime import datetime
 
     lines = [
@@ -1949,7 +1949,7 @@ def _generate_nextflow_datacard(workflow_path: Path, parse_result, stage_mapping
 
     # Suggestions section
     if suggestions:
-        from .sidecar import format_suggestions_markdown
+        from .observability import format_suggestions_markdown
         lines.append(format_suggestions_markdown(suggestions))
 
     lines.extend([
@@ -2043,7 +2043,7 @@ def _run_nextflow_watch_mode(workflow_path: Path, data_dir: Optional[Path], outp
                     print()
 
                 # Re-run the analysis
-                _sidecar_nextflow(workflow_path, output_dir, False, style, data_dir)
+                _analyze_nextflow(workflow_path, output_dir, False, style, data_dir)
 
     except KeyboardInterrupt:
         if style == "rich":
@@ -2939,7 +2939,7 @@ def _handle_analyze_command(args):
         workflow_type=workflow_type,
     )
 
-    run_sidecar(
+    run_analyze(
         workflow_file=workflow_file,
         workflow_type=workflow_type,
         output_dir=output_dir,

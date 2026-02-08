@@ -1,5 +1,5 @@
 """
-Workflow Improvement Suggestions for REDI Sidecar.
+Workflow improvement suggestions for REDI observability.
 
 Analyzes detected issues and workflow structure to provide
 actionable recommendations for improving data pipelines.

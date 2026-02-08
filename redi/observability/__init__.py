@@ -1,5 +1,5 @@
 """
-REDI Sidecar - Observability layer for data pipelines.
+REDI Observability - Analysis layer for data pipelines.
 
 Captures data snapshots, tracks transformations, and generates Data Cards
 for existing workflows without modifying them.

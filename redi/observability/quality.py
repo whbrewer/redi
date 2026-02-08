@@ -1,5 +1,5 @@
 """
-Data Quality Checks for REDI Sidecar.
+Data quality checks for REDI observability.
 
 Detects potential issues in data transformations:
 - Distribution shift

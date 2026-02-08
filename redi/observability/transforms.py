@@ -1,5 +1,5 @@
 """
-Transformation Parameter Detection for REDI Sidecar.
+Transformation parameter detection for REDI observability.
 
 Automatically detects and extracts parameters from common ML preprocessing steps:
 - Normalization (mean, std)
