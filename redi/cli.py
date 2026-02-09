@@ -450,9 +450,16 @@ def run_pipeline(
     total_start = time.time()
     step_results = []
     prev_error_count = 0
+    current_stage = None
 
     for i, step in enumerate(pipeline.steps, 1):
         step_start = time.time()
+
+        # Track stage completions
+        if step.stage != current_stage:
+            if current_stage is not None:
+                ctx.mark_complete(current_stage)
+            current_stage = step.stage
 
         # Show running status (rich mode)
         if style == "rich":
@@ -571,6 +578,10 @@ def run_pipeline(
             elif style == "simple":
                 print(f"  [FAIL] {step.name}: {str(e)[:60]}")
             step_results.append(("error", step.name, str(e), step_time))
+
+    # Mark the final stage complete
+    if current_stage is not None:
+        ctx.mark_complete(current_stage)
 
     total_time = time.time() - total_start
 

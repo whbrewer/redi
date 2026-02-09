@@ -168,8 +168,15 @@ class Pipeline:
         """Execute all pipeline steps"""
         logger.info(f"Starting pipeline for domain: {ctx.domain}")
 
+        current_stage = None
         for step in self.steps:
             logger.info(f"Executing step: {step.name}")
+
+            # Track stage transitions
+            if step.stage != current_stage:
+                if current_stage is not None:
+                    ctx.mark_complete(current_stage)
+                current_stage = step.stage
 
             if not step.validate(ctx):
                 ctx.add_error(f"Validation failed for step: {step.name}")
@@ -194,6 +201,10 @@ class Pipeline:
             except Exception as e:
                 ctx.add_error(f"Error in step {step.name}: {str(e)}")
                 logger.exception(f"Step {step.name} failed")
+
+        # Mark the final stage complete
+        if current_stage is not None:
+            ctx.mark_complete(current_stage)
 
         return ctx
 
