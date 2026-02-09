@@ -672,6 +672,9 @@ def run_pipeline(
 
             # Display recommendations in terminal
             data_card = analyze_dataset(str(primary_path))
+            # Use the domain we actually ran with, not the auto-detected one
+            data_card.detected_domain = domain
+            data_card.characteristics.domain = domain
             recommender = PipelineRecommender(data_card)
             rec = recommender.get_recommendations()
 
@@ -685,9 +688,15 @@ def run_pipeline(
                         completed_steps.add("regrid")
                     if "normalize" in step_lower:
                         completed_steps.add("normalize")
-                    if "shard" in step_lower or "save" in step_lower or "output" in step_lower:
+                    if "shard" in step_lower:
                         completed_steps.add("shard")
+                    if "save" in step_lower and "shard" not in step_lower:
+                        # save_parquet/save_npz count as shard only if split was used
+                        split_info = ctx.metadata.get("split")
+                        if split_info:
+                            completed_steps.add("shard")
                     if "load" in step_lower or "ingest" in step_lower:
+                        completed_steps.add("ingest")
                         completed_steps.add("download")
                     if "featurize" in step_lower or "engineer" in step_lower:
                         completed_steps.add("featurize")
@@ -695,6 +704,12 @@ def run_pipeline(
                         completed_steps.add("encode")
                     if "label" in step_lower:
                         completed_steps.add("label")
+                    if "hexify" in step_lower:
+                        completed_steps.add("hexify")
+                    if "aggregate" in step_lower:
+                        completed_steps.add("aggregate")
+                    if "clean" in step_lower:
+                        completed_steps.add("clean")
 
             print_section("Pipeline Recommendations")
             print(f"    {Colors.BOLD}Current Level:{Colors.END} {rec['current_level']}")
