@@ -20,6 +20,7 @@ pip install -e ".[materials]"    # Materials science (pymatgen, matminer)
 pip install -e ".[life_sciences]" # Life sciences (biopython)
 pip install -e ".[hpc]"          # HPC data (scikit-learn)
 pip install -e ".[fusion]"       # Fusion energy (h5py)
+pip install -e ".[geospatial]"   # Geospatial/H3 hexagonal indexing (h3, geopandas)
 
 # Install with all dependencies
 pip install -e ".[all]"

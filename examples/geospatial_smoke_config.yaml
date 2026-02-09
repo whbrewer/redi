@@ -1,0 +1,30 @@
+domain: geospatial
+input_path: /opt/drai/geospatial/smokePM2pt5_predictions_daily_10km_20060101-20201231.csv
+output_dir: ./output
+output_format: parquet
+
+geospatial:
+  hexify:
+    enabled: true
+    resolution: 8
+    shapefile: /opt/drai/geospatial/10km_grid_wgs84.shp
+    grid_id_field: grid_id_10km
+    shape_id_field: ID
+  aggregate:
+    method: mean
+    time_field: date
+
+normalize:
+  enabled: true
+  method: zscore
+
+# Single output file (no train/val/test split)
+split:
+  enabled: false
+
+# To split into train/val/test instead, replace the above with:
+# split:
+#   method: temporal
+#   train: { start: "2006-01-01", end: "2017-12-31" }
+#   val:   { start: "2018-01-01", end: "2019-12-31" }
+#   test:  { start: "2020-01-01", end: "2020-12-31" }

@@ -50,6 +50,13 @@ DOMAIN_FILE_PATTERNS = {
         "extensions": [],
         "keywords": ["job", "node", "core", "walltime", "runtime", "queue", "allocation",
                      "user", "project", "exit_code", "gpu", "cobalt", "slurm", "pbs"]
+    },
+    ScientificDomain.GEOSPATIAL: {
+        "extensions": [".shp", ".geojson", ".gpkg", ".kml"],
+        "keywords": ["h3", "hex", "hexagon", "h3_index", "grid_id", "centroid",
+                     "shapefile", "polygon", "geojson", "wgs84", "epsg",
+                     "smoke", "pm25", "pm2.5", "aqi", "exposure",
+                     "spatial", "geospatial"]
     }
 }
 
@@ -115,6 +122,18 @@ DOMAIN_PIPELINES = {
         ],
         "tools": ["pandas", "scikit-learn", "polars"],
         "output_formats": ["Parquet", "CSV", "HDF5"]
+    },
+    ScientificDomain.GEOSPATIAL: {
+        "name": "Geospatial / H3 Hexify Pipeline",
+        "steps": [
+            ("ingest", "Load tabular or shapefile data with geographic coordinates"),
+            ("hexify", "Convert coordinates/grid cells to H3 hexagonal indices"),
+            ("aggregate", "Aggregate values within H3 cells (mean, sum, count)"),
+            ("normalize", "Normalize numerical features"),
+            ("shard", "Partition into training shards with spatial/temporal splits")
+        ],
+        "tools": ["h3", "geopandas", "shapely", "pandas"],
+        "output_formats": ["Parquet", "NPZ", "CSV"]
     },
     ScientificDomain.GENERAL: {
         "name": "General Data Pipeline",

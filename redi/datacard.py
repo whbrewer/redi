@@ -42,6 +42,7 @@ class ScientificDomain(Enum):
     LIFE_SCIENCES = "life_sciences"
     FUSION = "fusion"
     HPC = "hpc"
+    GEOSPATIAL = "geospatial"
     GENERAL = "general"
 
 

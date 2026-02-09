@@ -308,6 +308,7 @@ def run_pipeline(
         "life_sciences": "🧬",
         "fusion": "☀️ ",
         "hpc": "🖥️ ",
+        "geospatial": "🌐",
         "general": "📊",
     }
     icon = domain_icons.get(domain, "📊")
@@ -316,7 +317,7 @@ def run_pipeline(
         print_section("Domain Detection")
         if domain == "general" and domain_was_auto:
             print(f"    {Colors.YELLOW}⚠ Could not auto-detect domain{Colors.END}")
-            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc{Colors.END}")
+            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc, geospatial{Colors.END}")
         else:
             print(f"    {icon} Detected: {Colors.BOLD}{Colors.CYAN}{domain.upper()}{Colors.END}")
     elif style == "simple":
@@ -356,6 +357,11 @@ def run_pipeline(
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
             from .domains.hpc import get_full_pipeline
+        elif domain == "geospatial":
+            from .domains.geospatial import get_full_pipeline as _get_geo_pipeline
+            _split_cfg = config.get("split", {})
+            _split = _split_cfg.get("enabled", True) if isinstance(_split_cfg, dict) else bool(_split_cfg)
+            get_full_pipeline = lambda: _get_geo_pipeline(split=_split)
         else:
             get_full_pipeline = None
 
@@ -2557,7 +2563,7 @@ Download examples (climate domain):
     )
     run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
     run_parser.add_argument("-d", "--domain",
-                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "general"],
+                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "general"],
                            help="Scientific domain (auto-detected if not specified)")
     run_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     run_parser.add_argument("--unique", action="store_true",

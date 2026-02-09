@@ -1,6 +1,6 @@
 ---
 name: redi
-description: REDI (Readiness Engine for Data Integration) transforms raw scientific data into AI-ready datasets. Use when the user wants to run data pipelines, observe existing workflows, or discover/analyze unknown datasets. Supports climate, materials science, life sciences, fusion, and HPC domains.
+description: REDI (Readiness Engine for Data Integration) transforms raw scientific data into AI-ready datasets. Use when the user wants to run data pipelines, observe existing workflows, or discover/analyze unknown datasets. Supports climate, materials science, life sciences, fusion, HPC, and geospatial domains.
 ---
 
 # REDI - Readiness Engine for Data Integration
@@ -17,7 +17,7 @@ Use when the user wants to:
 - Analyze an unknown dataset and get recommendations
 - Generate a Data Card documenting a dataset
 
-Supports climate, materials science, life sciences, fusion, and HPC domains.
+Supports climate, materials science, life sciences, fusion, HPC, and geospatial domains.
 
 ## Quick Start
 
@@ -62,7 +62,7 @@ redi run --download --source cds --variable 2m_temperature --year 2020 -o ./era5
 **Options:**
 ```
   input                   Input file path(s) or glob pattern
-  -d, --domain DOMAIN     Domain: climate, materials, life_sciences, fusion, hpc, general
+  -d, --domain DOMAIN     Domain: climate, materials, life_sciences, fusion, hpc, geospatial, general
   -o, --output DIR        Output directory
   -s, --stages STAGES     Comma-separated stages to run
   -f, --format FORMAT     Output format: npz, parquet, csv, hdf5, zarr
@@ -199,6 +199,7 @@ redi run --download --source cds \
 | life_sciences | .fasta, .pdb, sequence/protein | biopython | HDF5 |
 | fusion | plasma/disruption/tokamak | h5py | HDF5, NPZ |
 | hpc | job/node/walltime/queue | pandas, sklearn | NPZ, Parquet |
+| geospatial | .shp, .geojson, h3/hex/pm25/smoke | h3, geopandas | Parquet, NPZ |
 
 ## Pipeline Stages
 
@@ -238,7 +239,8 @@ redi/
 │   ├── materials.py
 │   ├── life_sciences.py
 │   ├── fusion.py
-│   └── hpc.py
+│   ├── hpc.py
+│   └── geospatial.py
 ├── downloaders/        # Data acquisition from remote sources
 │   ├── esgf.py         # CMIP6 from ESGF
 │   └── cds.py          # ERA5 from Copernicus CDS

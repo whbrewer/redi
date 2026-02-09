@@ -7,6 +7,7 @@ Domain-specific preprocessing handlers for:
 - Life Sciences (biopython, presidio)
 - Fusion Energy (MDSplus, ADIOS, h5py)
 - HPC/Operational (pandas, sklearn)
+- Geospatial (h3, geopandas, shapely)
 """
 
 from typing import Dict, List, Type, Optional
@@ -20,6 +21,7 @@ class Domain(Enum):
     LIFE_SCIENCES = "life_sciences"
     FUSION = "fusion"
     HPC = "hpc"
+    GEOSPATIAL = "geospatial"
     GENERAL = "general"
 
 
@@ -50,6 +52,12 @@ DOMAIN_KEYWORDS: Dict[Domain, List[str]] = {
         "job", "node", "core", "walltime", "runtime", "queue", "allocation",
         "user", "project", "exit_code", "gpu", "cobalt", "slurm", "pbs",
         "cpu", "memory", "submit", "start", "end", "wait"
+    ],
+    Domain.GEOSPATIAL: [
+        "h3", "hex", "hexagon", "h3_index", "grid_id", "centroid",
+        "shapefile", "polygon", "geojson", "wgs84", "epsg",
+        "smoke", "pm25", "pm2.5", "aqi", "exposure",
+        "spatial", "geospatial"
     ]
 }
 
@@ -60,6 +68,7 @@ DOMAIN_EXTENSIONS: Dict[Domain, List[str]] = {
     Domain.LIFE_SCIENCES: [".fasta", ".fastq", ".pdb", ".mmcif", ".bam", ".vcf"],
     Domain.FUSION: [".hdf5", ".h5", ".adios", ".bp"],
     Domain.HPC: [],  # Generic formats, detected by content
+    Domain.GEOSPATIAL: [".shp", ".geojson", ".gpkg", ".kml"],
     Domain.GENERAL: []
 }
 
@@ -98,7 +107,7 @@ def detect_domain(
 
 def get_domain_pipeline(domain: Domain):
     """Get the domain-specific pipeline configuration"""
-    from . import climate, materials, life_sciences, fusion, hpc
+    from . import climate, materials, life_sciences, fusion, hpc, geospatial
 
     domain_modules = {
         Domain.CLIMATE: climate,
@@ -106,6 +115,7 @@ def get_domain_pipeline(domain: Domain):
         Domain.LIFE_SCIENCES: life_sciences,
         Domain.FUSION: fusion,
         Domain.HPC: hpc,
+        Domain.GEOSPATIAL: geospatial,
     }
 
     return domain_modules.get(domain)

@@ -53,6 +53,11 @@ fusion = [
 hpc = [
     "scikit-learn>=1.1.0",
 ]
+geospatial = [
+    "h3>=4.0.0",
+    "geopandas>=0.12.0",
+    "shapely>=2.0.0",
+]
 
 # Output format dependencies
 parquet = [
@@ -73,7 +78,7 @@ torch-geometric = [
 
 # Install all domain dependencies
 all-domains = [
-    "redi[climate,materials,life_sciences,fusion,hpc]",
+    "redi[climate,materials,life_sciences,fusion,hpc,geospatial]",
 ]
 
 # Install everything
