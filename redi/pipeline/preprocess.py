@@ -115,7 +115,32 @@ class RemoveDuplicates(PipelineStep):
             logger.debug(f"     Subset columns: {self.subset if self.subset else 'all columns'}")
             logger.debug(f"     Keep strategy: {self.keep}")
 
-            ctx.data = ctx.data.drop_duplicates(subset=self.subset, keep=self.keep)
+            # Determine which columns to check - skip unhashable columns
+            subset = self.subset
+            if subset is None:
+                hashable_cols = []
+                for col in ctx.data.columns:
+                    dtype = ctx.data[col].dtype
+                    if dtype != object:
+                        hashable_cols.append(col)
+                    else:
+                        # Sample a non-null value to check hashability
+                        sample = ctx.data[col].dropna().iloc[0] if not ctx.data[col].dropna().empty else None
+                        if sample is not None and isinstance(sample, (list, dict)):
+                            logger.debug(f"     Skipping column '{col}' (unhashable {type(sample).__name__})")
+                        else:
+                            hashable_cols.append(col)
+                if len(hashable_cols) < len(ctx.data.columns):
+                    logger.debug(f"     Using {len(hashable_cols)}/{len(ctx.data.columns)} hashable columns for dedup")
+                    subset = hashable_cols if hashable_cols else None
+
+            if subset is not None and len(subset) == 0:
+                logger.debug(f"     No hashable columns available, skipping dedup")
+                ctx.metadata["duplicates_removed"] = 0
+                logger.info("Skipped dedup (no hashable columns)")
+                return ctx
+
+            ctx.data = ctx.data.drop_duplicates(subset=subset, keep=self.keep)
             after_count = len(ctx.data)
             removed = before_count - after_count
 

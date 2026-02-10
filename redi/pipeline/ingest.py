@@ -277,6 +277,60 @@ class LoadJSON(PipelineStep):
     def validate(self, ctx: PipelineContext) -> bool:
         return ctx.metadata.get("file_format") == "json"
 
+    def _is_geojson_timeseries(self, data: list) -> bool:
+        """Detect GeoJSON-style data with nested time series (e.g. NASA POWER API)"""
+        if not data or not isinstance(data[0], dict):
+            return False
+        first = data[0]
+        if "features" not in first or not isinstance(first["features"], list):
+            return False
+        features = first["features"]
+        if not features or not isinstance(features[0], dict):
+            return False
+        feat = features[0]
+        if feat.get("type") != "Feature" or "geometry" not in feat:
+            return False
+        props = feat.get("properties", {})
+        param = props.get("parameter", {})
+        # Check if parameter values are date-keyed dicts
+        if param and isinstance(param, dict):
+            first_val = next(iter(param.values()), None)
+            if isinstance(first_val, dict) and len(first_val) > 0:
+                first_key = next(iter(first_val))
+                if isinstance(first_key, str) and first_key.isdigit() and len(first_key) == 8:
+                    return True
+        return False
+
+    def _flatten_geojson_timeseries(self, data: list):
+        """Flatten GeoJSON time series into a tabular DataFrame.
+
+        Extracts lat, lon, date, and parameter values from nested GeoJSON features.
+        """
+        import pandas as pd
+
+        records = []
+        for item in data:
+            for feature in item.get("features", []):
+                geom = feature.get("geometry", {})
+                coords = geom.get("coordinates", [None, None])
+                lon, lat = coords[0], coords[1]
+                params = feature.get("properties", {}).get("parameter", {})
+                if not params:
+                    continue
+                # Get all date keys from the first parameter
+                first_param = next(iter(params.values()))
+                for date_key in first_param:
+                    row = {"latitude": lat, "longitude": lon, "date": date_key}
+                    for param_name, param_values in params.items():
+                        row[param_name] = param_values.get(date_key)
+                    records.append(row)
+
+        df = pd.DataFrame(records)
+        # Convert date string (YYYYMMDD) to datetime
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
+        return df
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             logger.debug(f"     Reading JSON file: {ctx.input_path}")
@@ -290,7 +344,25 @@ class LoadJSON(PipelineStep):
                 logger.debug(f"     JSON is array with {len(data)} elements")
                 try:
                     import pandas as pd
-                    ctx.data = pd.DataFrame(data)
+
+                    # Detect GeoJSON time series (e.g. NASA POWER API)
+                    if self._is_geojson_timeseries(data):
+                        logger.debug(f"     Detected GeoJSON time series format, flattening...")
+                        ctx.data = self._flatten_geojson_timeseries(data)
+                        logger.debug(f"     Flattened to {len(ctx.data)} rows, {len(ctx.data.columns)} columns")
+                    else:
+                        # Check if records are flat (no nested lists/dicts)
+                        sample = data[0] if data else {}
+                        has_nested = any(
+                            isinstance(v, (list, dict)) for v in sample.values()
+                        ) if isinstance(sample, dict) else False
+
+                        if has_nested:
+                            logger.debug(f"     JSON has nested structures, using json_normalize")
+                            ctx.data = pd.json_normalize(data, max_level=1)
+                        else:
+                            ctx.data = pd.DataFrame(data)
+
                     ctx.metadata["num_rows"] = len(ctx.data)
                     ctx.metadata["num_columns"] = len(ctx.data.columns)
                     ctx.metadata["columns"] = list(ctx.data.columns)

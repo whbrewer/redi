@@ -248,7 +248,8 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadClimateData()]
+    from ..pipeline.ingest import LoadJSON, LoadCSV, LoadParquet, ValidateInput
+    return [DetectFormat(), LoadClimateData(), LoadJSON(), LoadCSV(), LoadParquet(), ValidateInput()]
 
 
 def get_preprocess_steps():
@@ -700,12 +701,29 @@ def get_output_steps():
 
 
 def get_full_pipeline():
-    """Get the complete climate preprocessing pipeline"""
+    """Get the complete climate preprocessing pipeline.
+
+    Includes generic DataFrame fallback steps for non-NetCDF inputs
+    (e.g. JSON, CSV). Climate-specific xarray steps skip for DataFrames,
+    and generic steps skip for xarray Datasets, so both coexist cleanly.
+    """
+    from ..pipeline.preprocess import get_preprocess_steps as _generic_preprocess
+    from ..pipeline.transform import get_transform_steps as _generic_transform
+    from ..pipeline.structure import get_structure_steps as _generic_structure
+    from ..pipeline.output import SaveMetadata
+
     return (
         get_download_steps() +
         get_ingest_steps() +
+        # Climate-specific steps (skip for DataFrames)
         get_preprocess_steps() +
         get_transform_steps() +
         get_structure_steps() +
-        get_output_steps()
+        # Generic DataFrame fallbacks (skip for xarray)
+        _generic_preprocess("climate") +
+        _generic_transform("climate") +
+        _generic_structure("climate") +
+        # Climate output handles both xarray and numpy dict formats
+        get_output_steps() +
+        [SaveMetadata()]
     )

@@ -91,6 +91,41 @@ def detect_domain(input_path: Path, columns: Optional[List[str]] = None) -> str:
                 if ext == ".parquet":
                     df = pd.read_parquet(input_path, columns=None)
                     columns = list(df.columns)
+                elif ext == ".json":
+                    # Read JSON directly - pd.read_csv hangs on single-line JSON
+                    import json, re as _re
+                    with open(input_path, 'r') as f:
+                        # Read a small chunk to extract keys without loading the full file
+                        chunk = f.read(64 * 1024)
+                    try:
+                        # Try to parse as complete JSON (small files)
+                        data = json.loads(chunk)
+                    except json.JSONDecodeError:
+                        # Chunk was truncated; try to parse first record from array
+                        data = None
+                        if chunk.lstrip().startswith('['):
+                            # Find first complete object in array
+                            inner = chunk.lstrip()[1:].lstrip()
+                            if inner.startswith('{'):
+                                depth = 0
+                                for i, ch in enumerate(inner):
+                                    if ch == '{': depth += 1
+                                    elif ch == '}': depth -= 1
+                                    if depth == 0:
+                                        try:
+                                            data = json.loads(inner[:i+1])
+                                        except json.JSONDecodeError:
+                                            pass
+                                        break
+                    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                        columns = [k.lower() for k in data[0].keys()]
+                    elif isinstance(data, dict):
+                        columns = [k.lower() for k in data.keys()]
+                    else:
+                        # Could not parse complete record; extract all JSON keys
+                        # from the chunk as potential column names for domain detection
+                        columns = _re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"(?:\s*:)', chunk)
+                        columns = list(dict.fromkeys(k.lower() for k in columns))
                 else:
                     df = pd.read_csv(input_path, nrows=0)
                     columns = list(df.columns)
