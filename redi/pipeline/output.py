@@ -48,6 +48,12 @@ class TrainValTestSplit(PipelineStep):
         try:
             import numpy as np
 
+            # Check if split is disabled via config
+            split_cfg = ctx.config.get("split", {})
+            if isinstance(split_cfg, dict) and not split_cfg.get("enabled", True):
+                logger.info("Split disabled via config")
+                return ctx
+
             # Get data arrays - handle both raw arrays and dict format
             if isinstance(ctx.data, np.ndarray):
                 # Raw numpy array - wrap in dict format

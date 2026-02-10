@@ -1,0 +1,26 @@
+# NASA POWER Daily API - GeoJSON time series
+#
+# Source:  POWER Daily API v2.5.8 (CERES/MERRA2)
+# Format:  GeoJSON time series (~567 MB single-line JSON)
+# Region:  USA grid (lat 24.25-28.75, lon -108.75 to -101.25)
+# Period:  1984-01-01 to 1984-03-31 (91 daily timesteps)
+# Points:  25,120 spatial locations
+#
+# Variables: T2M, T2M_MAX, T2M_MIN, WD2M, WS2M, PS, QV2M,
+#            PRECTOTCORR, ALLSKY_SFC_SW_DWN, EVPTRNS, GWETPROF,
+#            SNODP, T2MDEW, CLOUD_AMT
+#
+# Usage:
+#   redi run -c examples/nasa_power_config.yaml
+
+domain: climate
+input_path: /opt/drai/renan/raw/usa_0_data.json
+output_dir: ./nasa_power_output
+output_format: pt
+
+normalize:
+  enabled: true
+  method: zscore
+
+split:
+  enabled: false

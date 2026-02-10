@@ -586,6 +586,12 @@ def get_output_steps():
                 if not isinstance(ctx.data, dict) or "X" not in ctx.data:
                     return ctx
 
+                # Check if split is disabled via config
+                split_cfg = ctx.config.get("split", {})
+                if isinstance(split_cfg, dict) and not split_cfg.get("enabled", True):
+                    logger.info("Split disabled via config")
+                    return ctx
+
                 X = ctx.data["X"]
                 n_samples = X.shape[0]
 
@@ -650,6 +656,11 @@ def get_output_steps():
                 root = zarr.open(str(path), mode='w')
                 root.create_dataset('X', data=X)
                 root.attrs['variable_names'] = var_names
+            elif fmt == "pt":
+                import torch
+                path = output_dir / f"{split_name}.pt"
+                tensor = torch.tensor(X, dtype=torch.float32)
+                torch.save({"X": tensor, "variable_names": var_names}, path)
             else:
                 path = output_dir / f"{split_name}.npz"
                 np.savez_compressed(path, X=X, variable_names=var_names)
@@ -674,7 +685,7 @@ def get_output_steps():
                 # Handle numpy dict with splits
                 elif isinstance(ctx.data, dict) and "X" in ctx.data:
                     X = ctx.data["X"]
-                    var_names = ctx.data.get("variable_names", [])
+                    var_names = ctx.data.get("variable_names", ctx.data.get("feature_names", []))
 
                     if "train_idx" in ctx.data:
                         # Save split files

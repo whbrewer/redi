@@ -176,7 +176,7 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
         )
 
     # Validate output format
-    valid_formats = ['npz', 'parquet', 'csv', 'hdf5', 'zarr', None]
+    valid_formats = ['npz', 'parquet', 'csv', 'hdf5', 'zarr', 'pt', None]
     if config.get('output_format') not in valid_formats:
         issues.append(
             f"Unknown output format: {config.get('output_format')}. "
