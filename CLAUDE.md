@@ -85,26 +85,6 @@ redi run --download --source cds --variable 2m_temperature --year 2020 -o ./era5
   --year YEAR             Year to download (for CDS/ERA5)
 ```
 
-**Publish Options (catalog integration via SetGo):**
-```
-  --publish CATALOG       Publish to catalog: huggingface, openmetadata
-  --repo REPO             Repository/dataset ID (e.g., org/dataset-name)
-  --private               Make dataset private (default: public)
-  --token TOKEN           Auth token (or use HF_TOKEN env var)
-```
-
-**Publish Examples:**
-```bash
-# Process and publish to HuggingFace
-redi run data.csv -o ./output --publish huggingface --repo my-org/climate-data
-
-# Process and publish as private dataset
-redi run data.csv -o ./output --publish huggingface --repo my-org/dataset --private
-
-# Use environment variable for token
-export HF_TOKEN="hf_..."
-redi run data.csv -o ./output --publish huggingface --repo my-org/dataset
-```
 
 ### redi analyze
 
