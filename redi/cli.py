@@ -394,11 +394,15 @@ def run_pipeline(
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
             from .domains.hpc import get_full_pipeline as _get_hpc_pipeline
+            from .domains.hpc_job_mapper import load_raps_power_config
             _raps_cfg = config.get("raps_jobs", {}) if config else {}
             _col_overrides = _raps_cfg.get("column_overrides") if isinstance(_raps_cfg, dict) else None
-            _power_cfg = _raps_cfg.get("power_config") if isinstance(_raps_cfg, dict) else None
             _out_fmt = config.get("output_format", "npz") if config else "npz"
             _sys_name = _raps_cfg.get("system_name", "unknown") if isinstance(_raps_cfg, dict) else "unknown"
+            # Load power config from RAPS system config; fall back to REDI YAML
+            _power_cfg = load_raps_power_config(_sys_name) if _sys_name != "unknown" else None
+            if _power_cfg is None:
+                _power_cfg = _raps_cfg.get("power_config") if isinstance(_raps_cfg, dict) else None
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
@@ -418,11 +422,9 @@ def run_pipeline(
             pipeline = Pipeline(domain)
             steps = get_full_pipeline()
 
-            # Expand stages to include prerequisites (pipeline stages are sequential)
-            all_stages = ["ingest", "preprocess", "transform", "structure", "output"]
-            if stages is not None:
-                max_idx = max(all_stages.index(s) for s in stages if s in all_stages)
-                stages = all_stages[:max_idx + 1]
+            # Ensure ingest is always included (data must be loaded)
+            if stages is not None and "ingest" not in stages:
+                stages = ["ingest"] + list(stages)
 
             for step in steps:
                 if stages is None or step.stage.value in stages:
@@ -444,10 +446,9 @@ def run_pipeline(
             if stages is None:
                 stages = all_stages
             else:
-                # Expand stages to include prerequisites (pipeline stages are sequential)
-                # e.g., "-s preprocess" becomes ["ingest", "preprocess"]
-                max_idx = max(all_stages.index(s) for s in stages if s in all_stages)
-                stages = all_stages[:max_idx + 1]
+                # Ensure ingest is always included (data must be loaded)
+                if "ingest" not in stages:
+                    stages = ["ingest"] + list(stages)
 
             if "ingest" in stages:
                 for step in get_ingest_steps():

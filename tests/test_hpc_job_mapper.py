@@ -206,7 +206,7 @@ class TestFieldDeriver:
         assert df[new_mapping.mapped["expected_run_time"]].iloc[0] == 3600.0
         assert df[new_mapping.mapped["expected_run_time"]].iloc[1] == 5400.0
 
-    def test_derive_name_from_id(self, deriver):
+    def test_derive_name_as_uuid(self, deriver):
         df = pd.DataFrame({"jid": [101, 102]})
         mapping = ColumnMapping(
             mapped={"id": "jid"},
@@ -217,7 +217,12 @@ class TestFieldDeriver:
         df, new_mapping = deriver.derive(df, mapping)
 
         assert "name" in new_mapping.mapped
-        assert df[new_mapping.mapped["name"]].iloc[0] == "job_101"
+        name = df[new_mapping.mapped["name"]].iloc[0]
+        # Should be a 6-char hex string (uuid4[:6])
+        assert len(name) == 6
+        assert all(c in "0123456789abcdef" for c in name)
+        # Each row should get a different name
+        assert df[new_mapping.mapped["name"]].iloc[0] != df[new_mapping.mapped["name"]].iloc[1]
 
     def test_derive_nodes_from_node_list(self, deriver):
         df = pd.DataFrame({
@@ -262,8 +267,8 @@ class TestTraceNormalizer:
         val = trace_normalizer.normalize_trace(85.0, "cpu_trace", "cpu_util")
         assert val == pytest.approx(0.85)
 
-    def test_power_with_config(self, trace_normalizer_with_power):
-        # 300W with idle=100, max=500 → (300-100)/(500-100) = 0.5
+    def test_power_with_simple_config(self, trace_normalizer_with_power):
+        # 300W with idle=100, max=500, no per_node → simple linear: (300-100)/(500-100) = 0.5
         val = trace_normalizer_with_power.normalize_trace(300.0, "cpu_trace", "cpu_power")
         assert val == pytest.approx(0.5)
 
@@ -334,7 +339,7 @@ class TestJobDictBuilder:
             unmapped_columns=[],
             missing_required=[],
         )
-        jobs = builder.build_jobs(df, mapping)
+        jobs, ref_time = builder.build_jobs(df, mapping)
 
         assert len(jobs) == 2
         assert jobs[0]["id"] == "1001"
@@ -343,10 +348,11 @@ class TestJobDictBuilder:
         assert jobs[0]["end_state"] == "COMPLETED"
         assert jobs[1]["end_state"] == "FAILED"
 
-        # Times should be relative (submit of job 1 is ref = 0)
-        assert jobs[0]["submit_time"] == pytest.approx(0.0)
-        assert jobs[0]["start_time"] == pytest.approx(1800.0)  # 30 min later
-        assert jobs[0]["end_time"] == pytest.approx(5400.0)     # 90 min later
+        # ref_time is start_time.min() = 08:30:00
+        # submit_time of job 1 at 08:00:00 is -1800s (before start window)
+        assert jobs[0]["submit_time"] == pytest.approx(-1800.0)
+        assert jobs[0]["start_time"] == pytest.approx(0.0)      # 08:30 - 08:30
+        assert jobs[0]["end_time"] == pytest.approx(3600.0)      # 09:30 - 08:30
 
     def test_skip_zero_nodes(self, builder):
         df = pd.DataFrame({
@@ -366,7 +372,7 @@ class TestJobDictBuilder:
             unmapped_columns=[],
             missing_required=[],
         )
-        jobs = builder.build_jobs(df, mapping)
+        jobs, _ = builder.build_jobs(df, mapping)
         assert len(jobs) == 0
 
     def test_skip_start_after_end(self, builder):
@@ -387,7 +393,7 @@ class TestJobDictBuilder:
             unmapped_columns=[],
             missing_required=[],
         )
-        jobs = builder.build_jobs(df, mapping)
+        jobs, _ = builder.build_jobs(df, mapping)
         assert len(jobs) == 0
 
     def test_all_canonical_fields_present(self, builder):
@@ -408,7 +414,7 @@ class TestJobDictBuilder:
             unmapped_columns=[],
             missing_required=[],
         )
-        jobs = builder.build_jobs(df, mapping)
+        jobs, _ = builder.build_jobs(df, mapping)
         assert len(jobs) == 1
         job = jobs[0]
 
@@ -427,6 +433,16 @@ class TestJobDictBuilder:
         for name in raps_fields:
             assert name in job, f"Missing RAPS metadata field: {name}"
 
+        # RAPS convention: jobs start as PENDING
+        assert job["current_state"] == "PENDING"
+        # Scalar traces: quanta=None, missing_values=True
+        assert job["trace_quanta"] is None
+        assert job["trace_missing_values"] is True
+        # Simulator fills allocated resources
+        assert job["allocated_cpu_cores"] == 0
+        assert job["allocated_gpu_units"] == 0
+        # trace_time should equal expected_run_time (wall time)
+        assert job["trace_time"] == job["expected_run_time"]
         # partition should be int, not str
         assert isinstance(job["partition"], int)
 
@@ -450,7 +466,7 @@ class TestJobDictBuilder:
             unmapped_columns=[],
             missing_required=[],
         )
-        jobs = builder.build_jobs(df, mapping)
+        jobs, _ = builder.build_jobs(df, mapping)
         assert jobs[0]["time_limit"] == pytest.approx(5400.0)
 
     def test_node_list_parsing(self, builder):
@@ -473,9 +489,89 @@ class TestJobDictBuilder:
             unmapped_columns=[],
             missing_required=[],
         )
-        jobs = builder.build_jobs(df, mapping)
+        jobs, _ = builder.build_jobs(df, mapping)
         assert len(jobs[0]["scheduled_nodes"]) == 3
         assert all(isinstance(v, int) for v in jobs[0]["scheduled_nodes"])
+
+    def test_ref_time_uses_start_time_min(self, builder):
+        """ref_time should be start_time.min(), not min(submit, start)."""
+        df = pd.DataFrame({
+            "job_id": [1, 2],
+            "num_nodes": [4, 4],
+            "submit_time": ["2024-01-01 07:00:00", "2024-01-01 08:00:00"],
+            "start_time": ["2024-01-01 08:30:00", "2024-01-01 09:30:00"],
+            "end_time": ["2024-01-01 09:30:00", "2024-01-01 10:30:00"],
+        })
+        mapping = ColumnMapping(
+            mapped={
+                "id": "job_id",
+                "nodes_required": "num_nodes",
+                "submit_time": "submit_time",
+                "start_time": "start_time",
+                "end_time": "end_time",
+            },
+            confidence={},
+            unmapped_columns=[],
+            missing_required=[],
+        )
+        jobs, ref_time = builder.build_jobs(df, mapping)
+        # ref should be 08:30, so submit at 07:00 is -5400s
+        assert jobs[0]["submit_time"] == pytest.approx(-5400.0)
+        assert jobs[0]["start_time"] == pytest.approx(0.0)
+
+    def test_trace_time_equals_expected_run_time(self, builder):
+        """trace_time should be set to expected_run_time (wall time)."""
+        df = pd.DataFrame({
+            "job_id": [1],
+            "num_nodes": [2],
+            "start_time": ["2024-01-01 08:00:00"],
+            "end_time": ["2024-01-01 09:00:00"],
+            "run_time": [3600],
+        })
+        mapping = ColumnMapping(
+            mapped={
+                "id": "job_id",
+                "nodes_required": "num_nodes",
+                "start_time": "start_time",
+                "end_time": "end_time",
+                "expected_run_time": "run_time",
+            },
+            confidence={},
+            unmapped_columns=[],
+            missing_required=[],
+        )
+        jobs, _ = builder.build_jobs(df, mapping)
+        assert jobs[0]["trace_time"] == 3600
+        assert jobs[0]["trace_start_time"] == jobs[0]["end_time"]
+        assert jobs[0]["trace_end_time"] == jobs[0]["start_time"]
+
+    def test_raps_power_formula(self):
+        """Full RAPS power formula with per_node config."""
+        normalizer = TraceNormalizer(power_config={
+            "cpu": {"idle": 90, "max": 280, "per_node": 1},
+        })
+        # sum_power=27000, wall_time=100, nodes=3 → watts=90 → 90/90-1=0 → 0/(280/90-1)=0
+        val = normalizer.normalize_trace(
+            27000.0, "cpu_trace", "cpu_power", wall_time=100, nodes_required=3)
+        assert val == pytest.approx(0.0, abs=0.01)
+
+        # Higher power: sum=84000, wall=100, nodes=3 → watts=280 → (280/90-1)/(280/90-1)=1.0
+        val2 = normalizer.normalize_trace(
+            84000.0, "cpu_trace", "cpu_power", wall_time=100, nodes_required=3)
+        assert val2 == pytest.approx(1.0, abs=0.01)
+
+    def test_trace_scalar_not_list(self):
+        """Scalar trace input should return scalar float, not list."""
+        normalizer = TraceNormalizer()
+        val = normalizer.normalize_trace(0.75, "cpu_trace", "cpu_util")
+        assert isinstance(val, float)
+        assert val == pytest.approx(0.75)
+
+    def test_trace_empty_list_returns_empty(self):
+        """Empty list trace should return empty list."""
+        normalizer = TraceNormalizer()
+        val = normalizer.normalize_trace([], "ntx_trace", "ib_tx")
+        assert val == []
 
 
 # ---------------------------------------------------------------------------

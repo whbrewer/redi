@@ -16,6 +16,7 @@ import difflib
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -129,14 +130,14 @@ FIELD_REGISTRY: List[FieldSpec] = [
         aliases=["ntx_trace", "ib_tx", "net_tx", "ipogif0_tx_bytes"],
         field_type="trace",
         required=False,
-        default=0,
+        default=[],
     ),
     FieldSpec(
         canonical_name="nrx_trace",
         aliases=["nrx_trace", "ib_rx", "net_rx", "ipogif0_rx_bytes"],
         field_type="trace",
         required=False,
-        default=0,
+        default=[],
     ),
     FieldSpec(
         canonical_name="end_state",
@@ -350,14 +351,13 @@ class FieldDeriver:
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
 
-        # name ← f"job_{id}"
-        if "name" not in mapped and "id" in mapped:
-            id_col = mapped["id"]
+        # name ← uuid4[:6] (matches RAPS convention)
+        if "name" not in mapped:
             derived_col = "_derived_name"
-            df[derived_col] = "job_" + df[id_col].astype(str)
+            df[derived_col] = [uuid.uuid4().hex[:6] for _ in range(len(df))]
             mapped["name"] = derived_col
             conf["name"] = 0.8
-            logger.info("Derived name from id")
+            logger.info("Derived name as uuid4[:6]")
 
         # nodes_required ← len(scheduled_nodes)
         if "nodes_required" not in mapped and "scheduled_nodes" in mapped:
@@ -414,25 +414,43 @@ def _count_nodes(val) -> int:
 # ---------------------------------------------------------------------------
 
 class TraceNormalizer:
-    """Detects trace data format and converts to RAPS-compatible utilization (0–1)."""
+    """Detects trace data format and converts to RAPS-compatible utilization.
 
-    def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None):
+    When ``power_config`` contains per-node counts (``per_node``) the RAPS
+    power formula is used::
+
+        watts = sum_power / (wall_time * nodes_required)
+        util  = (watts / idle - per_node) / (max / idle - 1.0)
+
+    Otherwise a simple linear normalization is applied.  Scalar inputs are
+    returned as scalar floats (not wrapped in a list) and values are **not**
+    clamped to ``[0, 1]`` — RAPS allows >1 values for GPU utilization.
+    """
+
+    def __init__(self, power_config: Optional[Dict[str, Any]] = None):
         """
         Args:
-            power_config: Optional dict like {"cpu": {"idle": 100, "max": 500}, ...}
+            power_config: Dict like::
+
+                {"cpu": {"idle": 90, "max": 280, "per_node": 1},
+                 "gpu": {"idle": 44, "max": 238, "per_node": 8},
+                 "nics_per_node": 4, "power_nic": 20}
         """
         self.power_config = power_config or {}
 
-    def normalize_trace(self, value: Any, canonical_name: str, col_name: str) -> Any:
-        """Normalize a single trace value to 0-1 scale.
+    def normalize_trace(self, value: Any, canonical_name: str, col_name: str,
+                        wall_time: float = 0, nodes_required: int = 1) -> Any:
+        """Normalize a single trace value.
 
         Args:
             value: The raw trace value (scalar, list, or string)
             canonical_name: e.g. "cpu_trace", "gpu_trace"
             col_name: Original column name (for power detection)
+            wall_time: Job wall-clock time in seconds (for power → utilization)
+            nodes_required: Number of nodes (for power → utilization)
 
         Returns:
-            Normalized value (scalar or list of floats in 0-1 range)
+            Normalized value — scalar float for scalar input, list for array input.
         """
         if value is None or (isinstance(value, float) and np.isnan(value)):
             return 0
@@ -443,14 +461,20 @@ class TraceNormalizer:
 
         # Single scalar
         if isinstance(value, (int, float)):
-            return self._normalize_scalar(float(value), canonical_name, col_name)
+            return self._normalize_scalar(
+                float(value), canonical_name, col_name, wall_time, nodes_required)
 
         # Array/list
         if isinstance(value, (list, tuple, np.ndarray)):
             arr = np.array(value, dtype=float)
             if len(arr) == 0:
-                return 0
-            return self._normalize_array(arr, canonical_name, col_name).tolist()
+                return []
+            normalized = self._normalize_array(
+                arr, canonical_name, col_name, wall_time, nodes_required)
+            # Return scalar for single-element arrays
+            if len(normalized) == 1:
+                return float(normalized[0])
+            return normalized.tolist()
 
         return 0
 
@@ -479,18 +503,35 @@ class TraceNormalizer:
 
         return "unknown"
 
-    def _normalize_scalar(self, value: float, canonical_name: str, col_name: str) -> float:
+    def _normalize_scalar(self, value: float, canonical_name: str, col_name: str,
+                          wall_time: float = 0, nodes_required: int = 1) -> float:
         """Normalize a single scalar trace value."""
         fmt = self._detect_format(np.array([value]), canonical_name, col_name)
-        return self._apply_normalization(value, fmt, canonical_name, col_name)
+        return self._apply_normalization(
+            value, fmt, canonical_name, col_name, wall_time, nodes_required)
 
-    def _normalize_array(self, arr: np.ndarray, canonical_name: str, col_name: str) -> np.ndarray:
+    def _normalize_array(self, arr: np.ndarray, canonical_name: str, col_name: str,
+                         wall_time: float = 0, nodes_required: int = 1) -> np.ndarray:
         """Normalize an array of trace values."""
         fmt = self._detect_format(arr, canonical_name, col_name)
-        return np.array([self._apply_normalization(v, fmt, canonical_name, col_name) for v in arr])
+        return np.array([
+            self._apply_normalization(v, fmt, canonical_name, col_name, wall_time, nodes_required)
+            for v in arr
+        ])
 
-    def _apply_normalization(self, value: float, fmt: str, canonical_name: str, col_name: str) -> float:
-        """Apply normalization based on detected format."""
+    def _apply_normalization(self, value: float, fmt: str, canonical_name: str,
+                             col_name: str, wall_time: float = 0,
+                             nodes_required: int = 1) -> float:
+        """Apply normalization based on detected format.
+
+        For power data with full RAPS config (per_node present), uses::
+
+            watts = sum_power / (wall_time * nodes_required)
+            util  = (watts / idle - per_node) / (max / idle - 1.0)
+
+        Otherwise falls back to simple linear normalization.
+        Values are NOT clamped — RAPS allows >1 for GPU utilization.
+        """
         if np.isnan(value):
             return 0.0
 
@@ -501,18 +542,24 @@ class TraceNormalizer:
             cfg = self.power_config.get(trace_type, {})
             idle = cfg.get("idle", 0)
             max_p = cfg.get("max", 0)
-            if max_p > idle:
-                normalized = (value - idle) / (max_p - idle)
+            per_node = cfg.get("per_node", 0)
+
+            if idle > 0 and max_p > 0 and per_node > 0 and wall_time > 0 and nodes_required > 0:
+                # Full RAPS formula
+                watts = value / (wall_time * nodes_required)
+                util = (watts / idle - per_node) / (max_p / idle - 1.0)
+                return max(0.0, float(util))
+            elif max_p > idle > 0:
+                # Simple linear normalization (no per_node info)
+                return max(0.0, float((value - idle) / (max_p - idle)))
             else:
-                # No config — can't accurately normalize power, return 0
-                normalized = 0.0
-            return float(np.clip(normalized, 0.0, 1.0))
+                return 0.0
 
         elif fmt == "percentage":
-            return float(np.clip(value / 100.0, 0.0, 1.0))
+            return float(value / 100.0)
 
         elif fmt == "utilization":
-            return float(np.clip(value, 0.0, 1.0))
+            return float(value)
 
         return 0.0
 
@@ -571,7 +618,7 @@ class JobDictBuilder:
     def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
 
-    def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> List[Dict[str, Any]]:
+    def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
 
         Args:
@@ -579,12 +626,12 @@ class JobDictBuilder:
             mapping: The column mapping result
 
         Returns:
-            List of RAPS-compatible job dictionaries
+            Tuple of (list of RAPS-compatible job dictionaries, ref_time in epoch seconds)
         """
         jobs: List[Dict[str, Any]] = []
         mapped = mapping.mapped
 
-        # Find reference time (earliest submit or start time)
+        # Find reference time (earliest start time)
         ref_time = self._find_reference_time(df, mapped)
 
         skipped = 0
@@ -603,31 +650,47 @@ class JobDictBuilder:
             logger.info(f"Skipped {skipped} invalid rows")
         logger.info(f"Built {len(jobs)} RAPS job dicts")
 
-        return jobs
+        return jobs, ref_time
 
     def _find_reference_time(self, df: pd.DataFrame, mapped: Dict[str, str]) -> float:
-        """Find the earliest timestamp to use as reference (epoch seconds)."""
-        ref = None
-        for time_field in ["submit_time", "start_time"]:
-            if time_field in mapped:
-                col = mapped[time_field]
-                series = pd.to_datetime(df[col], errors="coerce")
-                valid = series.dropna()
-                if not valid.empty:
-                    epoch = valid.min().timestamp()
-                    if ref is None or epoch < ref:
-                        ref = epoch
-        return ref if ref is not None else 0.0
+        """Find the earliest start_time to use as reference (epoch seconds).
+
+        RAPS dataloaders use ``start_time.min()`` as reference.  Submit times
+        that precede the start window become negative, which is correct.
+        """
+        # Primary: use start_time.min()
+        if "start_time" in mapped:
+            col = mapped["start_time"]
+            series = pd.to_datetime(df[col], errors="coerce")
+            valid = series.dropna()
+            if not valid.empty:
+                return valid.min().timestamp()
+        # Fallback: submit_time
+        if "submit_time" in mapped:
+            col = mapped["submit_time"]
+            series = pd.to_datetime(df[col], errors="coerce")
+            valid = series.dropna()
+            if not valid.empty:
+                return valid.min().timestamp()
+        return 0.0
 
     def _build_one(self, row: pd.Series, mapped: Dict[str, str],
                    ref_time: float) -> Optional[Dict[str, Any]]:
         """Build a single job dict from a DataFrame row."""
         job: Dict[str, Any] = {}
+        trace_fields: List[Tuple[FieldSpec, Any, str]] = []  # (spec, raw, col_name)
 
         for fs in FIELD_REGISTRY:
             canon = fs.canonical_name
             if canon in mapped:
                 raw = row.get(mapped[canon])
+                if fs.field_type == "trace":
+                    # Defer trace conversion until we have wall_time/nodes
+                    trace_fields.append((fs, raw, mapped.get(canon, "")))
+                    job[canon] = fs.default
+                    if isinstance(job[canon], list):
+                        job[canon] = list(job[canon])
+                    continue
                 value = self._convert_value(raw, fs, mapped.get(canon, ""), ref_time)
             else:
                 value = fs.default
@@ -636,6 +699,13 @@ class JobDictBuilder:
                     value = list(value)
 
             job[canon] = value
+
+        # Now convert traces with wall_time / nodes context
+        wall_time = job.get("expected_run_time", 0) or 0
+        nodes_req = job.get("nodes_required", 1) or 1
+        for fs, raw, col_name in trace_fields:
+            job[fs.canonical_name] = self._convert_trace(
+                raw, fs, col_name, wall_time, nodes_req)
 
         # Validation: skip jobs with nodes_required <= 0
         if job.get("nodes_required") is not None and job["nodes_required"] <= 0:
@@ -653,17 +723,17 @@ class JobDictBuilder:
         # Add RAPS trace-metadata fields required by raps.job.Job / job_dict
         start = job.get("start_time", 0) or 0
         end = job.get("end_time", 0) or 0
-        submit = job.get("submit_time", 0) or 0
+        wall_time = job.get("expected_run_time", 0) or 0
 
-        job["current_state"] = "COMPLETED"  # historical data → all completed
+        job["current_state"] = "PENDING"      # scheduler moves to RUNNING
         job["current_run_time"] = 0
-        job["trace_time"] = submit  # same convention as RAPS dataloaders
-        job["trace_start_time"] = start
-        job["trace_end_time"] = end
-        job["trace_quanta"] = 1
-        job["trace_missing_values"] = False
-        job["allocated_cpu_cores"] = job.get("cpu_cores_required", 0)
-        job["allocated_gpu_units"] = job.get("gpu_units_required", 0)
+        job["trace_time"] = wall_time         # duration of trace data
+        job["trace_start_time"] = end         # RAPS convention for scalar traces
+        job["trace_end_time"] = start         # RAPS convention for scalar traces
+        job["trace_quanta"] = None            # scalar trace, no time series
+        job["trace_missing_values"] = True    # scalar = missing per-timestep data
+        job["allocated_cpu_cores"] = 0        # simulator fills these
+        job["allocated_gpu_units"] = 0        # simulator fills these
         job["downscale"] = 1
         job["dilated"] = False
 
@@ -702,7 +772,8 @@ class JobDictBuilder:
             return self._convert_timestamp(raw, ref_time)
 
         if fs.field_type == "trace":
-            return self.trace_normalizer.normalize_trace(raw, fs.canonical_name, col_name)
+            return self.trace_normalizer.normalize_trace(
+                raw, fs.canonical_name, col_name)
 
         if fs.field_type == "state":
             return _normalize_state(raw)
@@ -711,6 +782,17 @@ class JobDictBuilder:
             return _parse_node_list(raw)
 
         return raw
+
+    def _convert_trace(self, raw: Any, fs: FieldSpec, col_name: str,
+                       wall_time: float, nodes_required: int) -> Any:
+        """Convert a trace value with wall_time/nodes context for RAPS formula."""
+        if raw is None or (isinstance(raw, float) and np.isnan(raw)):
+            default = fs.default
+            if isinstance(default, list):
+                return list(default)
+            return default
+        return self.trace_normalizer.normalize_trace(
+            raw, fs.canonical_name, col_name, wall_time, nodes_required)
 
     def _convert_timestamp(self, raw: Any, ref_time: float) -> float:
         """Convert a timestamp value to relative seconds from ref_time."""
@@ -863,6 +945,46 @@ def get_job_class():
         return None, _local_job_dict
 
 
+def load_raps_power_config(system_name: str) -> Optional[Dict[str, Any]]:
+    """Load power/system config from an installed RAPS system config.
+
+    Reads the RAPS YAML for *system_name* and converts the ``power`` and
+    ``system`` sections into the ``power_config`` dict expected by
+    :class:`TraceNormalizer`.
+
+    Returns ``None`` when RAPS is not installed or the system is not found.
+    """
+    try:
+        from raps.system_config import get_system_config
+    except ImportError:
+        logger.debug("RAPS not installed — cannot load system config")
+        return None
+
+    try:
+        cfg = get_system_config(system_name)
+    except FileNotFoundError:
+        logger.warning(f"RAPS system config '{system_name}' not found")
+        return None
+
+    pwr = cfg.power
+    sys = cfg.system
+    return {
+        "cpu": {
+            "idle": pwr.power_cpu_idle,
+            "max": pwr.power_cpu_max,
+            "per_node": sys.cpus_per_node,
+        },
+        "gpu": {
+            "idle": pwr.power_gpu_idle,
+            "max": pwr.power_gpu_max,
+            "per_node": sys.gpus_per_node,
+        },
+        "nics_per_node": sys.nics_per_node,
+        "power_nic": pwr.power_nic or 0,
+        "power_mem": pwr.power_mem,
+    }
+
+
 def _local_job_dict(**kwargs) -> Dict[str, Any]:
     """Local fallback that produces the same dict structure as raps.job.job_dict."""
     return {
@@ -871,7 +993,7 @@ def _local_job_dict(**kwargs) -> Dict[str, Any]:
         "account": kwargs.get("account", "unknown"),
         "nodes_required": kwargs.get("nodes_required", 1),
         # Allocation
-        "current_state": kwargs.get("current_state", "COMPLETED"),
+        "current_state": kwargs.get("current_state", "PENDING"),
         "end_state": kwargs.get("end_state", "COMPLETED"),
         "scheduled_nodes": kwargs.get("scheduled_nodes", []),
         "priority": kwargs.get("priority", 0),
@@ -896,8 +1018,8 @@ def _local_job_dict(**kwargs) -> Dict[str, Any]:
         "trace_time": kwargs.get("trace_time", 0),
         "trace_start_time": kwargs.get("trace_start_time", 0),
         "trace_end_time": kwargs.get("trace_end_time", 0),
-        "trace_quanta": kwargs.get("trace_quanta", 1),
-        "trace_missing_values": kwargs.get("trace_missing_values", False),
+        "trace_quanta": kwargs.get("trace_quanta", None),
+        "trace_missing_values": kwargs.get("trace_missing_values", True),
         "dilated": kwargs.get("dilated", False),
         "downscale": kwargs.get("downscale", 1),
     }
@@ -995,10 +1117,11 @@ class BuildJobDicts(PipelineStep):
             return ctx
 
         builder = JobDictBuilder(power_config=self.power_config)
-        jobs = builder.build_jobs(ctx.data, mapping)
+        jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 
         ctx.data = jobs
         ctx.metadata["raps_job_count"] = len(jobs)
+        ctx.metadata["_raps_ref_time"] = ref_time
 
         return ctx
 
@@ -1035,6 +1158,7 @@ class SaveJobDicts(PipelineStep):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         jobs = ctx.data
+        ref_time = ctx.metadata.get("_raps_ref_time", 0.0)
         saved_files: List[str] = []
 
         # --- Compute telemetry envelope ---
@@ -1049,7 +1173,7 @@ class SaveJobDicts(PipelineStep):
 
         # --- Primary output ---
         if fmt == "npz":
-            self._save_npz(jobs, output_dir, telemetry_start, telemetry_end, saved_files)
+            self._save_npz(jobs, output_dir, telemetry_start, telemetry_end, saved_files, ref_time)
         elif fmt == "json":
             self._save_json(jobs, output_dir, saved_files)
         elif fmt == "parquet":
@@ -1058,7 +1182,7 @@ class SaveJobDicts(PipelineStep):
             self._save_csv(jobs, output_dir, saved_files)
         else:
             logger.warning(f"Unknown output format '{fmt}', falling back to npz")
-            self._save_npz(jobs, output_dir, telemetry_start, telemetry_end, saved_files)
+            self._save_npz(jobs, output_dir, telemetry_start, telemetry_end, saved_files, ref_time)
 
         # --- Save mapping metadata (always) ---
         meta_path = output_dir / "raps_mapping_metadata.json"
@@ -1083,12 +1207,16 @@ class SaveJobDicts(PipelineStep):
 
     # ---- format-specific writers ----
 
-    def _save_npz(self, jobs, output_dir, telemetry_start, telemetry_end, saved_files):
+    def _save_npz(self, jobs, output_dir, telemetry_start, telemetry_end, saved_files, ref_time=0.0):
         """RAPS-compatible NPZ snapshot."""
         from datetime import datetime, timezone
         from types import SimpleNamespace
 
-        start_date = datetime.now(timezone.utc)
+        # Use actual telemetry start datetime (from ref_time) instead of now()
+        if ref_time and ref_time > 0:
+            start_date = datetime.fromtimestamp(ref_time, tz=timezone.utc)
+        else:
+            start_date = datetime.now(timezone.utc)
 
         Job_cls, _ = get_job_class()
         if Job_cls is not None:

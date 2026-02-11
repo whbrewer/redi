@@ -514,7 +514,7 @@ class PipelineRecommender:
             "pipeline_name": pipeline['name'],
             "current_level": self.current_level.name,
             "current_level_description": self.current_level.description(),
-            "target_level": MaturityLevel.FULLY_AI_READY.name,
+            "target_level": MaturityLevel.FULLY_READY.name,
             "needed_steps": needed_steps,
             "recommended_tools": pipeline['tools'],
             "output_formats": pipeline['output_formats'],
@@ -527,7 +527,7 @@ class PipelineRecommender:
             MaturityLevel.CLEANED: 1,
             MaturityLevel.LABELED: 2,
             MaturityLevel.FEATURE_ENGINEERED: 3,
-            MaturityLevel.FULLY_AI_READY: len(all_steps)
+            MaturityLevel.FULLY_READY: len(all_steps)
         }
 
         completed_steps = level_to_steps.get(self.current_level, 0)

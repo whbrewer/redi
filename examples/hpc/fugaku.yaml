@@ -6,6 +6,9 @@
 # Columns: 45 (abbreviated Japanese-style field names + power/performance metrics)
 #
 # Fugaku uses cryptic abbreviated column names that require explicit mapping.
+#
+# Power config is loaded automatically from the RAPS system config
+# (raps/config/fugaku.yaml) — no need to duplicate it here.
 
 domain: hpc
 input_path: /opt/data/fugaku/21_04.parquet
@@ -31,9 +34,3 @@ raps_jobs:
     cnumr: cpu_cores_required     # Core number requested
     avgpcon: cpu_trace            # Average power consumption
     pclass: partition             # Partition class
-
-  power_config:
-    # Fugaku A64FX processors: power consumption per node
-    cpu:
-      idle: 30     # watts idle (A64FX is very power efficient)
-      max: 130     # watts TDP for A64FX

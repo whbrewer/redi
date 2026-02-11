@@ -22,7 +22,7 @@ class MaturityLevel(Enum):
     CLEANED = 2
     LABELED = 3
     FEATURE_ENGINEERED = 4
-    FULLY_AI_READY = 5
+    FULLY_READY = 5
 
     def description(self) -> str:
         descriptions = {
@@ -30,7 +30,7 @@ class MaturityLevel(Enum):
             2: "Missing values handled, outliers addressed, basic quality checks passed",
             3: "Target variables defined, annotations added where needed",
             4: "Domain-specific features extracted, transformations applied",
-            5: "Sharded, normalized, in AI-optimized format (HDF5/TFRecord/NPZ/Zarr)"
+            5: "Sharded, normalized, in optimized format (HDF5/TFRecord/NPZ/Zarr)"
         }
         return descriptions[self.value]
 

@@ -130,10 +130,11 @@ def get_preprocess_steps():
                 df = ctx.data
                 initial_count = len(df)
 
-                # Remove jobs with zero/negative runtime
+                # Remove jobs with zero/negative numeric timing values
+                # (skip datetime columns — they are timestamps, not durations)
                 timing_cols = ctx.metadata.get("identified_fields", {}).get("timing", [])
                 for col in timing_cols:
-                    if col in df.columns:
+                    if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
                         df = df[df[col] > 0]
 
                 # Optionally remove failed jobs
@@ -448,6 +449,77 @@ def get_output_steps():
     return get_output_steps(output_format="npz")
 
 
+def _get_raps_preprocess_steps():
+    """Preprocess steps for RAPS job extraction.
+
+    Mirrors the cleaning that RAPS dataloaders apply:
+      1. Drop rows with missing start/end timestamps
+      2. Deduplicate by job ID (keep last)
+      3. Drop rows with null node counts
+
+    Heavier validation (start <= end, wall_time > 0, nodes > 0) is handled
+    downstream by the JobDictBuilder which has access to the mapped fields.
+    """
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class CleanHPCForRAPS(PipelineStep):
+        """Clean HPC data for RAPS job extraction."""
+
+        name = "clean_hpc_raps"
+        stage = PipelineStage.PREPROCESS
+        description = "Clean HPC data for RAPS job extraction"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import pandas as pd
+
+                if not isinstance(ctx.data, pd.DataFrame):
+                    return ctx
+
+                df = ctx.data
+                initial_count = len(df)
+
+                # Drop rows with missing start/end timestamps
+                time_keywords = ["start", "end"]
+                ts_cols = [
+                    c for c in df.columns
+                    if any(kw in c.lower() for kw in time_keywords)
+                    and ("time" in c.lower() or "date" in c.lower()
+                         or "stamp" in c.lower() or c.lower() in ("start", "end",
+                                                                   "sdt", "edt"))
+                ]
+                if ts_cols:
+                    df = df.dropna(subset=ts_cols)
+
+                # Deduplicate by job ID column (keep last, matching RAPS convention)
+                id_keywords = ["job_id", "jobid", "jid", "id_job", "job_ID",
+                               "primary_job_id", "allocation_id"]
+                id_col = None
+                for kw in id_keywords:
+                    if kw in df.columns:
+                        id_col = kw
+                        break
+                if id_col:
+                    df = df.drop_duplicates(subset=id_col, keep="last")
+                else:
+                    df = df.drop_duplicates()
+
+                ctx.data = df.reset_index(drop=True)
+                removed = initial_count - len(df)
+                if removed:
+                    logger.info(f"RAPS clean: {initial_count} → {len(df)} jobs "
+                                f"({removed} removed)")
+                else:
+                    logger.info(f"RAPS clean: {len(df)} jobs (no rows removed)")
+
+            except Exception as e:
+                ctx.add_error(f"Error cleaning HPC data for RAPS: {str(e)}")
+
+            return ctx
+
+    return [CleanHPCForRAPS()]
+
+
 def get_raps_pipeline(column_overrides=None, power_config=None, output_format="npz",
                       system_name="unknown"):
     """Get the RAPS Job extraction pipeline.
@@ -459,11 +531,9 @@ def get_raps_pipeline(column_overrides=None, power_config=None, output_format="n
         system_name: RAPS system name stored in the NPZ snapshot (e.g. "adastraMI250")
     """
     from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
-    from ..pipeline.ingest import DetectFormat
 
-    # Reuse existing ingest/preprocess, then switch to RAPS-specific steps
     ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
-    preprocess = get_preprocess_steps()                  # CleanHPCData + ParseTimestamps
+    preprocess = _get_raps_preprocess_steps()             # RAPS-specific cleaning
     raps_steps = [
         AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
         DeriveJobFields(),                               # derive missing fields
