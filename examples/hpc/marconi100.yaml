@@ -1,0 +1,45 @@
+# REDI RAPS Job Extraction — Marconi100 (CINECA, Italy)
+#
+# Data: SLURM job accounting with per-node power consumption (Parquet + CSV)
+# Source: /opt/data/marconi100/p_m_100.parquet (287 MB, primary)
+#         /opt/data/marconi100/output.csv (326 MB, CSV equivalent)
+# Records: ~231,238 jobs
+# Columns: 35 (SLURM fields + node/mem/cpu power consumption)
+#
+# Marconi100 uses the same SLURM schema as Adastra MI250 (both from the
+# same RAPS dataloader family). IBM POWER9 CPUs + NVIDIA V100 GPUs.
+
+domain: hpc
+input_path: /opt/data/marconi100/p_m_100.parquet
+output_dir: ./output/marconi100_raps
+
+raps_jobs:
+  enabled: true
+  system_name: marconi100
+
+  column_overrides:
+    # SLURM-style columns
+    job_id: id
+    user_id: account
+    num_nodes_alloc: nodes_required
+    submit_time: submit_time
+    start_time: start_time
+    end_time: end_time
+    time_limit: time_limit
+    run_time: expected_run_time
+    job_state: end_state
+    partition: partition
+    priority: priority
+    qos: partition              # QOS can map to partition
+    num_cores_alloc: cpu_cores_required
+    num_gpus_alloc: gpu_units_required
+    nodes: scheduled_nodes
+
+  power_config:
+    # Marconi100: IBM POWER9 CPUs + NVIDIA V100 GPUs
+    cpu:
+      idle: 50     # watts idle per node
+      max: 300     # watts max per POWER9 node
+    gpu:
+      idle: 40     # watts idle per V100
+      max: 300     # watts TDP for V100

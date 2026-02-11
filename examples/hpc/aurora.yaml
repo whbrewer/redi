@@ -1,0 +1,31 @@
+# REDI RAPS Job Extraction — Aurora (ANL-ALCF, Argonne)
+#
+# Data: ALCF job accounting CSV (DJC = Data & Jobs Collection)
+# Source: /opt/data/aurora/ANL-ALCF-DJC-AURORA_20250127_20251031.csv
+# Records: ~663,507 jobs
+# Columns: 57+ (job tracking, core/node usage, wait times, capability flags)
+
+domain: hpc
+input_path: /opt/data/aurora/ANL-ALCF-DJC-AURORA_20250127_20251031.csv
+output_dir: ./output/aurora_raps
+
+raps_jobs:
+  enabled: true
+  system_name: aurora
+
+  column_overrides:
+    # Aurora uses COBALT scheduler, not SLURM — different naming conventions
+    COBALT_JOBID: id
+    JOB_NAME: name
+    USERNAME_GENID: account
+    NODES_USED: nodes_required
+    QUEUED_TIMESTAMP: submit_time
+    START_TIMESTAMP: start_time
+    END_TIMESTAMP: end_time
+    WALLTIME_SECONDS: time_limit
+    RUNTIME_SECONDS: expected_run_time
+    EXIT_STATUS: end_state
+    QUEUE_NAME: partition
+    CORES_USED: cpu_cores_required
+    GPUS_REQUESTED: gpu_units_required
+    LOCATION: scheduled_nodes

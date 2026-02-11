@@ -1,0 +1,39 @@
+# REDI RAPS Job Extraction — MIT Supercloud (MIT Lincoln Lab)
+#
+# Data: Two complementary datasets:
+#   1. SLURM job log: /opt/data/mit_supercloud/202201/slurm-log.csv
+#      — Job-level accounting (submit/start/end times, nodes, exit codes)
+#   2. GPU telemetry: /opt/data/mit_supercloud/202201/gpu/{job_id}/*.csv
+#      — Per-job GPU time series (utilization, temperature, power draw)
+#
+# Records: SLURM log has job-level records; GPU traces are per-job files
+# SLURM log columns: id_job, id_array_job, id_array_task, id_user,
+#   nodes_alloc, nodelist, cpus_req, derived_ec, exit_code, partition,
+#   priority, state, timelimit, time_submit, time_eligible, time_start,
+#   time_end, tres_alloc, tres_req, job_type, ...
+#
+# This config targets the SLURM log for job extraction.
+
+domain: hpc
+input_path: /opt/data/mit_supercloud/202201/slurm-log.csv
+output_dir: ./output/mit_supercloud_raps
+
+raps_jobs:
+  enabled: true
+  system_name: mit_supercloud
+
+  column_overrides:
+    # MIT Supercloud SLURM log field names
+    id_job: id
+    id_user: account
+    nodes_alloc: nodes_required
+    time_submit: submit_time
+    time_start: start_time
+    time_end: end_time
+    timelimit: time_limit
+    state: end_state
+    partition: partition
+    priority: priority
+    cpus_req: cpu_cores_required
+    nodelist: scheduled_nodes
+    exit_code: end_state         # fallback if 'state' is unavailable

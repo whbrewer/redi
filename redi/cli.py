@@ -249,7 +249,8 @@ def run_pipeline(
     input_paths: Optional[List[str]] = None,
     array_mode: bool = False,
     normalize_method: Optional[str] = None,
-    verify: bool = False
+    verify: bool = False,
+    raps_jobs: bool = False,
 ):
     """Run the REDI pipeline with engaging visual output
 
@@ -265,6 +266,7 @@ def run_pipeline(
         array_mode: If True, optimize pipeline for array data (skip DataFrame steps)
         normalize_method: Normalization method for array data ("minmax" or "zscore")
         verify: If True, run verification checks after each pipeline step
+        raps_jobs: If True, extract RAPS Job objects from HPC telemetry data
     """
     from .pipeline import Pipeline, PipelineStage, create_context
 
@@ -391,7 +393,19 @@ def run_pipeline(
         elif domain == "fusion":
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
-            from .domains.hpc import get_full_pipeline
+            from .domains.hpc import get_full_pipeline as _get_hpc_pipeline
+            _raps_cfg = config.get("raps_jobs", {}) if config else {}
+            _col_overrides = _raps_cfg.get("column_overrides") if isinstance(_raps_cfg, dict) else None
+            _power_cfg = _raps_cfg.get("power_config") if isinstance(_raps_cfg, dict) else None
+            _out_fmt = config.get("output_format", "npz") if config else "npz"
+            _sys_name = _raps_cfg.get("system_name", "unknown") if isinstance(_raps_cfg, dict) else "unknown"
+            get_full_pipeline = lambda: _get_hpc_pipeline(
+                raps_jobs=raps_jobs,
+                column_overrides=_col_overrides,
+                power_config=_power_cfg,
+                output_format=_out_fmt,
+                system_name=_sys_name,
+            )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline
             _split_cfg = config.get("split", {})
@@ -2644,6 +2658,8 @@ Download examples (climate domain):
     run_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     run_parser.add_argument("--verify", action="store_true",
                            help="Run verification checks after each pipeline step")
+    run_parser.add_argument("--raps-jobs", action="store_true", dest="raps_jobs",
+                           help="Extract RAPS Job objects from HPC telemetry (HPC domain only)")
     run_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                            help="Output style")
     run_parser.add_argument("-c", "--config", help="YAML configuration file path")
@@ -2884,6 +2900,14 @@ def _handle_run_command(args):
     normalize_method = args.normalize if hasattr(args, 'normalize') else config.get('normalize_method')
 
     verify = args.verify if hasattr(args, 'verify') else config.get('verify', False)
+    # --raps-jobs flag takes priority; if not set, check YAML config
+    raps_jobs = getattr(args, 'raps_jobs', False)
+    if not raps_jobs:
+        raps_cfg = config.get('raps_jobs', {})
+        if isinstance(raps_cfg, dict):
+            raps_jobs = raps_cfg.get('enabled', False)
+        else:
+            raps_jobs = bool(raps_cfg)
 
     ctx = run_pipeline(
         output_dir=config.get('output_dir', args.output),
@@ -2895,7 +2919,8 @@ def _handle_run_command(args):
         input_paths=[str(p) for p in input_paths],
         array_mode=array_mode,
         normalize_method=normalize_method,
-        verify=verify
+        verify=verify,
+        raps_jobs=raps_jobs,
     )
 
 

@@ -1,0 +1,32 @@
+# REDI RAPS Job Extraction — Adastra MI250 (CINES, France)
+#
+# Data: SLURM job accounting with per-node power telemetry
+# Source: /opt/data/adastraMI250/AdastaJobsMI250_15days.parquet
+# Records: ~15,285 jobs over 15 days
+# Columns: 35 (SLURM fields + node/mem/cpu power consumption)
+
+domain: hpc
+input_path: /opt/data/adastraMI250/AdastaJobsMI250_15days.parquet
+output_dir: ./output/adastra_mi250_raps
+
+raps_jobs:
+  enabled: true
+  system_name: adastraMI250
+
+  column_overrides:
+    # SLURM-style columns need explicit mapping where alias list doesn't cover them
+    num_nodes_alloc: nodes_required
+    num_cores_alloc: cpu_cores_required
+    num_gpus_alloc: gpu_units_required
+    user_id: account
+    job_state: end_state
+    nodes: scheduled_nodes
+
+  power_config:
+    # Adastra MI250 nodes: AMD EPYC 7763 CPUs + AMD MI250X GPUs
+    cpu:
+      idle: 100    # watts idle per node
+      max: 500     # watts max per node
+    gpu:
+      idle: 50     # watts idle per GPU
+      max: 560     # watts TDP for MI250X

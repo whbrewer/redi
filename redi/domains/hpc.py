@@ -448,8 +448,42 @@ def get_output_steps():
     return get_output_steps(output_format="npz")
 
 
-def get_full_pipeline():
-    """Get the complete HPC preprocessing pipeline"""
+def get_raps_pipeline(column_overrides=None, power_config=None, output_format="npz",
+                      system_name="unknown"):
+    """Get the RAPS Job extraction pipeline.
+
+    Args:
+        column_overrides: Dict mapping original_column_name → canonical_field_name
+        power_config: Dict like {"cpu": {"idle": 100, "max": 500}} for power→utilization
+        output_format: Output format — npz (default), json, parquet, csv
+        system_name: RAPS system name stored in the NPZ snapshot (e.g. "adastraMI250")
+    """
+    from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
+    from ..pipeline.ingest import DetectFormat
+
+    # Reuse existing ingest/preprocess, then switch to RAPS-specific steps
+    ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
+    preprocess = get_preprocess_steps()                  # CleanHPCData + ParseTimestamps
+    raps_steps = [
+        AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
+        DeriveJobFields(),                               # derive missing fields
+        BuildJobDicts(power_config=power_config),        # build job dicts per row
+        SaveJobDicts(output_format=output_format, system_name=system_name),
+    ]
+    return ingest + preprocess + raps_steps
+
+
+def get_full_pipeline(raps_jobs=False, **kwargs):
+    """Get the complete HPC preprocessing pipeline.
+
+    Args:
+        raps_jobs: If True, return the RAPS Job extraction pipeline instead of
+                   the default ML-prep pipeline.
+        **kwargs: Passed to get_raps_pipeline() when raps_jobs=True
+                  (column_overrides, power_config, output_format).
+    """
+    if raps_jobs:
+        return get_raps_pipeline(**kwargs)
     return (
         get_ingest_steps() +
         get_preprocess_steps() +

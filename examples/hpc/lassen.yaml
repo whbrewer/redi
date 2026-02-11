@@ -1,0 +1,33 @@
+# REDI RAPS Job Extraction — Lassen (LLNL, Livermore)
+#
+# Data: CSM (Cluster System Manager) allocation history (CSV, hashed user IDs)
+# Source: /opt/data/lassen/Lassen-Supercomputer-Job-Dataset/final_csm_allocation_history_hashed.csv
+# Records: ~1,467,747 jobs
+# Columns: 26 (CSM allocation fields with hashed identifiers)
+#
+# Also available:
+#   - final_csm_allocation_node_history.csv — per-node allocation details
+#   - final_csm_step_history.csv — job step-level granularity
+
+domain: hpc
+input_path: /opt/data/lassen/Lassen-Supercomputer-Job-Dataset/final_csm_allocation_history_hashed.csv
+output_dir: ./output/lassen_raps
+
+raps_jobs:
+  enabled: true
+  system_name: lassen
+
+  column_overrides:
+    # Lassen CSM uses IBM-specific field names
+    allocation_id: id
+    primary_job_id: id            # alternative ID — use whichever is preferred
+    hashed_user_id: account
+    num_nodes: nodes_required
+    job_submit_time: submit_time
+    begin_time: start_time
+    end_time: end_time
+    time_limit: time_limit
+    exit_status: end_state
+    queue: partition
+    num_processors: cpu_cores_required
+    num_gpus: gpu_units_required

@@ -1,0 +1,35 @@
+# REDI RAPS Job Extraction — Frontier (ORNL, Oak Ridge)
+#
+# Data: SLURM joblive records (Parquet, partitioned by date)
+# Source: /opt/data/frontier/slurm/joblive/date=2024-01-18/
+# Records: ~152,922 jobs per partition
+# Columns: 29 (SLURM accounting + xnames node list)
+#
+# Frontier also has:
+#   - jobprofile/ — detailed SLURM sacct data (89 columns)
+#   - cdu/ — cooling distribution unit telemetry (17 columns)
+# This config targets the joblive data which has the core Job fields.
+
+domain: hpc
+input_path: "/opt/data/frontier/slurm/joblive/date=2024-01-18/*.parquet"
+output_dir: ./output/frontier_raps
+
+raps_jobs:
+  enabled: true
+  system_name: frontier
+
+  column_overrides:
+    # Frontier SLURM joblive uses slightly different names
+    job_id: id
+    name: name
+    account: account
+    node_count: nodes_required
+    time_submission: submit_time
+    time_start: start_time
+    time_end: end_time
+    time_limit: time_limit
+    time_elapsed: expected_run_time
+    state_current: end_state
+    partition: partition
+    xnames: scheduled_nodes
+    allocation_id: id  # alternative ID field
