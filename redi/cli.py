@@ -394,21 +394,34 @@ def run_pipeline(
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
             from .domains.hpc import get_full_pipeline as _get_hpc_pipeline
-            from .domains.hpc_job_mapper import load_raps_power_config
+            from .domains.hpc_job_mapper import load_raps_system_params
             _raps_cfg = config.get("raps_jobs", {}) if config else {}
             _col_overrides = _raps_cfg.get("column_overrides") if isinstance(_raps_cfg, dict) else None
             _out_fmt = config.get("output_format", "npz") if config else "npz"
             _sys_name = _raps_cfg.get("system_name", "unknown") if isinstance(_raps_cfg, dict) else "unknown"
-            # Load power config from RAPS system config; fall back to REDI YAML
-            _power_cfg = load_raps_power_config(_sys_name) if _sys_name != "unknown" else None
+            # Load power + scheduler params from RAPS system config
+            _sys_params = load_raps_system_params(_sys_name) if _sys_name != "unknown" else None
+            _power_cfg = _sys_params["power_config"] if _sys_params else None
+            _trace_quanta = _sys_params["trace_quanta"] if _sys_params else None
+            _topology = _sys_params["topology"] if _sys_params else None
+            # Fall back to REDI YAML for power config / topology / trace_quanta
             if _power_cfg is None:
                 _power_cfg = _raps_cfg.get("power_config") if isinstance(_raps_cfg, dict) else None
+            if _topology is None:
+                _topology = _raps_cfg.get("topology") if isinstance(_raps_cfg, dict) else None
+            if _trace_quanta is None:
+                _trace_quanta = _raps_cfg.get("trace_quanta") if isinstance(_raps_cfg, dict) else None
+            # Jobprofile path from config
+            _jp_path = _raps_cfg.get("jobprofile_path") if isinstance(_raps_cfg, dict) else None
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
                 power_config=_power_cfg,
+                trace_quanta=_trace_quanta,
                 output_format=_out_fmt,
                 system_name=_sys_name,
+                jobprofile_path=_jp_path,
+                topology=_topology,
             )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline

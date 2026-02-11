@@ -6,9 +6,12 @@
 # Columns: 29 (SLURM accounting + xnames node list)
 #
 # Frontier also has:
-#   - jobprofile/ — detailed SLURM sacct data (89 columns)
+#   - jobprofile/ — per-timestep power telemetry (130+ columns, joined on allocation_id)
 #   - cdu/ — cooling distribution unit telemetry (17 columns)
-# This config targets the joblive data which has the core Job fields.
+#
+# When jobprofile_path is set, REDI joins joblive + jobprofile on allocation_id
+# to produce per-timestep cpu_trace/gpu_trace arrays (matching RAPS behavior).
+# Jobs without matching jobprofile entries are filtered out.
 
 domain: hpc
 input_path: "/opt/data/frontier/slurm/joblive/date=2024-01-18/*.parquet"
@@ -17,9 +20,31 @@ output_dir: ./output/frontier_raps
 raps_jobs:
   enabled: true
   system_name: frontier
+  jobprofile_path: "/opt/data/frontier/jobprofile/date=2024-01-18/*.parquet"
+
+  # Trace time-step from RAPS scheduler config (seconds)
+  trace_quanta: 60
+
+  # Power config for trace normalization (from RAPS frontier.yaml)
+  # Used when RAPS is not installed; overridden by RAPS system config when available
+  power_config:
+    cpu:
+      idle: 90
+      max: 280
+      per_node: 1    # cpus_per_node
+    gpu:
+      idle: 44
+      max: 238
+      per_node: 8    # gpus_per_node
+
+  # System topology for xname → node index conversion
+  topology:
+    sc_shape: [25, 3, 128]
+    blades_per_chassis: 8
+    nodes_per_blade: 2
 
   column_overrides:
-    # Frontier SLURM joblive uses slightly different names
+    # Frontier SLURM joblive column names → RAPS canonical fields
     job_id: id
     name: name
     account: account
@@ -32,4 +57,3 @@ raps_jobs:
     state_current: end_state
     partition: partition
     xnames: scheduled_nodes
-    allocation_id: id  # alternative ID field

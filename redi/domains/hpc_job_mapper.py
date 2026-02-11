@@ -130,14 +130,14 @@ FIELD_REGISTRY: List[FieldSpec] = [
         aliases=["ntx_trace", "ib_tx", "net_tx", "ipogif0_tx_bytes"],
         field_type="trace",
         required=False,
-        default=[],
+        default=None,
     ),
     FieldSpec(
         canonical_name="nrx_trace",
         aliases=["nrx_trace", "ib_rx", "net_rx", "ipogif0_rx_bytes"],
         field_type="trace",
         required=False,
-        default=[],
+        default=None,
     ),
     FieldSpec(
         canonical_name="end_state",
@@ -615,8 +615,18 @@ _STATE_MAP = {
 class JobDictBuilder:
     """Builds RAPS-compatible job_dict dictionaries from mapped DataFrame rows."""
 
-    def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None):
+    def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None,
+                 trace_quanta: Optional[int] = None,
+                 jobprofile_df: Optional[pd.DataFrame] = None,
+                 topology: Optional[Dict[str, Any]] = None,
+                 system_name: str = "unknown"):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
+        self.power_config = power_config or {}
+        self.trace_quanta = trace_quanta
+        self.jobprofile_df = jobprofile_df
+        self.topology = topology
+        self.system_name = system_name
+        self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -631,7 +641,14 @@ class JobDictBuilder:
         jobs: List[Dict[str, Any]] = []
         mapped = mapping.mapped
 
-        # Find reference time (earliest start time)
+        # Pre-group jobprofile by allocation_id for O(1) lookups
+        if self.jobprofile_df is not None and "allocation_id" in self.jobprofile_df.columns:
+            self._jp_groups = {
+                str(k): v for k, v in self.jobprofile_df.groupby("allocation_id")
+            }
+            logger.info(f"Jobprofile: {len(self._jp_groups)} unique allocations")
+
+        # Find reference time
         ref_time = self._find_reference_time(df, mapped)
 
         skipped = 0
@@ -653,19 +670,26 @@ class JobDictBuilder:
         return jobs, ref_time
 
     def _find_reference_time(self, df: pd.DataFrame, mapped: Dict[str, str]) -> float:
-        """Find the earliest start_time to use as reference (epoch seconds).
+        """Find the earliest timestamp to use as reference (epoch seconds).
 
-        RAPS dataloaders use ``start_time.min()`` as reference.  Submit times
-        that precede the start window become negative, which is correct.
+        When jobprofile is available, uses ``jobprofile_df['timestamp'].min()``
+        (matching RAPS convention).  Otherwise falls back to ``start_time.min()``.
         """
-        # Primary: use start_time.min()
+        # Primary: use jobprofile timestamp.min() when available
+        if self.jobprofile_df is not None and "timestamp" in self.jobprofile_df.columns:
+            ts = self.jobprofile_df["timestamp"]
+            valid = ts.dropna()
+            if not valid.empty:
+                return valid.min().timestamp()
+
+        # Fallback: use start_time.min()
         if "start_time" in mapped:
             col = mapped["start_time"]
             series = pd.to_datetime(df[col], errors="coerce")
             valid = series.dropna()
             if not valid.empty:
                 return valid.min().timestamp()
-        # Fallback: submit_time
+        # Last resort: submit_time
         if "submit_time" in mapped:
             col = mapped["submit_time"]
             series = pd.to_datetime(df[col], errors="coerce")
@@ -700,12 +724,46 @@ class JobDictBuilder:
 
             job[canon] = value
 
+        # Validation: skip if raw end_time is NaN/NaT (still-running jobs)
+        if "end_time" in mapped:
+            raw_end = row.get(mapped["end_time"])
+            if raw_end is None or pd.isna(raw_end):
+                logger.debug(f"Skipping job {job.get('id', '?')}: NaN/NaT end_time")
+                return None
+
         # Now convert traces with wall_time / nodes context
         wall_time = job.get("expected_run_time", 0) or 0
         nodes_req = job.get("nodes_required", 1) or 1
-        for fs, raw, col_name in trace_fields:
-            job[fs.canonical_name] = self._convert_trace(
-                raw, fs, col_name, wall_time, nodes_req)
+
+        # Jobprofile join: build per-timestep traces from power telemetry
+        if self._jp_groups is not None:
+            # Get allocation_id from the raw row (joblive column)
+            alloc_id = self._get_allocation_id(row, mapped)
+            if alloc_id is not None:
+                got_profile = self._build_traces_from_jobprofile(job, alloc_id, nodes_req)
+                if not got_profile:
+                    # No matching jobprofile → skip job (matches RAPS behavior)
+                    logger.debug(f"Skipping job {job.get('id', '?')}: no jobprofile for allocation {alloc_id}")
+                    return None
+            else:
+                logger.debug(f"Skipping job {job.get('id', '?')}: no allocation_id")
+                return None
+        else:
+            # No jobprofile — use scalar trace normalization
+            for fs, raw, col_name in trace_fields:
+                job[fs.canonical_name] = self._convert_trace(
+                    raw, fs, col_name, wall_time, nodes_req)
+
+        # Convert scheduled_nodes with system-specific xname converter
+        if self.topology and isinstance(job.get("scheduled_nodes"), list):
+            raw_nodes = job["scheduled_nodes"]
+            if raw_nodes:
+                # raw_nodes are already parsed int hashes — re-parse from original
+                raw_node_val = row.get(mapped.get("scheduled_nodes", ""))
+                if raw_node_val is not None and not (isinstance(raw_node_val, float) and np.isnan(raw_node_val)):
+                    parsed = _parse_node_list_raw(raw_node_val)
+                    job["scheduled_nodes"] = convert_node_names(
+                        parsed, self.system_name, self.topology)
 
         # Validation: skip jobs with nodes_required <= 0
         if job.get("nodes_required") is not None and job["nodes_required"] <= 0:
@@ -725,17 +783,32 @@ class JobDictBuilder:
         end = job.get("end_time", 0) or 0
         wall_time = job.get("expected_run_time", 0) or 0
 
+        # Determine whether we have real per-timestep trace arrays
+        cpu_trace = job.get("cpu_trace")
+        has_timeseries = isinstance(cpu_trace, (list, np.ndarray)) and len(cpu_trace) > 1
+
         job["current_state"] = "PENDING"      # scheduler moves to RUNNING
         job["current_run_time"] = 0
-        job["trace_time"] = wall_time         # duration of trace data
-        job["trace_start_time"] = end         # RAPS convention for scalar traces
-        job["trace_end_time"] = start         # RAPS convention for scalar traces
-        job["trace_quanta"] = None            # scalar trace, no time series
-        job["trace_missing_values"] = True    # scalar = missing per-timestep data
         job["allocated_cpu_cores"] = 0        # simulator fills these
         job["allocated_gpu_units"] = 0        # simulator fills these
         job["downscale"] = 1
         job["dilated"] = False
+
+        if has_timeseries:
+            # Real per-timestep trace data
+            quanta = self.trace_quanta or 1
+            job["trace_quanta"] = quanta
+            job["trace_time"] = len(cpu_trace) * quanta
+            job["trace_start_time"] = end     # RAPS convention
+            job["trace_end_time"] = start     # RAPS convention
+            job["trace_missing_values"] = False
+        else:
+            # Scalar or no trace data — RAPS convention for scalar traces
+            job["trace_quanta"] = self.trace_quanta
+            job["trace_time"] = wall_time
+            job["trace_start_time"] = end     # RAPS convention
+            job["trace_end_time"] = start     # RAPS convention
+            job["trace_missing_values"] = True
 
         # Ensure partition is int (RAPS expects int | None, not str)
         part = job.get("partition", 0)
@@ -746,6 +819,80 @@ class JobDictBuilder:
                 job["partition"] = 0
 
         return job
+
+    def _get_allocation_id(self, row: pd.Series, mapped: Dict[str, str]) -> Optional[str]:
+        """Extract allocation_id from a joblive row.
+
+        Checks for an explicit 'allocation_id' column first, then falls
+        back to the mapped 'id' field.
+        """
+        # Direct column access (allocation_id is often present but not mapped)
+        if "allocation_id" in row.index:
+            val = row["allocation_id"]
+            if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                return str(val)
+        # Fall back to whatever is mapped as 'id'
+        id_col = mapped.get("id")
+        if id_col and id_col in row.index:
+            val = row[id_col]
+            if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                return str(val)
+        return None
+
+    def _build_traces_from_jobprofile(self, job: Dict[str, Any],
+                                       allocation_id: str,
+                                       nodes_required: int) -> bool:
+        """Build cpu_trace and gpu_trace arrays from jobprofile power data.
+
+        Applies the RAPS power formula:
+            util = (power - nodes * idle * per_node) / (nodes * max * per_node - nodes * idle * per_node)
+            trace = util * per_node
+
+        Returns True if traces were built, False if no matching profile found.
+        """
+        profile = self._jp_groups.get(allocation_id)
+        if profile is None or len(profile) == 0:
+            return False
+
+        nodes = max(nodes_required, 1)
+        cpu_cfg = self.power_config.get("cpu", {})
+        gpu_cfg = self.power_config.get("gpu", {})
+
+        # CPU trace
+        if "sum_cpu0_power" in profile.columns:
+            cpu_power = profile["sum_cpu0_power"].values.astype(float)
+            cpu_idle = cpu_cfg.get("idle", 0)
+            cpu_max = cpu_cfg.get("max", 0)
+            cpu_per_node = cpu_cfg.get("per_node", 1)
+            cpu_pmin = nodes * cpu_idle * cpu_per_node
+            cpu_pmax = nodes * cpu_max * cpu_per_node
+            if cpu_pmax > cpu_pmin:
+                cpu_util = (cpu_power - cpu_pmin) / (cpu_pmax - cpu_pmin)
+                cpu_trace = cpu_util * cpu_per_node
+            else:
+                cpu_trace = np.zeros_like(cpu_power)
+            job["cpu_trace"] = np.nan_to_num(cpu_trace).tolist()
+        else:
+            job["cpu_trace"] = 0
+
+        # GPU trace
+        if "sum_gpu_power" in profile.columns:
+            gpu_power = profile["sum_gpu_power"].values.astype(float)
+            gpu_idle = gpu_cfg.get("idle", 0)
+            gpu_max = gpu_cfg.get("max", 0)
+            gpu_per_node = gpu_cfg.get("per_node", 1)
+            gpu_pmin = nodes * gpu_idle * gpu_per_node
+            gpu_pmax = nodes * gpu_max * gpu_per_node
+            if gpu_pmax > gpu_pmin:
+                gpu_util = (gpu_power - gpu_pmin) / (gpu_pmax - gpu_pmin)
+                gpu_trace = gpu_util * gpu_per_node
+            else:
+                gpu_trace = np.zeros_like(gpu_power)
+            job["gpu_trace"] = np.nan_to_num(gpu_trace).tolist()
+        else:
+            job["gpu_trace"] = 0
+
+        return True
 
     def _convert_value(self, raw: Any, fs: FieldSpec, col_name: str,
                        ref_time: float) -> Any:
@@ -896,6 +1043,80 @@ def _normalize_state(val: Any) -> str:
     return s.upper() if s else "COMPLETED"
 
 
+# ---------------------------------------------------------------------------
+# Node name converters (system-specific xname → index)
+# ---------------------------------------------------------------------------
+
+def _xname_to_index(xname: str, topology: Dict[str, Any]) -> int:
+    """Convert a Frontier xname string to a linear node index.
+
+    Ported from raps.dataloaders.frontier.xname_to_index.
+    Xname format: x{row}{col:02}c{chassis}s{slot}b{node}
+    Example: x2301c4s2b1
+    """
+    row, col = int(xname[2]), int(xname[3:5])
+    chassis, slot, node = int(xname[6]), int(xname[8]), int(xname[10])
+    if row == 6:
+        col -= 9
+    rack_index = row * 12 + col
+    nodes_per_rack = topology["sc_shape"][2]
+    node_index = (chassis * topology["blades_per_chassis"] * topology["nodes_per_blade"]
+                  + slot * topology["nodes_per_blade"] + node)
+    return rack_index * nodes_per_rack + node_index
+
+
+_NODE_CONVERTERS = {"frontier": _xname_to_index}
+
+
+def convert_node_names(names: List[Any], system_name: str,
+                       topology: Optional[Dict[str, Any]] = None) -> List[int]:
+    """Convert node name strings to integer indices.
+
+    Uses a system-specific converter when available (e.g. Frontier xname),
+    otherwise falls back to stable hashing.
+    """
+    fn = _NODE_CONVERTERS.get(system_name)
+    result: List[int] = []
+    for n in names:
+        if n is None or (isinstance(n, float) and np.isnan(n)):
+            continue
+        s = str(n).strip()
+        if not s:
+            continue
+        if fn and topology:
+            try:
+                result.append(fn(s, topology))
+            except (IndexError, ValueError):
+                result.append(abs(hash(s)) % (10**9))
+        else:
+            try:
+                result.append(int(float(s)))
+            except (ValueError, TypeError):
+                result.append(abs(hash(s)) % (10**9))
+    return result
+
+
+def _parse_node_list_raw(val: Any) -> List[str]:
+    """Parse a node list into raw string items (before int conversion).
+
+    Used by convert_node_names to get the original hostnames for
+    system-specific conversion (e.g. xname → index).
+    """
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return []
+    if isinstance(val, (list, tuple, np.ndarray)):
+        return [str(x) for x in val]
+    s = str(val).strip()
+    if not s:
+        return []
+    if "," in s:
+        return [n.strip() for n in s.split(",") if n.strip()]
+    parts = s.split()
+    if len(parts) > 1:
+        return parts
+    return [s]
+
+
 def _parse_node_list(val: Any) -> List[int]:
     """Parse a node list from various formats into integer node indices.
 
@@ -945,12 +1166,12 @@ def get_job_class():
         return None, _local_job_dict
 
 
-def load_raps_power_config(system_name: str) -> Optional[Dict[str, Any]]:
-    """Load power/system config from an installed RAPS system config.
+def load_raps_system_params(system_name: str) -> Optional[Dict[str, Any]]:
+    """Load power, system, and scheduler params from an installed RAPS config.
 
-    Reads the RAPS YAML for *system_name* and converts the ``power`` and
-    ``system`` sections into the ``power_config`` dict expected by
-    :class:`TraceNormalizer`.
+    Reads the RAPS YAML for *system_name* and returns a dict with:
+      - ``power_config``: for :class:`TraceNormalizer`
+      - ``trace_quanta``: from the scheduler section
 
     Returns ``None`` when RAPS is not installed or the system is not found.
     """
@@ -969,20 +1190,37 @@ def load_raps_power_config(system_name: str) -> Optional[Dict[str, Any]]:
     pwr = cfg.power
     sys = cfg.system
     return {
-        "cpu": {
-            "idle": pwr.power_cpu_idle,
-            "max": pwr.power_cpu_max,
-            "per_node": sys.cpus_per_node,
+        "power_config": {
+            "cpu": {
+                "idle": pwr.power_cpu_idle,
+                "max": pwr.power_cpu_max,
+                "per_node": sys.cpus_per_node,
+            },
+            "gpu": {
+                "idle": pwr.power_gpu_idle,
+                "max": pwr.power_gpu_max,
+                "per_node": sys.gpus_per_node,
+            },
+            "nics_per_node": sys.nics_per_node,
+            "power_nic": pwr.power_nic or 0,
+            "power_mem": pwr.power_mem,
         },
-        "gpu": {
-            "idle": pwr.power_gpu_idle,
-            "max": pwr.power_gpu_max,
-            "per_node": sys.gpus_per_node,
+        "trace_quanta": cfg.scheduler.trace_quanta,
+        "topology": {
+            "sc_shape": sys.sc_shape,
+            "blades_per_chassis": sys.blades_per_chassis,
+            "nodes_per_blade": sys.nodes_per_blade,
         },
-        "nics_per_node": sys.nics_per_node,
-        "power_nic": pwr.power_nic or 0,
-        "power_mem": pwr.power_mem,
     }
+
+
+# Backwards-compat alias
+def load_raps_power_config(system_name: str) -> Optional[Dict[str, Any]]:
+    """Load power config from RAPS. Returns just the power_config dict."""
+    params = load_raps_system_params(system_name)
+    if params is None:
+        return None
+    return params["power_config"]
 
 
 def _local_job_dict(**kwargs) -> Dict[str, Any]:
@@ -1006,8 +1244,8 @@ def _local_job_dict(**kwargs) -> Dict[str, Any]:
         # Traces
         "cpu_trace": kwargs.get("cpu_trace", 0),
         "gpu_trace": kwargs.get("gpu_trace", 0),
-        "ntx_trace": kwargs.get("ntx_trace", []),
-        "nrx_trace": kwargs.get("nrx_trace", []),
+        "ntx_trace": kwargs.get("ntx_trace", None),
+        "nrx_trace": kwargs.get("nrx_trace", None),
         # Times
         "submit_time": kwargs.get("submit_time", 0),
         "time_limit": kwargs.get("time_limit", 0),
@@ -1102,9 +1340,15 @@ class BuildJobDicts(PipelineStep):
     stage = PipelineStage.STRUCTURE
     description = "Build RAPS Job dictionaries"
 
-    def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None):
+    def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None,
+                 trace_quanta: Optional[int] = None,
+                 topology: Optional[Dict[str, Any]] = None,
+                 system_name: str = "unknown"):
         super().__init__()
         self.power_config = power_config
+        self.trace_quanta = trace_quanta
+        self.topology = topology
+        self.system_name = system_name
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1116,7 +1360,16 @@ class BuildJobDicts(PipelineStep):
             ctx.add_error("BuildJobDicts: no column mapping found")
             return ctx
 
-        builder = JobDictBuilder(power_config=self.power_config)
+        # Get jobprofile_df from context (set by LoadJobProfile step)
+        jobprofile_df = ctx.metadata.get("_raps_jobprofile_df")
+
+        builder = JobDictBuilder(
+            power_config=self.power_config,
+            trace_quanta=self.trace_quanta,
+            jobprofile_df=jobprofile_df,
+            topology=self.topology,
+            system_name=self.system_name,
+        )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 
         ctx.data = jobs

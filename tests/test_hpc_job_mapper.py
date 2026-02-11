@@ -21,6 +21,8 @@ from redi.domains.hpc_job_mapper import (
     _normalize_state,
     _parse_node_list,
     _parse_trace_string,
+    _xname_to_index,
+    convert_node_names,
 )
 
 
@@ -520,7 +522,7 @@ class TestJobDictBuilder:
         assert jobs[0]["start_time"] == pytest.approx(0.0)
 
     def test_trace_time_equals_expected_run_time(self, builder):
-        """trace_time should be set to expected_run_time (wall time)."""
+        """trace_time should be set to expected_run_time (wall time) for scalar traces."""
         df = pd.DataFrame({
             "job_id": [1],
             "num_nodes": [2],
@@ -544,6 +546,53 @@ class TestJobDictBuilder:
         assert jobs[0]["trace_time"] == 3600
         assert jobs[0]["trace_start_time"] == jobs[0]["end_time"]
         assert jobs[0]["trace_end_time"] == jobs[0]["start_time"]
+
+    def test_trace_quanta_from_config(self):
+        """trace_quanta should be loaded from RAPS scheduler config."""
+        b = JobDictBuilder(trace_quanta=60)
+        df = pd.DataFrame({
+            "job_id": [1],
+            "num_nodes": [2],
+            "start_time": ["2024-01-01 08:00:00"],
+            "end_time": ["2024-01-01 09:00:00"],
+        })
+        mapping = ColumnMapping(
+            mapped={
+                "id": "job_id",
+                "nodes_required": "num_nodes",
+                "start_time": "start_time",
+                "end_time": "end_time",
+            },
+            confidence={},
+            unmapped_columns=[],
+            missing_required=[],
+        )
+        jobs, _ = b.build_jobs(df, mapping)
+        # Scalar trace: quanta comes from config
+        assert jobs[0]["trace_quanta"] == 60
+
+    def test_ntx_nrx_default_none(self, builder):
+        """ntx_trace and nrx_trace should default to None (RAPS convention)."""
+        df = pd.DataFrame({
+            "job_id": [1],
+            "num_nodes": [2],
+            "start_time": ["2024-01-01 08:00:00"],
+            "end_time": ["2024-01-01 09:00:00"],
+        })
+        mapping = ColumnMapping(
+            mapped={
+                "id": "job_id",
+                "nodes_required": "num_nodes",
+                "start_time": "start_time",
+                "end_time": "end_time",
+            },
+            confidence={},
+            unmapped_columns=[],
+            missing_required=[],
+        )
+        jobs, _ = builder.build_jobs(df, mapping)
+        assert jobs[0]["ntx_trace"] is None
+        assert jobs[0]["nrx_trace"] is None
 
     def test_raps_power_formula(self):
         """Full RAPS power formula with per_node config."""
@@ -666,3 +715,223 @@ class TestParseTraceString:
 
     def test_empty(self):
         assert _parse_trace_string("") == 0
+
+
+# ---------------------------------------------------------------------------
+# TestXnameToIndex
+# ---------------------------------------------------------------------------
+
+FRONTIER_TOPOLOGY = {
+    "sc_shape": [25, 3, 128],
+    "blades_per_chassis": 8,
+    "nodes_per_blade": 2,
+}
+
+
+class TestXnameToIndex:
+    """Tests for Frontier xname → linear index conversion."""
+
+    def test_known_xname(self):
+        # x2000c0s0b0: row=0, col=00, chassis=0, slot=0, node=0
+        # rack_index = 0*12 + 0 = 0, node_index = 0*8*2 + 0*2 + 0 = 0
+        # result = 0 * 128 + 0 = 0
+        idx = _xname_to_index("x2000c0s0b0", FRONTIER_TOPOLOGY)
+        assert idx == 0
+
+    def test_row_col_offset(self):
+        # x2301c0s0b0: row=3, col=01, chassis=0, slot=0, node=0
+        # rack_index = 3*12 + 1 = 37, node_index = 0
+        # result = 37 * 128 = 4736
+        idx = _xname_to_index("x2301c0s0b0", FRONTIER_TOPOLOGY)
+        assert idx == 4736
+
+    def test_chassis_slot_node(self):
+        # x2000c1s2b1: row=0, col=00, chassis=1, slot=2, node=1
+        # rack_index = 0, node_index = 1*8*2 + 2*2 + 1 = 21
+        # result = 0 * 128 + 21 = 21
+        idx = _xname_to_index("x2000c1s2b1", FRONTIER_TOPOLOGY)
+        assert idx == 21
+
+    def test_row6_special_offset(self):
+        # x2610c0s0b0: row=6, col=10 → col adjusted to 10-9=1
+        # rack_index = 6*12 + 1 = 73, node_index = 0
+        # result = 73 * 128 = 9344
+        idx = _xname_to_index("x2610c0s0b0", FRONTIER_TOPOLOGY)
+        assert idx == 9344
+
+    def test_convert_node_names_frontier(self):
+        names = ["x2000c0s0b0", "x2301c0s0b0"]
+        result = convert_node_names(names, "frontier", FRONTIER_TOPOLOGY)
+        assert result == [0, 4736]
+
+    def test_convert_node_names_fallback_hash(self):
+        """Non-frontier system falls back to hash."""
+        names = ["node001", "node002"]
+        result = convert_node_names(names, "generic_system")
+        assert len(result) == 2
+        assert all(isinstance(v, int) for v in result)
+
+    def test_convert_node_names_invalid_xname(self):
+        """Invalid xname should fall back to hash, not crash."""
+        names = ["invalid_xname"]
+        result = convert_node_names(names, "frontier", FRONTIER_TOPOLOGY)
+        assert len(result) == 1
+        assert isinstance(result[0], int)
+
+
+# ---------------------------------------------------------------------------
+# TestJobprofileJoin
+# ---------------------------------------------------------------------------
+
+class TestJobprofileJoin:
+    """Tests for jobprofile join and per-timestep trace arrays."""
+
+    @pytest.fixture
+    def power_config(self):
+        return {
+            "cpu": {"idle": 90, "max": 280, "per_node": 1},
+            "gpu": {"idle": 44, "max": 238, "per_node": 8},
+        }
+
+    @pytest.fixture
+    def joblive_df(self):
+        return pd.DataFrame({
+            "job_id": [1001, 1002, 1003],
+            "allocation_id": ["alloc_a", "alloc_b", "alloc_c"],
+            "num_nodes": [2, 4, 1],
+            "start_time": ["2024-01-18 10:00:00", "2024-01-18 11:00:00", "2024-01-18 12:00:00"],
+            "end_time": ["2024-01-18 11:00:00", "2024-01-18 12:00:00", "2024-01-18 13:00:00"],
+        })
+
+    @pytest.fixture
+    def jobprofile_df(self):
+        """Jobprofile with power telemetry for alloc_a and alloc_b (not alloc_c)."""
+        rows = []
+        base_ts = pd.Timestamp("2024-01-18 09:50:00")
+        # alloc_a: 5 timesteps
+        for i in range(5):
+            rows.append({
+                "allocation_id": "alloc_a",
+                "timestamp": base_ts + pd.Timedelta(minutes=i * 10),
+                "sum_cpu0_power": 400.0,  # some power value
+                "sum_gpu_power": 2000.0,
+            })
+        # alloc_b: 3 timesteps
+        for i in range(3):
+            rows.append({
+                "allocation_id": "alloc_b",
+                "timestamp": base_ts + pd.Timedelta(minutes=i * 10),
+                "sum_cpu0_power": 500.0,
+                "sum_gpu_power": 3000.0,
+            })
+        df = pd.DataFrame(rows)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+
+    @pytest.fixture
+    def mapping(self):
+        return ColumnMapping(
+            mapped={
+                "id": "job_id",
+                "nodes_required": "num_nodes",
+                "start_time": "start_time",
+                "end_time": "end_time",
+            },
+            confidence={},
+            unmapped_columns=["allocation_id"],
+            missing_required=[],
+        )
+
+    def test_jobprofile_trace_arrays(self, joblive_df, jobprofile_df, mapping, power_config):
+        """Jobs with matching jobprofile should get list traces."""
+        builder = JobDictBuilder(
+            power_config=power_config,
+            trace_quanta=60,
+            jobprofile_df=jobprofile_df,
+            system_name="frontier",
+        )
+        jobs, _ = builder.build_jobs(joblive_df, mapping)
+
+        # alloc_c has no jobprofile → filtered out; only alloc_a and alloc_b survive
+        assert len(jobs) == 2
+
+        # Check that cpu_trace is a list (per-timestep), not scalar
+        for job in jobs:
+            assert isinstance(job["cpu_trace"], list), f"cpu_trace should be list, got {type(job['cpu_trace'])}"
+            assert isinstance(job["gpu_trace"], list), f"gpu_trace should be list, got {type(job['gpu_trace'])}"
+            assert len(job["cpu_trace"]) > 1
+            assert len(job["gpu_trace"]) > 1
+
+    def test_jobprofile_trace_lengths(self, joblive_df, jobprofile_df, mapping, power_config):
+        """Trace arrays should match the number of jobprofile timesteps."""
+        builder = JobDictBuilder(
+            power_config=power_config,
+            trace_quanta=60,
+            jobprofile_df=jobprofile_df,
+            system_name="frontier",
+        )
+        jobs, _ = builder.build_jobs(joblive_df, mapping)
+
+        # alloc_a → 5 timesteps, alloc_b → 3 timesteps
+        job_a = next(j for j in jobs if j["id"] == "1001")
+        job_b = next(j for j in jobs if j["id"] == "1002")
+        assert len(job_a["cpu_trace"]) == 5
+        assert len(job_b["cpu_trace"]) == 3
+
+    def test_jobprofile_ref_time(self, joblive_df, jobprofile_df, mapping, power_config):
+        """ref_time should use jobprofile timestamp.min(), not joblive start_time.min()."""
+        builder = JobDictBuilder(
+            power_config=power_config,
+            jobprofile_df=jobprofile_df,
+            system_name="frontier",
+        )
+        _, ref_time = builder.build_jobs(joblive_df, mapping)
+
+        # jobprofile timestamp.min() = 2024-01-18 09:50:00
+        expected = pd.Timestamp("2024-01-18 09:50:00").timestamp()
+        assert ref_time == pytest.approx(expected)
+
+    def test_jobprofile_filters_unmatched(self, joblive_df, jobprofile_df, mapping, power_config):
+        """Jobs without matching jobprofile should be filtered out."""
+        builder = JobDictBuilder(
+            power_config=power_config,
+            jobprofile_df=jobprofile_df,
+            system_name="frontier",
+        )
+        jobs, _ = builder.build_jobs(joblive_df, mapping)
+
+        job_ids = {j["id"] for j in jobs}
+        assert "1001" in job_ids  # alloc_a has profile
+        assert "1002" in job_ids  # alloc_b has profile
+        assert "1003" not in job_ids  # alloc_c has no profile
+
+    def test_no_jobprofile_backward_compat(self, joblive_df, mapping):
+        """Without jobprofile, scalar trace behavior should be unchanged."""
+        builder = JobDictBuilder()
+        jobs, _ = builder.build_jobs(joblive_df, mapping)
+
+        # All 3 jobs should survive (no filtering without jobprofile)
+        assert len(jobs) == 3
+
+        # Traces should be scalar (default 0)
+        for job in jobs:
+            assert job["cpu_trace"] == 0
+            assert job["gpu_trace"] == 0
+            assert job["trace_missing_values"] is True
+
+    def test_jobprofile_trace_metadata(self, joblive_df, jobprofile_df, mapping, power_config):
+        """Jobs with array traces should have correct trace metadata."""
+        builder = JobDictBuilder(
+            power_config=power_config,
+            trace_quanta=60,
+            jobprofile_df=jobprofile_df,
+            system_name="frontier",
+        )
+        jobs, _ = builder.build_jobs(joblive_df, mapping)
+
+        for job in jobs:
+            # has_timeseries should be True → trace_missing_values=False
+            assert job["trace_missing_values"] is False
+            assert job["trace_quanta"] == 60
+            # trace_time = len(cpu_trace) * quanta
+            assert job["trace_time"] == len(job["cpu_trace"]) * 60

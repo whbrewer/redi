@@ -479,17 +479,19 @@ def _get_raps_preprocess_steps():
                 df = ctx.data
                 initial_count = len(df)
 
-                # Drop rows with missing start/end timestamps
-                time_keywords = ["start", "end"]
-                ts_cols = [
+                # Drop rows with missing start timestamps (RAPS convention:
+                # only require start_time, not end_time — NaN end_time jobs
+                # are filtered later by JobDictBuilder)
+                start_keywords = ["start"]
+                start_cols = [
                     c for c in df.columns
-                    if any(kw in c.lower() for kw in time_keywords)
+                    if any(kw in c.lower() for kw in start_keywords)
                     and ("time" in c.lower() or "date" in c.lower()
-                         or "stamp" in c.lower() or c.lower() in ("start", "end",
-                                                                   "sdt", "edt"))
+                         or "stamp" in c.lower() or c.lower() in ("start", "sdt"))
+                    and "batch" not in c.lower()  # exclude batch_time_start
                 ]
-                if ts_cols:
-                    df = df.dropna(subset=ts_cols)
+                if start_cols:
+                    df = df.dropna(subset=start_cols)
 
                 # Deduplicate by job ID column (keep last, matching RAPS convention)
                 id_keywords = ["job_id", "jobid", "jid", "id_job", "job_ID",
@@ -520,27 +522,93 @@ def _get_raps_preprocess_steps():
     return [CleanHPCForRAPS()]
 
 
-def get_raps_pipeline(column_overrides=None, power_config=None, output_format="npz",
-                      system_name="unknown"):
+def _get_load_jobprofile_step(jobprofile_path=None):
+    """Return a LoadJobProfile step (or empty list if no path given)."""
+    if not jobprofile_path:
+        return []
+
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class LoadJobProfile(PipelineStep):
+        """Load jobprofile telemetry data for per-timestep trace arrays."""
+
+        name = "load_jobprofile"
+        stage = PipelineStage.INGEST
+        description = "Load jobprofile power telemetry"
+
+        def __init__(self, path: str):
+            super().__init__()
+            self.path = path
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            import glob as _glob
+            import pandas as pd
+
+            pattern = self.path
+            # Expand globs
+            if '*' in pattern or '?' in pattern:
+                files = sorted(_glob.glob(pattern, recursive=True))
+            elif Path(pattern).is_dir():
+                files = sorted(str(p) for p in Path(pattern).glob("*.parquet"))
+            else:
+                files = [pattern]
+
+            if not files:
+                logger.warning(f"No jobprofile files found at {pattern}")
+                return ctx
+
+            dfs = []
+            for f in files:
+                try:
+                    dfs.append(pd.read_parquet(f))
+                except Exception as e:
+                    logger.warning(f"Failed to read jobprofile file {f}: {e}")
+            if not dfs:
+                logger.warning("No jobprofile data loaded")
+                return ctx
+
+            jp_df = pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
+
+            # Convert timestamp and sort
+            if "timestamp" in jp_df.columns:
+                jp_df["timestamp"] = pd.to_datetime(jp_df["timestamp"], errors="coerce")
+                jp_df = jp_df.sort_values("timestamp").reset_index(drop=True)
+
+            ctx.metadata["_raps_jobprofile_df"] = jp_df
+            logger.info(f"Loaded jobprofile: {len(jp_df)} rows, "
+                        f"{jp_df['allocation_id'].nunique() if 'allocation_id' in jp_df.columns else '?'} allocations")
+            return ctx
+
+    return [LoadJobProfile(jobprofile_path)]
+
+
+def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
+                      output_format="npz", system_name="unknown",
+                      jobprofile_path=None, topology=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
         column_overrides: Dict mapping original_column_name → canonical_field_name
         power_config: Dict like {"cpu": {"idle": 100, "max": 500}} for power→utilization
+        trace_quanta: Trace time-step size from RAPS scheduler config (seconds)
         output_format: Output format — npz (default), json, parquet, csv
         system_name: RAPS system name stored in the NPZ snapshot (e.g. "adastraMI250")
+        jobprofile_path: Path/glob to jobprofile parquet files for per-timestep traces
+        topology: System topology dict (sc_shape, blades_per_chassis, nodes_per_blade)
     """
     from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
 
     ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
+    jobprofile = _get_load_jobprofile_step(jobprofile_path)  # optional jobprofile load
     preprocess = _get_raps_preprocess_steps()             # RAPS-specific cleaning
     raps_steps = [
         AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
         DeriveJobFields(),                               # derive missing fields
-        BuildJobDicts(power_config=power_config),        # build job dicts per row
+        BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
+                      topology=topology, system_name=system_name),
         SaveJobDicts(output_format=output_format, system_name=system_name),
     ]
-    return ingest + preprocess + raps_steps
+    return ingest + jobprofile + preprocess + raps_steps
 
 
 def get_full_pipeline(raps_jobs=False, **kwargs):
