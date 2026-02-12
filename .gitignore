@@ -9,3 +9,6 @@ output/
 .idea/
 local_agent_context.md
 data/
+build/
+*.log
+*.jsonl

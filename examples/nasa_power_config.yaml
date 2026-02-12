@@ -14,9 +14,11 @@
 #   redi run -c examples/nasa_power_config.yaml
 
 domain: climate
-input_path: /opt/drai/renan/raw/usa_0_data.json
-output_dir: ./nasa_power_output
+name: nasa_power
+input_path: ./data/nasa/usa_0_data.json
+output_dir: ./output
 output_format: pt
+provenance: true
 
 normalize:
   enabled: true
