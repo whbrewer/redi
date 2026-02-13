@@ -10,5 +10,6 @@ output/
 local_agent_context.md
 data/
 build/
+tmp/
 *.log
 *.jsonl
