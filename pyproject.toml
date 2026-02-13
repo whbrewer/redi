@@ -59,6 +59,11 @@ geospatial = [
     "shapely>=2.0.0",
 ]
 
+# Provenance capture package
+flowcept = [
+    "flowcept",
+]
+
 # Output format dependencies
 parquet = [
     "pyarrow>=10.0.0",

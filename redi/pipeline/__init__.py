@@ -10,12 +10,26 @@ Modular 5-stage pipeline for data preprocessing:
 """
 
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Any, Dict, List, Optional, Callable, Union
 from enum import Enum
 from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_json_value(value: Any) -> Any:
+    """Convert common runtime objects into JSON-safe values."""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {str(k): _safe_json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_json_value(v) for v in value]
+    return value
 
 
 def missing_dependency_error(package: str, extra: Optional[str] = None) -> str:
@@ -60,6 +74,9 @@ class PipelineContext:
     # Configuration
     config: Dict[str, Any] = field(default_factory=dict)
     verify_steps: bool = False  # Whether to run step verification
+
+    with_flowcept: bool = True  # TODO do it right
+    flowcept: Any = None
 
     @property
     def is_multi_file(self) -> bool:
@@ -121,6 +138,52 @@ class PipelineStep:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        execute = cls.__dict__.get("execute")
+        if execute is None or getattr(execute, "_redi_wrapped", False):
+            return
+
+        @wraps(execute)
+        def wrapped_execute(self, ctx: PipelineContext) -> PipelineContext:
+            flowcept_task = None
+            try:
+                if (
+                    ctx.with_flowcept
+                    and ctx.flowcept is not None
+                    and getattr(ctx.flowcept, "is_started", False)
+                ):
+                    from flowcept.instrumentation.task_capture import FlowceptTask
+
+                    input_path_str = str(ctx.input_path)
+                    input_paths_str = [str(p) for p in ctx.input_paths]
+                    unique_input_paths = list(dict.fromkeys(input_paths_str))
+                    used_dict = {
+                        "input_path": input_path_str,
+                        "output_dir": str(ctx.output_dir),
+                    }
+                    if not (len(unique_input_paths) == 1 and unique_input_paths[0] == input_path_str):
+                        used_dict["input_paths"] = unique_input_paths
+                    custom_metadata = {
+                        "current_stage": ctx.current_stage.value,
+                        "completed_stages": [s.value for s in ctx.completed_stages],
+                        "metadata": _safe_json_value(ctx.metadata),
+                    }
+
+                    flowcept_task = FlowceptTask(
+                        activity_id=self.__class__.__name__,
+                        used=used_dict,
+                        custom_metadata=custom_metadata,
+                    )
+
+                return execute(self, ctx)
+            finally:
+                if flowcept_task:
+                    flowcept_task.end()
+
+        wrapped_execute._redi_wrapped = True
+        cls.execute = wrapped_execute
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         """Execute this step - override in subclasses"""
         raise NotImplementedError
@@ -164,12 +227,35 @@ class Pipeline:
         """Register a domain-specific handler"""
         self._domain_handlers[domain] = handler
 
+    def _start_flowcept(self, ctx: PipelineContext, workflow_args: Dict[str, Any]) -> bool:
+        """Start Flowcept once for this execution path. Returns True if started here."""
+        if not ctx.with_flowcept:
+            return False
+        if ctx.flowcept is None:
+            from flowcept import Flowcept
+
+            workflow_name = ctx.config.get("name") if isinstance(ctx.config, dict) else None
+            ctx.flowcept = Flowcept(
+                start_persistence=False,
+                workflow_name=workflow_name,
+                workflow_args=workflow_args,
+            )
+        if getattr(ctx.flowcept, "is_started", False):
+            return False
+        ctx.flowcept.start()
+        return True
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         """Execute all pipeline steps"""
+        flowcept_started_here = self._start_flowcept(ctx, {"mode": "full_pipeline"})
+        flowcept_ref = ctx.flowcept
+
         logger.info(f"Starting pipeline for domain: {ctx.domain}")
 
         current_stage = None
         for step in self.steps:
+            if ctx.with_flowcept and flowcept_ref is not None and ctx.flowcept is None:
+                ctx.flowcept = flowcept_ref
             logger.info(f"Executing step: {step.name}")
 
             # Track stage transitions
@@ -183,7 +269,14 @@ class Pipeline:
                 continue
 
             try:
-                ctx = step.execute(ctx)
+                next_ctx = step.execute(ctx)
+                if (
+                    next_ctx.with_flowcept
+                    and flowcept_ref is not None
+                    and getattr(next_ctx, "flowcept", None) is None
+                ):
+                    next_ctx.flowcept = flowcept_ref
+                ctx = next_ctx
                 logger.info(f"Completed step: {step.name}")
 
                 # Run verification if enabled
@@ -206,23 +299,44 @@ class Pipeline:
         if current_stage is not None:
             ctx.mark_complete(current_stage)
 
+        if flowcept_started_here and flowcept_ref:
+            flowcept_ref.stop()
+
         return ctx
 
     def execute_stage(self, ctx: PipelineContext, stage: PipelineStage) -> PipelineContext:
         """Execute only steps for a specific stage"""
+        flowcept_started_here = self._start_flowcept(
+            ctx,
+            {"mode": "stage", "stage": stage.value},
+        )
+        flowcept_ref = ctx.flowcept
         stage_steps = [s for s in self.steps if s.stage == stage]
 
         for step in stage_steps:
+            if ctx.with_flowcept and flowcept_ref is not None and ctx.flowcept is None:
+                ctx.flowcept = flowcept_ref
             if not step.validate(ctx):
                 ctx.add_error(f"Validation failed for step: {step.name}")
                 continue
 
             try:
-                ctx = step.execute(ctx)
+                next_ctx = step.execute(ctx)
+                if (
+                    next_ctx.with_flowcept
+                    and flowcept_ref is not None
+                    and getattr(next_ctx, "flowcept", None) is None
+                ):
+                    next_ctx.flowcept = flowcept_ref
+                ctx = next_ctx
             except Exception as e:
                 ctx.add_error(f"Error in step {step.name}: {str(e)}")
 
-        ctx.mark_complete(stage)
+        ctx.mark_complete(stage) # TODO: are marking as complete only the last stage?
+
+        if flowcept_started_here and flowcept_ref:
+            flowcept_ref.stop()
+
         return ctx
 
 
@@ -258,12 +372,15 @@ def create_context(
     else:
         raise ValueError("Either input_path or input_paths must be provided")
 
+    with_flowcept = bool(config.get("provenance", False))
+
     return PipelineContext(
         input_path=primary_path,
         output_dir=Path(output_dir),
         input_paths=paths,
         domain=domain,
-        config=config
+        config=config,
+        with_flowcept=with_flowcept,
     )
 
 

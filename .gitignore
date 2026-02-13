@@ -5,3 +5,10 @@ __pycache__
 output/
 *.npz
 *.zarr/
+
+.idea/
+local_agent_context.md
+data/
+build/
+*.log
+*.jsonl

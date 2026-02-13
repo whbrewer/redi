@@ -514,9 +514,18 @@ def run_pipeline(
     step_results = []
     prev_error_count = 0
     current_stage = None
+    flowcept_started_here = False
+    flowcept_ref = None
+
+    # Start Flowcept once for the CLI-managed execution loop.
+    if getattr(ctx, "with_flowcept", False):
+        flowcept_started_here = pipeline._start_flowcept(ctx, {"mode": "full_pipeline"})
+        flowcept_ref = ctx.flowcept
 
     for i, step in enumerate(pipeline.steps, 1):
         step_start = time.time()
+        if getattr(ctx, "with_flowcept", False) and flowcept_ref is not None and ctx.flowcept is None:
+            ctx.flowcept = flowcept_ref
 
         # Track stage completions
         if step.stage != current_stage:
@@ -548,7 +557,14 @@ def run_pipeline(
         # Execute
         try:
             old_metadata = dict(ctx.metadata)
-            ctx = step.execute(ctx)
+            next_ctx = step.execute(ctx)
+            if (
+                getattr(next_ctx, "with_flowcept", False)
+                and flowcept_ref is not None
+                and getattr(next_ctx, "flowcept", None) is None
+            ):
+                next_ctx.flowcept = flowcept_ref
+            ctx = next_ctx
             step_time = time.time() - step_start
 
             # Determine what changed
@@ -645,6 +661,8 @@ def run_pipeline(
     # Mark the final stage complete
     if current_stage is not None:
         ctx.mark_complete(current_stage)
+    if flowcept_started_here and flowcept_ref:
+        flowcept_ref.stop()
 
     total_time = time.time() - total_start
 
