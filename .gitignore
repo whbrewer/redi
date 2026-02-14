@@ -5,10 +5,24 @@ __pycache__
 output/
 *.npz
 *.zarr/
-
 .idea/
 local_agent_context.md
 data/
 build/
 *.log
 *.jsonl
+.aider*
+
+# Local environments
+.venv/
+
+# Generated runtime/demo artifacts
+climax_redi_output/
+raps-output-*/
+sidecar_climate_demo/
+paper/*.aux
+paper/*.out
+paper/*.pdf
+paper/sidecar_experiment_results.json
+redi_paper_*.pdf
+redi_poster*.png

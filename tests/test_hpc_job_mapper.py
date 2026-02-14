@@ -521,6 +521,32 @@ class TestJobDictBuilder:
         assert jobs[0]["submit_time"] == pytest.approx(-5400.0)
         assert jobs[0]["start_time"] == pytest.approx(0.0)
 
+    def test_datetime64_ns_timestamps_are_normalized_to_epoch_seconds(self, builder):
+        """datetime64[ns] columns should not produce nanosecond-scale ref_time."""
+        df = pd.DataFrame({
+            "job_id": [1, 2],
+            "num_nodes": [2, 2],
+            "start_time": pd.to_datetime(["2024-08-31 16:05:28", "2024-08-31 17:05:28"]),
+            "end_time": pd.to_datetime(["2024-08-31 17:05:28", "2024-08-31 18:05:28"]),
+        })
+        mapping = ColumnMapping(
+            mapped={
+                "id": "job_id",
+                "nodes_required": "num_nodes",
+                "start_time": "start_time",
+                "end_time": "end_time",
+            },
+            confidence={},
+            unmapped_columns=[],
+            missing_required=[],
+        )
+        jobs, ref_time = builder.build_jobs(df, mapping)
+
+        expected_ref = pd.Timestamp("2024-08-31 16:05:28").timestamp()
+        assert ref_time == pytest.approx(expected_ref, rel=1e-9)
+        assert jobs[0]["start_time"] == pytest.approx(0.0)
+        assert jobs[0]["end_time"] == pytest.approx(3600.0)
+
     def test_trace_time_equals_expected_run_time(self, builder):
         """trace_time should be set to expected_run_time (wall time) for scalar traces."""
         df = pd.DataFrame({

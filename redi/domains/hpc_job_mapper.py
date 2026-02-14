@@ -31,6 +31,41 @@ from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 logger = logging.getLogger(__name__)
 
 
+# Timestamp unit thresholds (absolute epoch magnitudes).
+# Values above these ranges are normalized to epoch seconds.
+_EPOCH_NS_THRESHOLD = 1e17
+_EPOCH_US_THRESHOLD = 1e14
+_EPOCH_MS_THRESHOLD = 1e11
+_EPOCH_SECONDS_THRESHOLD = 1e9
+
+
+def _normalize_epoch_seconds(value: float) -> float:
+    """Normalize epoch value to seconds when input is ns/us/ms."""
+    abs_value = abs(value)
+    if abs_value >= _EPOCH_NS_THRESHOLD:
+        return value / 1e9
+    if abs_value >= _EPOCH_US_THRESHOLD:
+        return value / 1e6
+    if abs_value >= _EPOCH_MS_THRESHOLD:
+        return value / 1e3
+    return value
+
+
+def _normalize_epoch_array(values: np.ndarray) -> np.ndarray:
+    """Vectorized epoch unit normalization to seconds."""
+    arr = values.astype(float, copy=True)
+    abs_arr = np.abs(arr)
+
+    ns_mask = abs_arr >= _EPOCH_NS_THRESHOLD
+    us_mask = (abs_arr >= _EPOCH_US_THRESHOLD) & (abs_arr < _EPOCH_NS_THRESHOLD)
+    ms_mask = (abs_arr >= _EPOCH_MS_THRESHOLD) & (abs_arr < _EPOCH_US_THRESHOLD)
+
+    arr[ns_mask] = arr[ns_mask] / 1e9
+    arr[us_mask] = arr[us_mask] / 1e6
+    arr[ms_mask] = arr[ms_mask] / 1e3
+    return arr
+
+
 # ---------------------------------------------------------------------------
 # 1. Field Registry
 # ---------------------------------------------------------------------------
@@ -346,9 +381,15 @@ class FieldDeriver:
             start_col = mapped["start_time"]
             end_col = mapped["end_time"]
             derived_col = "_derived_expected_run_time"
-            start = pd.to_datetime(df[start_col], errors="coerce")
-            end = pd.to_datetime(df[end_col], errors="coerce")
-            df[derived_col] = (end - start).dt.total_seconds()
+            start_num = pd.to_numeric(df[start_col], errors="coerce")
+            end_num = pd.to_numeric(df[end_col], errors="coerce")
+            if start_num.notna().any() and end_num.notna().any():
+                # Epoch-like numeric timestamps (common in scheduler logs).
+                df[derived_col] = end_num - start_num
+            else:
+                start = pd.to_datetime(df[start_col], errors="coerce")
+                end = pd.to_datetime(df[end_col], errors="coerce")
+                df[derived_col] = (end - start).dt.total_seconds()
             mapped["expected_run_time"] = derived_col
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
@@ -711,7 +752,26 @@ class JobDictBuilder:
             # Numeric timestamps: treat >1e9 as epoch seconds, else relative seconds.
             if pd.api.types.is_numeric_dtype(series):
                 raw = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
-                rel = np.where(np.isnan(raw), 0.0, np.where(raw > 1e9, raw - ref_time, raw))
+                raw_sec = _normalize_epoch_array(raw)
+                rel = np.where(
+                    np.isnan(raw_sec),
+                    0.0,
+                    np.where(raw_sec > _EPOCH_SECONDS_THRESHOLD, raw_sec - ref_time, raw_sec),
+                )
+                cache[canon] = rel
+                continue
+
+            # Object columns that are mostly numeric epoch timestamps.
+            numeric = pd.to_numeric(series, errors="coerce")
+            numeric_valid_ratio = float(numeric.notna().mean()) if len(series) else 0.0
+            if numeric_valid_ratio >= 0.9:
+                raw = numeric.to_numpy(dtype=float)
+                raw_sec = _normalize_epoch_array(raw)
+                rel = np.where(
+                    np.isnan(raw_sec),
+                    0.0,
+                    np.where(raw_sec > _EPOCH_SECONDS_THRESHOLD, raw_sec - ref_time, raw_sec),
+                )
                 cache[canon] = rel
                 continue
 
@@ -748,14 +808,26 @@ class JobDictBuilder:
         # Fallback: use start_time.min()
         if "start_time" in mapped:
             col = mapped["start_time"]
-            series = pd.to_datetime(df[col], errors="coerce")
+            raw = df[col]
+            numeric = pd.to_numeric(raw, errors="coerce").dropna()
+            numeric_sec = numeric.map(_normalize_epoch_seconds)
+            numeric_valid = numeric_sec[numeric_sec > _EPOCH_SECONDS_THRESHOLD]
+            if not numeric_valid.empty:
+                return float(numeric_valid.min())
+            series = pd.to_datetime(raw, errors="coerce")
             valid = series.dropna()
             if not valid.empty:
                 return valid.min().timestamp()
         # Last resort: submit_time
         if "submit_time" in mapped:
             col = mapped["submit_time"]
-            series = pd.to_datetime(df[col], errors="coerce")
+            raw = df[col]
+            numeric = pd.to_numeric(raw, errors="coerce").dropna()
+            numeric_sec = numeric.map(_normalize_epoch_seconds)
+            numeric_valid = numeric_sec[numeric_sec > _EPOCH_SECONDS_THRESHOLD]
+            if not numeric_valid.empty:
+                return float(numeric_valid.min())
+            series = pd.to_datetime(raw, errors="coerce")
             valid = series.dropna()
             if not valid.empty:
                 return valid.min().timestamp()
@@ -1022,9 +1094,9 @@ class JobDictBuilder:
         """Convert a timestamp value to relative seconds from ref_time."""
         # Already numeric (epoch seconds)
         if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            val = float(raw)
+            val = _normalize_epoch_seconds(float(raw))
             # If value is very large, assume it's epoch seconds
-            if val > 1e9:
+            if val > _EPOCH_SECONDS_THRESHOLD:
                 return val - ref_time
             # Otherwise assume it's already relative
             return val
@@ -1543,8 +1615,16 @@ class SaveJobDicts(PipelineStep):
         from types import SimpleNamespace
 
         # Use actual telemetry start datetime (from ref_time) instead of now()
-        if ref_time and ref_time > 0:
-            start_date = datetime.fromtimestamp(ref_time, tz=timezone.utc)
+        ref_time_sec = _normalize_epoch_seconds(float(ref_time)) if ref_time else 0.0
+        if ref_time_sec > 0:
+            try:
+                start_date = datetime.fromtimestamp(ref_time_sec, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                logger.warning(
+                    "Invalid ref_time for datetime conversion (%s); falling back to now().",
+                    ref_time,
+                )
+                start_date = datetime.now(timezone.utc)
         else:
             start_date = datetime.now(timezone.utc)
 

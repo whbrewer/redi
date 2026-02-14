@@ -1,0 +1,137 @@
+% REDI vs ClimaX Comparison - IEEE Conference Format
+% Include this file in your main IEEE conference paper
+
+% Required packages (add to preamble if not already present):
+% \usepackage{booktabs}
+% \usepackage{multirow}
+% \usepackage{array}
+% \newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+% ============================================================================
+% SECTION: Comparison with Domain-Specific Pipelines
+% ============================================================================
+
+\subsection{Comparison with ClimaX Preprocessing Pipeline}
+
+To evaluate REDI's effectiveness for climate data, we compare it against the ClimaX Snakemake pipeline~\cite{nguyen2023climax}, a domain-specific preprocessing tool designed for the ClimaX climate foundation model. Table~\ref{tab:philosophy} summarizes the philosophical differences between the two approaches.
+
+% Table 1: Philosophy & Design (single column)
+\begin{table}[htbp]
+\centering
+\caption{Design Philosophy Comparison}
+\label{tab:philosophy}
+\begin{tabular}{@{}lp{1.4in}p{1.4in}@{}}
+\toprule
+\textbf{Aspect} & \textbf{REDI} & \textbf{ClimaX} \\
+\midrule
+Purpose & General-purpose data readiness for AI/ML across 5 domains & Specific preprocessing for ClimaX foundation model \\
+\addlinespace
+Approach & Domain-agnostic framework with climate specialization & Climate-specific, tailored to CMIP6$\rightarrow$ML \\
+\addlinespace
+Output & Data Card + recommendations + processing & Ready-to-train NPZ shards \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:pipeline-steps} provides a detailed comparison of pipeline steps. While both tools leverage xESMF for regridding, they differ significantly in normalization strategy and output handling.
+
+% Table 2: Pipeline Steps (spans both columns)
+\begin{table*}[htbp]
+\centering
+\caption{Pipeline Steps Comparison: REDI vs ClimaX Snakemake}
+\label{tab:pipeline-steps}
+\begin{tabular}{@{}lL{2.2in}L{3.0in}@{}}
+\toprule
+\textbf{Step} & \textbf{REDI} & \textbf{ClimaX Snakemake} \\
+\midrule
+Data Acquisition & Recommends sources (does not perform) & Automated wget from ESGF servers \\
+\addlinespace
+Regridding & xESMF bilinear interpolation to 1.0° & xESMF bilinear interpolation to 1.40625° \\
+\addlinespace
+Variable Renaming & Generic coordinate handling & CMIP$\rightarrow$ERA5 names (tas$\rightarrow$t2m, zg$\rightarrow$z) \\
+\addlinespace
+Unit Conversion & Not implemented & Physical conversions (z $\times$ 9.807, tisr $\times$ 3600) \\
+\addlinespace
+Normalization & Per-variable z-score or min-max & Cross-year aggregated mean/std (law of total variance) \\
+\addlinespace
+Pressure Levels & Not explicit & 13 standard levels: 50--1000 hPa \\
+\addlinespace
+Output Format & NPZ, Zarr, HDF5, Parquet, CSV & NPZ shards only \\
+\addlinespace
+Train/Val/Test Split & 80/10/10 random split & Training data only (sharded by time) \\
+\addlinespace
+Documentation & Generates Data Card with metadata & None \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsubsection{Key Technical Differences}
+
+\textbf{Normalization Strategy.}
+REDI computes simple per-variable statistics $(x - \mu) / \sigma$ on loaded data. ClimaX employs aggregated statistics across years using the law of total variance: $\text{Var}(X) = \mathbb{E}[\text{Var}(X|Y)] + \text{Var}(\mathbb{E}[X|Y])$, storing results in separate \texttt{normalize\_mean.npz} and \texttt{normalize\_std.npz} files for consistent normalization during training.
+
+\textbf{Temporal Handling.}
+REDI performs random train/val/test splits, which may not preserve temporal ordering crucial for forecasting tasks. ClimaX shards data by year chunks, preserving temporal sequence (e.g., 20 shards for TaiESM1 with 730 timesteps each).
+
+\textbf{Multi-Level Variables.}
+REDI groups variables by shape and stacks compatible arrays. ClimaX explicitly handles pressure levels, creating separate entries for each level (e.g., \texttt{temperature\_850}, \texttt{temperature\_500}).
+
+% Table 3: Tool Comparison (single column)
+\begin{table}[htbp]
+\centering
+\caption{Implementation Tools Comparison}
+\label{tab:tools}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Category} & \textbf{REDI} & \textbf{ClimaX} \\
+\midrule
+Core Libraries & xarray, xESMF & xarray, xESMF \\
+Workflow & Python CLI & Snakemake DAG \\
+Parallelization & Sequential & \texttt{--cores N} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Complementary Capabilities}
+
+Table~\ref{tab:capabilities} summarizes the unique capabilities of each tool. REDI excels at data understanding and documentation, while ClimaX provides production-ready preprocessing for its specific use case.
+
+% Table 4: Unique Capabilities (single column)
+\begin{table}[htbp]
+\centering
+\caption{Unique Capabilities}
+\label{tab:capabilities}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Capability} & \textbf{REDI} & \textbf{ClimaX} \\
+\midrule
+Data Card generation & \checkmark & -- \\
+Domain auto-detection & \checkmark & -- \\
+Readiness assessment & \checkmark & -- \\
+Multiple output formats & \checkmark & -- \\
+Anomaly computation & \checkmark & -- \\
+\addlinespace
+Automated download & -- & \checkmark \\
+Cross-year normalization & -- & \checkmark \\
+Pressure level extraction & -- & \checkmark \\
+Unit conversions & -- & \checkmark \\
+Time-based sharding & -- & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Summary}
+
+REDI and ClimaX serve complementary roles: REDI provides readiness assessment and general preprocessing with comprehensive documentation, while ClimaX offers end-to-end automated preprocessing specifically optimized for training the ClimaX foundation model. For workflows requiring both data understanding and production preprocessing, REDI's sidecar mode can observe and document existing pipelines like ClimaX without modification.
+
+% ============================================================================
+% Optional: BibTeX entry for ClimaX
+% ============================================================================
+% @inproceedings{nguyen2023climax,
+%   title={ClimaX: A foundation model for weather and climate},
+%   author={Nguyen, Tung and Brandstetter, Johannes and Kapoor, Ashish and Gupta, Jayesh K and Grover, Aditya},
+%   booktitle={International Conference on Machine Learning},
+%   pages={25904--25938},
+%   year={2023},
+%   organization={PMLR}
+% }
