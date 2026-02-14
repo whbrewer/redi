@@ -61,7 +61,7 @@ def get_ingest_steps():
                     if file_format == "parquet":
                         df = pd.read_parquet(paths[0])
                     else:
-                        df = pd.read_csv(paths[0])
+                        df = pd.read_csv(paths[0], low_memory=False)
                 else:
                     # Multiple files - concatenate
                     dfs = []
@@ -70,7 +70,7 @@ def get_ingest_steps():
                         if file_format == "parquet":
                             dfs.append(pd.read_parquet(path))
                         else:
-                            dfs.append(pd.read_csv(path))
+                            dfs.append(pd.read_csv(path, low_memory=False))
                     df = pd.concat(dfs, axis=0, ignore_index=True)
                     logger.info(f"Concatenated {len(paths)} files")
 

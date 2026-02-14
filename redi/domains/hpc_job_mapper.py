@@ -16,6 +16,8 @@ import difflib
 import json
 import logging
 import re
+import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -650,11 +652,16 @@ class JobDictBuilder:
 
         # Find reference time
         ref_time = self._find_reference_time(df, mapped)
+        timestamp_cache = self._build_timestamp_cache(df, mapped, ref_time)
 
         skipped = 0
-        for idx, row in df.iterrows():
+        total_rows = len(df)
+        started_at = time.perf_counter()
+        progress_every = 50000
+
+        for pos, (idx, row) in enumerate(df.iterrows(), start=1):
             try:
-                job = self._build_one(row, mapped, ref_time)
+                job = self._build_one(row, mapped, ref_time, timestamp_cache=timestamp_cache, row_pos=pos - 1)
                 if job is not None:
                     jobs.append(job)
                 else:
@@ -663,11 +670,67 @@ class JobDictBuilder:
                 logger.warning(f"Skipping row {idx}: {e}")
                 skipped += 1
 
+            if pos % progress_every == 0 or pos == total_rows:
+                elapsed = time.perf_counter() - started_at
+                rate = pos / elapsed if elapsed > 0 else 0.0
+                if total_rows >= progress_every:
+                    print(
+                        f"\r  ⏳ build_job_dicts ... {pos:,}/{total_rows:,} rows ({rate:.0f} rows/s)",
+                        end="",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                logger.info(
+                    f"build_job_dicts progress: {pos}/{total_rows} rows "
+                    f"({rate:.0f} rows/s, skipped={skipped})"
+                )
+
         if skipped:
             logger.info(f"Skipped {skipped} invalid rows")
         logger.info(f"Built {len(jobs)} RAPS job dicts")
 
         return jobs, ref_time
+
+    def _build_timestamp_cache(
+        self, df: pd.DataFrame, mapped: Dict[str, str], ref_time: float
+    ) -> Dict[str, np.ndarray]:
+        """Precompute timestamp fields once to avoid per-row datetime parsing."""
+        cache: Dict[str, np.ndarray] = {}
+
+        for fs in FIELD_REGISTRY:
+            canon = fs.canonical_name
+            if fs.field_type != "timestamp" or canon not in mapped:
+                continue
+
+            col = mapped[canon]
+            if col not in df.columns:
+                continue
+
+            series = df[col]
+
+            # Numeric timestamps: treat >1e9 as epoch seconds, else relative seconds.
+            if pd.api.types.is_numeric_dtype(series):
+                raw = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+                rel = np.where(np.isnan(raw), 0.0, np.where(raw > 1e9, raw - ref_time, raw))
+                cache[canon] = rel
+                continue
+
+            # Datetime-like strings/objects: parse once, then fallback to duration parsing.
+            parsed = pd.to_datetime(series, errors="coerce")
+            ns = parsed.to_numpy(dtype="datetime64[ns]")
+            rel = np.zeros(len(series), dtype=float)
+            valid = ~pd.isna(ns)
+            if valid.any():
+                rel[valid] = ns[valid].astype("int64") / 1e9 - ref_time
+
+            invalid = ~valid
+            if invalid.any():
+                fallback = series[invalid].map(_parse_duration).to_numpy(dtype=float)
+                rel[invalid] = np.where(fallback > 0, fallback, 0.0)
+
+            cache[canon] = rel
+
+        return cache
 
     def _find_reference_time(self, df: pd.DataFrame, mapped: Dict[str, str]) -> float:
         """Find the earliest timestamp to use as reference (epoch seconds).
@@ -698,8 +761,14 @@ class JobDictBuilder:
                 return valid.min().timestamp()
         return 0.0
 
-    def _build_one(self, row: pd.Series, mapped: Dict[str, str],
-                   ref_time: float) -> Optional[Dict[str, Any]]:
+    def _build_one(
+        self,
+        row: pd.Series,
+        mapped: Dict[str, str],
+        ref_time: float,
+        timestamp_cache: Optional[Dict[str, np.ndarray]] = None,
+        row_pos: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Build a single job dict from a DataFrame row."""
         job: Dict[str, Any] = {}
         trace_fields: List[Tuple[FieldSpec, Any, str]] = []  # (spec, raw, col_name)
@@ -715,7 +784,15 @@ class JobDictBuilder:
                     if isinstance(job[canon], list):
                         job[canon] = list(job[canon])
                     continue
-                value = self._convert_value(raw, fs, mapped.get(canon, ""), ref_time)
+                if (
+                    fs.field_type == "timestamp"
+                    and timestamp_cache is not None
+                    and row_pos is not None
+                    and canon in timestamp_cache
+                ):
+                    value = float(timestamp_cache[canon][row_pos])
+                else:
+                    value = self._convert_value(raw, fs, mapped.get(canon, ""), ref_time)
             else:
                 value = fs.default
                 # Deep copy mutable defaults
