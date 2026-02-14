@@ -8,7 +8,6 @@ Tools: pandas, scikit-learn, polars
 """
 
 import logging
-import re
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
@@ -45,7 +44,7 @@ def get_ingest_steps():
 
         def validate(self, ctx: PipelineContext) -> bool:
             # Domain check is optional since it may not be set during ingest
-            fmt_ok = ctx.metadata.get("file_format") in ["csv", "parquet", "hpc_torque_dir"]
+            fmt_ok = ctx.metadata.get("file_format") in ["csv", "parquet"]
             domain_ok = ctx.domain in ["hpc", "general"] or not ctx.domain
             return fmt_ok and domain_ok
 
@@ -57,9 +56,7 @@ def get_ingest_steps():
                 paths = ctx.input_paths if ctx.input_paths else [ctx.input_path]
                 file_format = ctx.metadata.get("file_format")
 
-                if len(paths) == 1 and file_format == "hpc_torque_dir":
-                    df = self._load_bluewaters_torque(paths[0], pd)
-                elif len(paths) == 1:
+                if len(paths) == 1:
                     # Single file
                     if file_format == "parquet":
                         df = pd.read_parquet(paths[0])
@@ -104,61 +101,6 @@ def get_ingest_steps():
                 ctx.add_error(f"Error loading HPC data: {str(e)}")
 
             return ctx
-
-        @staticmethod
-        def _load_bluewaters_torque(root_path: Path, pd):
-            """Load Blue Waters Torque logs from directory layout into a DataFrame.
-
-            Accepts either:
-            - /opt/data/bluewaters
-            - /opt/data/bluewaters/torque_logs
-            """
-            torque_dir = root_path / "torque_logs" if (root_path / "torque_logs").is_dir() else root_path
-            if not torque_dir.is_dir():
-                raise ValueError(f"Torque logs directory not found under: {root_path}")
-
-            files = sorted(p for p in torque_dir.iterdir() if p.is_file())
-            if not files:
-                raise ValueError(f"No torque log files found in: {torque_dir}")
-
-            records: List[Dict[str, Any]] = []
-            kv_pattern = re.compile(r"([^\s=]+)=([^\s]+)")
-
-            for i, file_path in enumerate(files, 1):
-                logger.debug(f"Loading torque log {i}/{len(files)}: {file_path.name}")
-                with open(file_path, "r", errors="ignore") as f:
-                    for line in f:
-                        parts = line.rstrip("\n").split(";", 3)
-                        if len(parts) < 4:
-                            continue
-
-                        _ts, event_type, jobid, payload = parts
-                        if event_type != "E":
-                            continue
-
-                        kv = {k: v for k, v in kv_pattern.findall(payload)}
-
-                        record = {
-                            "jobid": jobid,
-                            "user": kv.get("user"),
-                            "account": kv.get("account"),
-                            "queue": kv.get("queue"),
-                            "qtime": kv.get("qtime"),
-                            "start": kv.get("start"),
-                            "end": kv.get("end"),
-                            "Resource_List.walltime": kv.get("Resource_List.walltime"),
-                            "Resource_List.nodect": kv.get("Resource_List.nodect"),
-                            "exit_status": kv.get("Exit_status", kv.get("exit_status")),
-                            "exec_host": kv.get("exec_host"),
-                        }
-                        records.append(record)
-
-            if not records:
-                raise ValueError(
-                    f"No completed (event=E) torque records were parsed from: {torque_dir}"
-                )
-
-            return pd.DataFrame.from_records(records)
 
     return [DetectFormat(), LoadHPCData()]
 

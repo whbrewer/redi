@@ -153,10 +153,6 @@ class DetectFormat(PipelineStep):
             if (path / ".zarray").exists() or (path / ".zgroup").exists():
                 detected_format = "zarr"
                 logger.debug(f"     Found zarr markers, format set to zarr")
-            elif (path / "torque_logs").is_dir() or path.name == "torque_logs":
-                # HPC Blue Waters-style raw Torque/PBS layout.
-                detected_format = "hpc_torque_dir"
-                logger.debug("     Found torque_logs directory, format set to hpc_torque_dir")
             else:
                 # Check for SICKLE formats
                 sickle_format = self._detect_sickle_format(path)
