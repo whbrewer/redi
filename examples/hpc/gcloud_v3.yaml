@@ -1,0 +1,40 @@
+# REDI RAPS Job Extraction — Google Cluster Traces v3 (2019)
+#
+# Data: Google cluster trace dataset v3 (JSON/Parquet, compressed)
+# Source: /opt/data/gcloud/v3/google_cluster_data_sample_1.1G/
+# Format: Multiple sub-tables (collection_events, instance_events, instance_usage, etc.)
+#
+# NOTE: v3 uses "collections" (≈ jobs) and "instances" (≈ tasks). The
+# collection_events table has the job-level data. Pre-processing to flatten
+# the JSON structure into a single CSV/Parquet is recommended.
+#
+# collection_events fields:
+#   time, type, collection_id, scheduling_class, collection_type,
+#   priority, user, collection_name, collection_logical_name,
+#   start_after_collection_ids, vertical_scaling, scheduler
+#
+# instance_events fields:
+#   time, type, collection_id, instance_index, machine_id,
+#   alloc_collection_id, alloc_instance_index, collection_type,
+#   scheduling_class, priority, ...resource_request fields...
+#
+# This config assumes collection_events have been extracted to Parquet/CSV.
+
+domain: hpc
+input_path: ./gcloud_v3_collections.parquet  # Pre-processed collection events
+output_dir: ./output/gcloud_v3_raps
+
+raps_jobs:
+  enabled: true
+  system_name: gcloudv3
+
+  column_overrides:
+    # Google cluster trace v3 collection_events → RAPS canonical
+    collection_id: id
+    collection_name: name
+    user: account
+    time: submit_time
+    priority: priority
+    scheduling_class: partition
+    # Note: v3 resource requests (CPU, memory) are in instance_events,
+    # not collection_events. Join with instance_events for full Job mapping.
