@@ -308,7 +308,177 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data()]
+    class LoadPhillyData(PipelineStep):
+        """Load Microsoft Philly GPU cluster traces.
+
+        Reads cluster_job_log (JSON), flattens nested attempts to extract
+        start/end times and nodes_required, then joins per-machine CPU/GPU
+        utilization traces from cpu_by_day/ and gpu_by_day/ if present.
+        """
+
+        name = "load_philly"
+        stage = PipelineStage.INGEST
+        description = "Load Philly GPU cluster traces"
+
+        _DATE_FMT = "%Y-%m-%d %H:%M:%S"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "philly"
+
+        def _parse_ts(self, val) -> float:
+            """Convert Philly timestamp (str or epoch) to epoch seconds."""
+            if val is None or val == "None":
+                return None
+            if isinstance(val, (int, float)):
+                return float(val)
+            val = val.replace(" PST", "").replace(" PDT", "")
+            try:
+                from datetime import datetime
+                return datetime.strptime(val, self._DATE_FMT).timestamp()
+            except ValueError:
+                return None
+
+        def _load_daily_traces(self, trace_dir: Path, colname: str) -> dict:
+            """Load all daily CSVs → dict of date → DataFrame."""
+            import pandas as pd
+            traces = {}
+            for f in sorted(trace_dir.glob("*.csv")):
+                try:
+                    df = pd.read_csv(f, dtype={"machine_id": str, colname: float})
+                    df["time"] = pd.to_datetime(df["time"], errors="coerce",
+                                                format=self._DATE_FMT)
+                    traces[f.stem] = df  # stem = "2017-10-03"
+                except Exception:
+                    pass
+            return traces
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+                import pandas as pd
+                from datetime import datetime, timedelta
+
+                trace_dir = ctx.input_path
+                job_log_path = trace_dir / "cluster_job_log"
+
+                logger.debug(f"     Loading Philly job log from {job_log_path}")
+                import json
+                with open(job_log_path, encoding="utf-8") as f:
+                    raw_jobs = json.load(f)
+
+                logger.debug(f"     {len(raw_jobs):,} raw jobs in log")
+
+                # Flatten job records
+                records = []
+                for raw in raw_jobs:
+                    attempts = raw.get("attempts", [])
+                    if not attempts:
+                        continue
+
+                    # Use first attempt's start, last attempt's end
+                    start_ts = self._parse_ts(attempts[0].get("start_time"))
+                    end_ts   = self._parse_ts(attempts[-1].get("end_time"))
+                    submitted_ts = self._parse_ts(raw.get("submitted_time"))
+
+                    if not start_ts or not end_ts:
+                        continue
+
+                    # Collect machines and GPU count from last attempt
+                    detail = attempts[-1].get("detail", [])
+                    machine_ids = [d["ip"] for d in detail if "ip" in d]
+                    num_gpus = sum(len(d.get("gpus", [])) for d in detail)
+
+                    if not machine_ids:
+                        continue
+
+                    records.append({
+                        "jobid":          raw.get("jobid"),
+                        "user":           raw.get("user"),
+                        "status":         raw.get("status"),
+                        "vc":             raw.get("vc"),
+                        "submitted_time": submitted_ts,
+                        "start_time":     start_ts,
+                        "end_time":       end_ts,
+                        "nodes_required": len(machine_ids),
+                        "num_gpus":       num_gpus,
+                        "_machine_ids":   machine_ids,
+                    })
+
+                if not records:
+                    ctx.add_error("No valid Philly job records found")
+                    return ctx
+
+                df = pd.DataFrame(records)
+                logger.debug(f"     {len(df):,} jobs with valid attempts")
+
+                # Load CPU/GPU traces if directories exist
+                cpu_dir = trace_dir / "cpu_by_day"
+                gpu_dir = trace_dir / "gpu_by_day"
+                has_traces = cpu_dir.is_dir() and gpu_dir.is_dir()
+
+                if has_traces:
+                    logger.debug(f"     Loading CPU/GPU daily traces...")
+                    all_cpu = self._load_daily_traces(cpu_dir, "cpu_util")
+                    all_gpu = self._load_daily_traces(gpu_dir, "gpu_util")
+                    logger.debug(f"     Loaded {len(all_cpu)} CPU days, {len(all_gpu)} GPU days")
+
+                    cpu_traces, gpu_traces = [], []
+                    for _, row in df.iterrows():
+                        machines = row["_machine_ids"]
+                        start_dt = datetime.fromtimestamp(row["start_time"])
+                        end_dt   = datetime.fromtimestamp(row["end_time"])
+
+                        def extract_trace(daily_dict, colname):
+                            dfs = []
+                            cur = start_dt.date()
+                            while cur <= end_dt.date():
+                                day_df = daily_dict.get(str(cur))
+                                if day_df is not None:
+                                    dfs.append(day_df)
+                                cur += timedelta(days=1)
+                            if not dfs:
+                                return np.array([], dtype=float)
+                            combined = pd.concat(dfs, ignore_index=True)
+                            mask = (
+                                combined["machine_id"].isin(machines)
+                                & (combined["time"] >= start_dt)
+                                & (combined["time"] <= end_dt)
+                            )
+                            filtered = combined.loc[mask].copy()
+                            if filtered.empty:
+                                return np.array([], dtype=float)
+                            if len(machines) > 1:
+                                filtered = (filtered.groupby("time")[colname]
+                                            .mean().reset_index())
+                            return (filtered[colname].to_numpy() * 0.01)
+
+                        cpu_traces.append(extract_trace(all_cpu, "cpu_util"))
+                        gpu_traces.append(extract_trace(all_gpu, "gpu_util"))
+
+                    df["cpu_trace"] = cpu_traces
+                    df["gpu_trace"] = gpu_traces
+                    logger.debug(f"     Traces attached to {len(df):,} jobs")
+
+                # Drop internal helper column
+                df = df.drop(columns=["_machine_ids"])
+                ctx.data = df
+
+                ctx.metadata["num_rows"] = len(df)
+                ctx.metadata["num_columns"] = len(df.columns)
+                ctx.metadata["columns"] = list(df.columns)
+                ctx.metadata["has_traces"] = has_traces
+
+                logger.info(
+                    f"Loaded Philly: {len(df):,} jobs"
+                    + (" with CPU/GPU traces" if has_traces else " (no traces)")
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error loading Philly data: {str(e)}")
+
+            return ctx
+
+    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(), LoadPhillyData()]
 
 
 def get_preprocess_steps():

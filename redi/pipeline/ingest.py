@@ -124,6 +124,14 @@ class DetectFormat(PipelineStep):
 
         return None
 
+    def _detect_philly_format(self, path: Path) -> Optional[str]:
+        """Detect Philly GPU cluster trace directory layout."""
+        if not path.is_dir():
+            return None
+        if (path / "cluster_job_log").exists():
+            return "philly"
+        return None
+
     def _detect_gcloud_v2_format(self, path: Path) -> Optional[str]:
         """Detect Google Cluster Trace v2 directory layout."""
         if not path.is_dir():
@@ -192,9 +200,13 @@ class DetectFormat(PipelineStep):
                 detected_format = "zarr"
                 logger.debug(f"     Found zarr markers, format set to zarr")
             else:
+                # Check for Philly GPU cluster traces
+                philly_format = self._detect_philly_format(path)
+                if philly_format:
+                    detected_format = philly_format
+                    logger.debug(f"     Detected Philly trace format")
                 # Check for PBS/Torque formats
-                torque_format = self._detect_torque_format(path)
-                if torque_format:
+                elif (torque_format := self._detect_torque_format(path)):
                     detected_format = torque_format
                     logger.debug(f"     Detected PBS/Torque format: {torque_format}")
                 else:
