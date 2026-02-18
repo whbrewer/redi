@@ -1,0 +1,24 @@
+# Validation configuration for NASA POWER daily weather
+#
+# Compare REDI pipeline output against the known-good PyTorch dataset
+# published at: huggingface.co/datasets/notadib/NASA-Power-Daily-Weather
+#
+# Usage:
+#   redi validate output/usa_0_data_5c79b84 -c examples/nasa_power_validate.yaml
+#   redi validate output/usa_0_data_5c79b84 -c examples/nasa_power_validate.yaml --aidrin
+#   redi validate output/usa_0_data_5c79b84 -c examples/nasa_power_validate.yaml --style json
+
+ground_truth: /opt/drai/nasa-power-daily-weather/ai-ready/weather_dataset_daily_0.pt
+format: pt            # ground truth format: pt, npz, npy, csv, parquet
+description: "NASA POWER daily weather - 50 US locations, 14 variables, 3256 days"
+
+# Optional: how to align shapes when they differ
+alignment:
+  method: truncate_pad   # truncate_pad (default) or error
+  target_shape: [50, 3256, 14]  # (locations, timesteps, features) -- inferred from ground truth if omitted
+
+# Optional: which comparison metrics to run
+metrics:
+  basic_stats: true       # count, mean, std, min, max (default: true)
+  similarity: true        # MAE, RMSE, correlation, KL divergence (default: true)
+  per_feature: false      # per-feature similarity breakdown (default: false)
