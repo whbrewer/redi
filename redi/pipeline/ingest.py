@@ -124,6 +124,24 @@ class DetectFormat(PipelineStep):
 
         return None
 
+    def _detect_gcloud_v2_format(self, path: Path) -> Optional[str]:
+        """Detect Google Cluster Trace v2 directory layout."""
+        if not path.is_dir():
+            return None
+
+        GCV2_SUBTABLES = {"job_events", "task_events", "machine_events", "task_usage"}
+        subdirs = {d.name for d in path.iterdir() if d.is_dir()}
+        if not GCV2_SUBTABLES & subdirs:
+            return None
+
+        # Confirm at least one sub-table has the expected part-*.csv.gz files
+        for name in GCV2_SUBTABLES & subdirs:
+            parts = list((path / name).glob("part-*.csv.gz"))
+            if parts:
+                return "gcloud-v2"
+
+        return None
+
     def _detect_sickle_format(self, path: Path) -> Optional[str]:
         """Detect SICKLE turbulence data formats (GESTS or SST-binary)."""
         if not path.is_dir():
@@ -180,11 +198,17 @@ class DetectFormat(PipelineStep):
                     detected_format = torque_format
                     logger.debug(f"     Detected PBS/Torque format: {torque_format}")
                 else:
-                    # Check for SICKLE formats
-                    sickle_format = self._detect_sickle_format(path)
-                    if sickle_format:
-                        detected_format = sickle_format
-                        logger.debug(f"     Detected SICKLE format: {sickle_format}")
+                    # Check for Google Cluster Trace v2
+                    gcloud_format = self._detect_gcloud_v2_format(path)
+                    if gcloud_format:
+                        detected_format = gcloud_format
+                        logger.debug(f"     Detected Google Cluster v2 format")
+                    else:
+                        # Check for SICKLE formats
+                        sickle_format = self._detect_sickle_format(path)
+                        if sickle_format:
+                            detected_format = sickle_format
+                            logger.debug(f"     Detected SICKLE format: {sickle_format}")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():

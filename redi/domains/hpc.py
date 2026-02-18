@@ -175,7 +175,140 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadHPCData(), LoadTorqueData()]
+    class LoadGCloudV2Data(PipelineStep):
+        """Load Google Cluster Trace v2 from its multi-table directory layout.
+
+        Joins job_events, task_events, machine_events, and task_usage to produce
+        a flat DataFrame with nodes_required and per-job CPU traces, matching
+        the logic from raps/dataloaders/gcloudv2.py.
+        """
+
+        name = "load_gcloud_v2"
+        stage = PipelineStage.INGEST
+        description = "Load Google Cluster Trace v2"
+
+        # Column schemas for each sub-table (headerless CSVs)
+        _COLUMNS = {
+            "job_events": [
+                "timestamp", "missing_info", "job_ID", "event_type",
+                "user_name", "scheduling_class", "job_name", "logical_job_name",
+            ],
+            "machine_events": [
+                "timestamp", "machine_ID", "event_type", "platform_ID",
+                "CPU_capacity", "memory_capacity",
+            ],
+            "task_events": [
+                "timestamp", "missing_info", "job_ID", "task_index",
+                "machine_ID", "event_type", "user_name", "scheduling_class",
+                "priority", "CPU_request", "memory_request",
+                "disk_space_request", "different_machine_constraint",
+            ],
+            "task_usage": [
+                "start_time", "end_time", "job_ID", "task_index", "machine_ID",
+                "CPU_usage_rate", "memory_usage_avg", "memory_usage_max",
+                "assigned_memory", "unmapped_page_cache_memory",
+                "page_cache_memory", "maximum_memory_usage",
+                "disk_IO_time_avg", "disk_IO_time_max", "local_disk_space_used",
+                "cycles_per_instruction", "memory_accesses_per_instruction",
+                "sampling_rate", "aggregation_type", "missing_col_19",
+            ],
+        }
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "gcloud-v2"
+
+        def _load_table(self, base: Path, table: str) -> "pd.DataFrame":
+            import pandas as pd
+            table_dir = base / table
+            files = sorted(table_dir.glob("part-*.csv.gz"))
+            if not files:
+                raise FileNotFoundError(f"No part files in {table_dir}")
+            names = self._COLUMNS[table]
+            dfs = [pd.read_csv(f, compression="gzip", header=None,
+                               names=names, dtype={names[0]: float})
+                   for f in files]
+            return pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+                import pandas as pd
+
+                base = ctx.input_path
+                logger.debug(f"     Loading Google Cluster v2 from {base}")
+
+                # 1. Machine capacity (mode of CPU/memory across all machines)
+                machine_df = self._load_table(base, "machine_events")
+                cpu_cap = machine_df["CPU_capacity"].mode()[0]
+                mem_cap = machine_df["memory_capacity"].mode()[0]
+                logger.debug(f"     Machine capacity: cpu={cpu_cap}, mem={mem_cap}")
+
+                # 2. nodes_required per job from task_events
+                task_df = self._load_table(base, "task_events")
+                task_df = task_df[task_df["event_type"] == 0]
+                job_res = task_df.groupby("job_ID").agg(
+                    CPU_request=("CPU_request", "sum"),
+                    memory_request=("memory_request", "sum"),
+                ).reset_index()
+                job_res["nodes_required"] = np.maximum(
+                    np.ceil(job_res["CPU_request"] / cpu_cap),
+                    np.ceil(job_res["memory_request"] / mem_cap),
+                ).astype(int)
+                job_res = job_res[job_res["nodes_required"] > 0]
+                nodes_map = job_res.set_index("job_ID")["nodes_required"].to_dict()
+                logger.debug(f"     {len(nodes_map):,} jobs with resource requests")
+
+                # 3. Job submit events (event_type=0), timestamps μs → s
+                job_df = self._load_table(base, "job_events")
+                job_df = job_df[job_df["event_type"] == 0].copy()
+                job_df["timestamp"] = job_df["timestamp"].astype(float) / 1e6
+                t0 = job_df["timestamp"].min()
+
+                # 4. Task usage → per-job start/end times and CPU traces
+                usage_df = self._load_table(base, "task_usage")
+                usage_df["start_time"] = usage_df["start_time"].astype(float) / 1e6
+                usage_df["end_time"] = usage_df["end_time"].astype(float) / 1e6
+                usage_df["job_ID"] = usage_df["job_ID"].astype(int)
+
+                start_map = usage_df.groupby("job_ID")["start_time"].min().to_dict()
+                end_map   = usage_df.groupby("job_ID")["end_time"].max().to_dict()
+                trace_map = (usage_df.groupby("job_ID")["CPU_usage_rate"]
+                             .apply(lambda s: s.to_numpy()).to_dict())
+
+                # 5. Filter jobs that have both usage data and resource requests
+                valid_ids = set(trace_map) & set(nodes_map)
+                job_df = job_df[job_df["job_ID"].isin(valid_ids)].copy()
+                logger.debug(f"     {len(job_df):,} jobs after filtering to valid set")
+
+                # 6. Build flat DataFrame
+                job_df["submit_time"] = job_df["timestamp"] - t0
+                job_df["start_time"]  = job_df["job_ID"].map(start_map) - t0
+                job_df["end_time"]    = job_df["job_ID"].map(end_map) - t0
+                job_df["nodes_required"] = job_df["job_ID"].map(nodes_map)
+                job_df["cpu_trace"]   = job_df["job_ID"].map(trace_map)
+
+                cols = [
+                    "job_ID", "user_name", "scheduling_class", "job_name",
+                    "submit_time", "start_time", "end_time",
+                    "nodes_required", "cpu_trace",
+                ]
+                ctx.data = job_df[cols].reset_index(drop=True)
+
+                ctx.metadata["num_rows"] = len(ctx.data)
+                ctx.metadata["num_columns"] = len(ctx.data.columns)
+                ctx.metadata["columns"] = list(ctx.data.columns)
+
+                logger.info(
+                    f"Loaded Google Cluster v2: {len(ctx.data):,} jobs "
+                    f"({len(valid_ids):,} with usage+resources)"
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error loading Google Cluster v2 data: {str(e)}")
+
+            return ctx
+
+    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data()]
 
 
 def get_preprocess_steps():
