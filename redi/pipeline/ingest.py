@@ -104,6 +104,26 @@ class DetectFormat(PipelineStep):
 
         return "unknown"
 
+    def _detect_torque_format(self, path: Path) -> Optional[str]:
+        """Detect PBS/Torque accounting log directory layout."""
+        if not path.is_dir():
+            return None
+
+        # Check for torque_logs/ subdirectory (e.g., /opt/data/bluewaters)
+        torque_dir = path / "torque_logs"
+        if torque_dir.is_dir():
+            files = [f for f in torque_dir.iterdir() if f.is_file()]
+            if files and files[0].name.isdigit() and len(files[0].name) == 8:
+                return "torque-pbs"
+
+        # Check if path itself is a directory of date-named PBS log files
+        date_files = [f for f in path.iterdir()
+                      if f.is_file() and f.name.isdigit() and len(f.name) == 8]
+        if len(date_files) >= 2:
+            return "torque-pbs"
+
+        return None
+
     def _detect_sickle_format(self, path: Path) -> Optional[str]:
         """Detect SICKLE turbulence data formats (GESTS or SST-binary)."""
         if not path.is_dir():
@@ -154,11 +174,17 @@ class DetectFormat(PipelineStep):
                 detected_format = "zarr"
                 logger.debug(f"     Found zarr markers, format set to zarr")
             else:
-                # Check for SICKLE formats
-                sickle_format = self._detect_sickle_format(path)
-                if sickle_format:
-                    detected_format = sickle_format
-                    logger.debug(f"     Detected SICKLE format: {sickle_format}")
+                # Check for PBS/Torque formats
+                torque_format = self._detect_torque_format(path)
+                if torque_format:
+                    detected_format = torque_format
+                    logger.debug(f"     Detected PBS/Torque format: {torque_format}")
+                else:
+                    # Check for SICKLE formats
+                    sickle_format = self._detect_sickle_format(path)
+                    if sickle_format:
+                        detected_format = sickle_format
+                        logger.debug(f"     Detected SICKLE format: {sickle_format}")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():

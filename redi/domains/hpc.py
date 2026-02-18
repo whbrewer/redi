@@ -102,7 +102,80 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadHPCData()]
+    class LoadTorqueData(PipelineStep):
+        """Load PBS/Torque accounting logs from a directory layout."""
+
+        name = "load_torque"
+        stage = PipelineStage.INGEST
+        description = "Load PBS/Torque accounting logs"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "torque-pbs"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import pandas as pd
+
+                root = ctx.input_path
+
+                # Locate log files: prefer torque_logs/ subdir, fall back to root
+                torque_dir = root / "torque_logs"
+                log_dir = torque_dir if torque_dir.is_dir() else root
+                log_files = sorted(
+                    f for f in log_dir.iterdir()
+                    if f.is_file() and f.name.isdigit() and len(f.name) == 8
+                )
+
+                if not log_files:
+                    ctx.add_error(f"No PBS accounting log files found in {log_dir}")
+                    return ctx
+
+                logger.debug(f"     Found {len(log_files)} PBS log files in {log_dir}")
+
+                records = []
+                skipped = 0
+                for log_file in log_files:
+                    with open(log_file, errors="replace") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split(";", 3)
+                            if len(parts) < 4 or parts[1] != "E":
+                                skipped += 1
+                                continue
+                            _, _, job_id, attrs_str = parts
+                            record = {"jobid": job_id}
+                            for token in attrs_str.split():
+                                if "=" in token:
+                                    key, _, val = token.partition("=")
+                                    record[key.lower()] = val
+                            records.append(record)
+
+                if not records:
+                    ctx.add_error("No completed job records (event type 'E') found in PBS logs")
+                    return ctx
+
+                df = pd.DataFrame(records)
+                ctx.data = df
+
+                ctx.metadata["num_rows"] = len(df)
+                ctx.metadata["num_columns"] = len(df.columns)
+                ctx.metadata["columns"] = list(df.columns)
+                ctx.metadata["log_files_parsed"] = len(log_files)
+                ctx.metadata["records_skipped"] = skipped
+
+                logger.info(
+                    f"Loaded PBS/Torque logs: {len(df):,} completed jobs from "
+                    f"{len(log_files)} files ({skipped:,} non-E records skipped)"
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error loading PBS/Torque logs: {str(e)}")
+
+            return ctx
+
+    return [DetectFormat(), LoadHPCData(), LoadTorqueData()]
 
 
 def get_preprocess_steps():
