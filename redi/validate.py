@@ -150,33 +150,59 @@ def adjust_shape(data: np.ndarray, target_shape: tuple) -> np.ndarray:
 # RAPS NPZ helpers
 # ---------------------------------------------------------------------------
 
-_RAPS_NUMERIC_FIELDS = [
-    "nodes_required", "submit_time", "start_time", "end_time",
-    "time_limit", "expected_run_time", "priority", "partition",
-    "cpu_cores_required", "gpu_units_required", "trace_time", "trace_quanta",
+# Scalar fields that are safe to compare directly (reference-frame independent).
+# Absolute timestamp fields (submit_time, start_time, end_time) are intentionally
+# excluded because REDI and RAPS ground-truth files use different time epochs.
+# Duration-derived fields (wait_time, run_time) are added instead.
+_RAPS_SCALAR_FIELDS = [
+    "nodes_required", "time_limit", "expected_run_time",
+    "priority", "partition",
+    "cpu_cores_required", "gpu_units_required",
+    "trace_quanta",
 ]
 
 
 def _raps_jobs_to_matrix(jobs_array: np.ndarray) -> np.ndarray:
     """Convert a RAPS jobs object array (array of dicts) into a float32 matrix.
 
-    Extracts scalar numeric fields from each job dict. Fields that are missing
-    or non-numeric in a job are filled with 0.
+    Jobs are sorted by id for stable row alignment between REDI output and
+    ground-truth files (which may store jobs in different orders).
+
+    Uses only reference-frame-independent fields: scalar job properties plus
+    derived durations (wait_time = start - submit, run_time = end - start).
+    Absolute timestamp fields are excluded because REDI and RAPS snapshots
+    use different time epochs.
     """
+    jobs = [j for j in jobs_array if isinstance(j, dict)]
+    if not jobs:
+        raise ValueError("No valid job dicts found in RAPS jobs array")
+
+    # Sort by numeric job id for consistent row ordering across datasets
+    try:
+        jobs = sorted(jobs, key=lambda j: int(j.get("id", 0)))
+    except (TypeError, ValueError):
+        pass  # leave unsorted if ids aren't numeric
+
     rows = []
-    for job in jobs_array:
-        if not isinstance(job, dict):
-            continue
+    for job in jobs:
         row = []
-        for field in _RAPS_NUMERIC_FIELDS:
+        for field in _RAPS_SCALAR_FIELDS:
             val = job.get(field, 0)
             try:
                 row.append(float(val) if val is not None else 0.0)
             except (TypeError, ValueError):
                 row.append(0.0)
+        # Derived duration fields (reference-frame independent)
+        try:
+            wait = float(job.get("start_time", 0)) - float(job.get("submit_time", 0))
+        except (TypeError, ValueError):
+            wait = 0.0
+        try:
+            run = float(job.get("end_time", 0)) - float(job.get("start_time", 0))
+        except (TypeError, ValueError):
+            run = 0.0
+        row.extend([wait, run])
         rows.append(row)
-    if not rows:
-        raise ValueError("No valid job dicts found in RAPS jobs array")
     return np.array(rows, dtype=np.float32)
 
 
