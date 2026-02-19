@@ -2628,7 +2628,12 @@ def _format_size(size_bytes: int) -> str:
 # MAIN CLI
 # =============================================================================
 
-def main():
+def create_parser() -> argparse.ArgumentParser:
+    """Create and return the REDI argument parser.
+
+    Returns:
+        Configured ArgumentParser with all subcommands (run, analyze, discover, validate).
+    """
     parser = argparse.ArgumentParser(
         prog='redi',
         description="REDI - Readiness Engine for Data Integration",
@@ -2822,6 +2827,12 @@ Examples:
                                  help="Output style")
     validate_parser.add_argument("-v", "--verbose", action="store_true",
                                  help="Verbose output")
+
+    return parser
+
+
+def main():
+    parser = create_parser()
 
     # Parse arguments
     args = parser.parse_args()
