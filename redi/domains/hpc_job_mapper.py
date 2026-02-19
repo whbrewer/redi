@@ -655,6 +655,28 @@ _STATE_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Priority policies
+# ---------------------------------------------------------------------------
+
+def _priority_frontier(nodes_required: int) -> int:
+    """Frontier aging boost policy.
+
+    Source: https://docs.olcf.ornl.gov/systems/frontier_user_guide.html#job-priority-by-node-count
+    Reproduced from raps/dataloaders/frontier.py::aging_boost().
+    """
+    if nodes_required >= 5645:
+        return 8 * 24 * 3600   # 691200 s
+    elif nodes_required >= 1882:
+        return 4 * 24 * 3600   # 345600 s
+    return 0
+
+
+_PRIORITY_POLICIES: Dict[str, Any] = {
+    "frontier": _priority_frontier,
+}
+
+
 class JobDictBuilder:
     """Builds RAPS-compatible job_dict dictionaries from mapped DataFrame rows."""
 
@@ -662,7 +684,8 @@ class JobDictBuilder:
                  trace_quanta: Optional[int] = None,
                  jobprofile_df: Optional[pd.DataFrame] = None,
                  topology: Optional[Dict[str, Any]] = None,
-                 system_name: str = "unknown"):
+                 system_name: str = "unknown",
+                 priority_policy: Optional[str] = None):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
@@ -670,6 +693,7 @@ class JobDictBuilder:
         self.topology = topology
         self.system_name = system_name
         self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
+        self._priority_fn = _PRIORITY_POLICIES.get(priority_policy) if priority_policy else None
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -872,6 +896,10 @@ class JobDictBuilder:
                     value = list(value)
 
             job[canon] = value
+
+        # Apply priority policy when the source data has no priority column
+        if self._priority_fn is not None and not job.get("priority"):
+            job["priority"] = self._priority_fn(int(job.get("nodes_required") or 0))
 
         # Validation: skip if raw end_time is NaN/NaT (still-running jobs)
         if "end_time" in mapped:
@@ -1492,12 +1520,14 @@ class BuildJobDicts(PipelineStep):
     def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None,
                  trace_quanta: Optional[int] = None,
                  topology: Optional[Dict[str, Any]] = None,
-                 system_name: str = "unknown"):
+                 system_name: str = "unknown",
+                 priority_policy: Optional[str] = None):
         super().__init__()
         self.power_config = power_config
         self.trace_quanta = trace_quanta
         self.topology = topology
         self.system_name = system_name
+        self.priority_policy = priority_policy
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1518,6 +1548,7 @@ class BuildJobDicts(PipelineStep):
             jobprofile_df=jobprofile_df,
             topology=self.topology,
             system_name=self.system_name,
+            priority_policy=self.priority_policy,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 

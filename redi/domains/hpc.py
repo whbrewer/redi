@@ -960,7 +960,7 @@ def _get_load_jobprofile_step(jobprofile_path=None):
 
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
-                      jobprofile_path=None, topology=None):
+                      jobprofile_path=None, topology=None, priority_policy=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -971,6 +971,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         system_name: RAPS system name stored in the NPZ snapshot (e.g. "adastraMI250")
         jobprofile_path: Path/glob to jobprofile parquet files for per-timestep traces
         topology: System topology dict (sc_shape, blades_per_chassis, nodes_per_blade)
+        priority_policy: Named priority policy to apply when priority is absent from
+            the source data. Supported: "frontier" (aging boost by node count).
     """
     from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
 
@@ -981,7 +983,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
-                      topology=topology, system_name=system_name),
+                      topology=topology, system_name=system_name,
+                      priority_policy=priority_policy),
         SaveJobDicts(output_format=output_format, system_name=system_name),
     ]
     return ingest + jobprofile + preprocess + raps_steps

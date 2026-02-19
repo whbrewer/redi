@@ -413,6 +413,7 @@ def run_pipeline(
                 _trace_quanta = _raps_cfg.get("trace_quanta") if isinstance(_raps_cfg, dict) else None
             # Jobprofile path from config
             _jp_path = _raps_cfg.get("jobprofile_path") if isinstance(_raps_cfg, dict) else None
+            _priority_policy = _raps_cfg.get("priority_policy") if isinstance(_raps_cfg, dict) else None
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
@@ -422,6 +423,7 @@ def run_pipeline(
                 system_name=_sys_name,
                 jobprofile_path=_jp_path,
                 topology=_topology,
+                priority_policy=_priority_policy,
             )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline

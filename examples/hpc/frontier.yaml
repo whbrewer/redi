@@ -26,6 +26,11 @@ raps_jobs:
   # From raps/config/frontier.yaml: scheduler.trace_quanta = 15
   trace_quanta: 15
 
+  # Priority policy: applied when source data has no priority column.
+  # "frontier" implements the OLCF aging boost by node count:
+  # https://docs.olcf.ornl.gov/systems/frontier_user_guide.html#job-priority-by-node-count
+  priority_policy: frontier
+
   # Power config for trace normalization (from RAPS frontier.yaml)
   # Used when RAPS is not installed; overridden by RAPS system config when available
   power_config:
