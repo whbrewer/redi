@@ -178,6 +178,7 @@ def generate_output_dir(
     base_dir: str = "./output",
     unique: bool = False,
     hash_content: bool = False,
+    name_override: Optional[str] = None,
 ) -> str:
     """Generate a hash-based output directory name.
 
@@ -189,9 +190,11 @@ def generate_output_dir(
         base_dir: Base output directory (default: ./output)
         unique: If True, append timestamp to ensure uniqueness
         hash_content: If True, hash file content (slower but more accurate)
+        name_override: If set, use this as the base name instead of the input
+            filename (e.g. pass the YAML config stem when one is used)
 
     Returns:
-        Path string like "./output/mydata_a3f2b1c" or "./output/mydata_a3f2b1c_0204_1430"
+        Path string like "./output/frontier_a3f2b1c" or "./output/mydata_a3f2b1c_0204_1430"
     """
     import hashlib
     from datetime import datetime
@@ -199,9 +202,9 @@ def generate_output_dir(
     if not input_paths:
         return base_dir
 
-    # Use first file for the base name
+    # Base name: prefer the override (e.g. YAML config stem), else first input file
     primary = input_paths[0]
-    basename = primary.stem  # filename without extension
+    basename = name_override if name_override else primary.stem
 
     # Build hash input: path + size for each file
     hash_input = []
@@ -2952,11 +2955,15 @@ def _handle_run_command(args):
         output_dir = args.output
     elif input_paths:
         base_dir = config.get('output_dir') or './output'
+        # If a YAML config was supplied, name the output after the config file
+        # (e.g. "frontier") rather than the obscure input data filename.
+        _name = Path(config_path).stem if config_path else None
         output_dir = generate_output_dir(
             input_paths=input_paths,
             base_dir=base_dir,
             unique=getattr(args, 'unique', False),
             hash_content=getattr(args, 'hash_content', False),
+            name_override=_name,
         )
     else:
         # Download mode without input files - use config or default
