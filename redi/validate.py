@@ -380,6 +380,61 @@ def raps_sample_comparison(
     return results
 
 
+_RAPS_STAT_FIELDS = [
+    "nodes_required", "time_limit", "expected_run_time",
+    "priority", "wait_time", "run_time", "trace_quanta",
+]
+
+
+def raps_field_stats(
+    redi_path: str,
+    gt_path: str,
+) -> Optional[List[dict]]:
+    """Compute per-field stats over all aligned jobs between REDI and ground-truth RAPS NPZ.
+
+    Returns a list of dicts (one per field) with keys:
+      field, redi_mean, redi_std, redi_min, redi_max,
+              gt_mean,   gt_std,   gt_min,   gt_max, mae, match
+    Returns None if either file is not RAPS NPZ format.
+    """
+    redi_jobs = _load_raps_jobs_dict(Path(redi_path))
+    gt_jobs   = _load_raps_jobs_dict(Path(gt_path))
+    if redi_jobs is None or gt_jobs is None:
+        return None
+
+    shared = sorted(set(redi_jobs) & set(gt_jobs), key=lambda x: int(x) if x.isdigit() else x)
+    if not shared:
+        return None
+
+    def _get(job, field):
+        if field == "wait_time":
+            return float(job.get("start_time", 0)) - float(job.get("submit_time", 0))
+        if field == "run_time":
+            return float(job.get("end_time", 0)) - float(job.get("start_time", 0))
+        v = job.get(field, None)
+        return float(v) if v is not None else 0.0
+
+    results = []
+    for field in _RAPS_STAT_FIELDS:
+        redi_vals = np.array([_get(redi_jobs[jid], field) for jid in shared], dtype=np.float32)
+        gt_vals   = np.array([_get(gt_jobs[jid],   field) for jid in shared], dtype=np.float32)
+        mae = float(np.mean(np.abs(redi_vals - gt_vals)))
+        results.append({
+            "field":    field,
+            "redi_mean": float(redi_vals.mean()),
+            "redi_std":  float(redi_vals.std()),
+            "redi_min":  float(redi_vals.min()),
+            "redi_max":  float(redi_vals.max()),
+            "gt_mean":   float(gt_vals.mean()),
+            "gt_std":    float(gt_vals.std()),
+            "gt_min":    float(gt_vals.min()),
+            "gt_max":    float(gt_vals.max()),
+            "mae":       mae,
+            "match":     mae == 0.0,
+        })
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Load ground truth
 # ---------------------------------------------------------------------------
