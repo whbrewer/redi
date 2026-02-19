@@ -147,6 +147,140 @@ def adjust_shape(data: np.ndarray, target_shape: tuple) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# RAPS NPZ helpers
+# ---------------------------------------------------------------------------
+
+_RAPS_NUMERIC_FIELDS = [
+    "nodes_required", "submit_time", "start_time", "end_time",
+    "time_limit", "expected_run_time", "priority", "partition",
+    "cpu_cores_required", "gpu_units_required", "trace_time", "trace_quanta",
+]
+
+
+def _raps_jobs_to_matrix(jobs_array: np.ndarray) -> np.ndarray:
+    """Convert a RAPS jobs object array (array of dicts) into a float32 matrix.
+
+    Extracts scalar numeric fields from each job dict. Fields that are missing
+    or non-numeric in a job are filled with 0.
+    """
+    rows = []
+    for job in jobs_array:
+        if not isinstance(job, dict):
+            continue
+        row = []
+        for field in _RAPS_NUMERIC_FIELDS:
+            val = job.get(field, 0)
+            try:
+                row.append(float(val) if val is not None else 0.0)
+            except (TypeError, ValueError):
+                row.append(0.0)
+        rows.append(row)
+    if not rows:
+        raise ValueError("No valid job dicts found in RAPS jobs array")
+    return np.array(rows, dtype=np.float32)
+
+
+def _install_raps_stub() -> None:
+    """Install a meta path finder so any 'raps.*' import resolves to a stub.
+
+    This lets numpy unpickle RAPS snapshot files without the raps package
+    installed. The stub turns every raps class into a generic container.
+    Safe to call multiple times.
+    """
+    import importlib.util
+    import sys
+    import types
+
+    if any(getattr(f, "_is_raps_stub", False) for f in sys.meta_path):
+        return
+
+    class _GenericRapsObj:
+        def __init__(self, *args, **kwargs):
+            self.__dict__.update(kwargs)
+        def __setstate__(self, state):
+            self.__dict__.update(state if isinstance(state, dict) else {})
+
+    class _RapsAttrModule(types.ModuleType):
+        def __getattr__(self, name):
+            return _GenericRapsObj
+
+    class _RapsModLoader:
+        def create_module(self, spec):
+            mod = _RapsAttrModule(spec.name)
+            mod.__path__ = []
+            mod.__file__ = None
+            mod.__spec__ = spec
+            mod.__loader__ = self
+            mod.__package__ = spec.name
+            return mod
+        def exec_module(self, module):
+            pass
+
+    class _RapsMetaFinder:
+        _is_raps_stub = True
+        def find_spec(self, fullname, path, target=None):
+            if fullname == "raps" or fullname.startswith("raps."):
+                return importlib.util.spec_from_loader(fullname, _RapsModLoader())
+            return None
+
+    sys.meta_path.insert(0, _RapsMetaFinder())
+
+
+def _load_npz_with_raps_fallback(path: Path) -> np.ndarray:
+    """Load an NPZ file, handling RAPS-format object arrays.
+
+    Tries without pickle first (fast path for numeric arrays). If the file
+    contains RAPS job dicts, loads with pickle and converts to a float matrix.
+    Installs a RAPS module stub so ground-truth files saved by RAPS can be
+    unpickled without the raps package being installed.
+    """
+    # Try strict (no pickle) first — covers plain numeric NPZs
+    try:
+        data = np.load(path)
+        if "X" in data:
+            return data["X"].astype(np.float32, copy=False)
+        keys = list(data.keys())
+        if keys:
+            arr = data[keys[0]]
+            if np.issubdtype(arr.dtype, np.number):
+                return arr.astype(np.float32, copy=False)
+    except Exception:
+        pass
+
+    # Install RAPS stub so pickle can resolve raps.* classes
+    _install_raps_stub()
+
+    # Fall back to pickle — needed for RAPS format
+    data = np.load(path, allow_pickle=True)
+    keys = list(data.keys())
+
+    # RAPS snapshot: look for 'jobs' array of dicts
+    if "jobs" in keys:
+        try:
+            jobs = data["jobs"]
+            if jobs.ndim == 1 and len(jobs) > 0 and isinstance(jobs[0], dict):
+                return _raps_jobs_to_matrix(jobs)
+        except Exception:
+            pass
+
+    # Generic fallback: first loadable numeric array (skip scalars)
+    for key in keys:
+        try:
+            arr = data[key]
+            if arr.shape == ():
+                continue
+            if np.issubdtype(arr.dtype, np.number):
+                return arr.astype(np.float32, copy=False)
+            # Object array of dicts
+            if arr.dtype == object and arr.ndim == 1 and len(arr) > 0 and isinstance(arr[0], dict):
+                return _raps_jobs_to_matrix(arr)
+        except Exception:
+            continue
+
+    raise ValueError(f"No loadable numeric arrays found in {path}")
+
+
+# ---------------------------------------------------------------------------
 # Load ground truth
 # ---------------------------------------------------------------------------
 
@@ -187,14 +321,7 @@ def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
         return tensor.detach().cpu().numpy().astype(np.float32, copy=False)
 
     elif fmt == "npz":
-        data = np.load(path)
-        if "X" in data:
-            return data["X"].astype(np.float32, copy=False)
-        # Fall back to first array
-        keys = list(data.keys())
-        if keys:
-            return data[keys[0]].astype(np.float32, copy=False)
-        raise ValueError(f"No arrays found in {path}")
+        return _load_npz_with_raps_fallback(path)
 
     elif fmt == "npy":
         return np.load(path).astype(np.float32, copy=False)
@@ -218,12 +345,33 @@ def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def load_redi_output(output_dir: str) -> np.ndarray:
-    """Load REDI pipeline output from an output directory.
+    """Load REDI pipeline output from an output directory or a direct file path.
 
-    Reads metadata.json to determine format, then loads and concatenates
-    the appropriate data files. Returns a numpy array.
+    When given a file, loads it directly (NPZ, NPY, Parquet, CSV supported).
+    When given a directory, reads metadata.json to determine format and
+    concatenates the appropriate split files. Returns a numpy array.
     """
-    output_dir = Path(output_dir)
+    path = Path(output_dir)
+
+    # Direct file path — load it as ground-truth-style input
+    if path.is_file():
+        fmt = path.suffix.lower().lstrip(".")
+        if fmt == "npz":
+            return _load_npz_with_raps_fallback(path)
+        elif fmt == "npy":
+            return np.load(path).astype(np.float32, copy=False)
+        elif fmt in ("parquet", "pq"):
+            import pandas as pd
+            df = pd.read_parquet(path)
+            return df.select_dtypes(include=[np.number]).values.astype(np.float32)
+        elif fmt == "csv":
+            import pandas as pd
+            df = pd.read_csv(path)
+            return df.select_dtypes(include=[np.number]).values.astype(np.float32)
+        else:
+            raise ValueError(f"Unsupported file format for direct load: {fmt}")
+
+    output_dir = path
     metadata_path = output_dir / "metadata.json"
     if not metadata_path.exists():
         raise FileNotFoundError(f"metadata.json not found in {output_dir}")
@@ -238,13 +386,22 @@ def load_redi_output(output_dir: str) -> np.ndarray:
         for split_name in ("train", "val", "test"):
             split_path = output_dir / f"{split_name}.npz"
             if split_path.exists():
-                data = np.load(split_path)
-                if "X" in data:
-                    arrays.append(data["X"])
-                else:
-                    keys = list(data.keys())
-                    if keys:
-                        arrays.append(data[keys[0]])
+                arrays.append(_load_npz_with_raps_fallback(split_path))
+        if not arrays:
+            # Fall back: check saved_files in metadata for any .npz
+            for saved in metadata.get("saved_files", []):
+                saved_path = Path(saved)
+                if not saved_path.is_absolute():
+                    saved_path = output_dir / saved_path.name
+                if saved_path.suffix == ".npz" and saved_path.exists():
+                    arrays.append(_load_npz_with_raps_fallback(saved_path))
+                    break
+        if not arrays:
+            # Last resort: glob for any .npz in the directory
+            npz_files = sorted(output_dir.glob("*.npz"))
+            for npz_path in npz_files:
+                arrays.append(_load_npz_with_raps_fallback(npz_path))
+                break
         if not arrays:
             raise FileNotFoundError(f"No split .npz files found in {output_dir}")
         return np.concatenate(arrays, axis=0).astype(np.float32, copy=False)

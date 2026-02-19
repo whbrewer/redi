@@ -2792,7 +2792,7 @@ Examples:
   redi validate output/usa_0_data_5c79b84 -c config.yaml --style json
         """
     )
-    validate_parser.add_argument("input", help="Path to REDI output directory")
+    validate_parser.add_argument("input", help="Path to REDI output directory or a direct output file (npz, npy, parquet, csv)")
     validate_parser.add_argument("-g", "--ground-truth", dest="ground_truth",
                                  help="Path to ground truth file (overrides config)")
     validate_parser.add_argument("-c", "--config", help="Validation YAML config file")
