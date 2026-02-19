@@ -3229,14 +3229,14 @@ def run_validate(
 
         if field_stats:
             print_section("Per-Field Statistics")
-            header = (f"    {'field':<22s}  {'REDI mean':>10s}  {'REDI std':>10s}"
-                      f"  {'GT mean':>10s}  {'GT std':>10s}  {'MAE':>10s}")
+            header = (f"    {'field':<22s}  {'REDI mean':>10s}  {'GT mean':>10s}"
+                      f"  {'REDI std':>10s}  {'GT std':>10s}  {'MAE':>10s}")
             print(header)
             for fs in field_stats:
                 mark = (f"{Colors.GREEN}=={Colors.END}" if fs["match"]
                         else f"{Colors.YELLOW}!={Colors.END}")
-                print(f"    {fs['field']:<22s}  {fs['redi_mean']:>10.2f}  {fs['redi_std']:>10.2f}"
-                      f"  {fs['gt_mean']:>10.2f}  {fs['gt_std']:>10.2f}  {fs['mae']:>10.2f}  {mark}")
+                print(f"    {fs['field']:<22s}  {fs['redi_mean']:>10.2f}  {fs['gt_mean']:>10.2f}"
+                      f"  {fs['redi_std']:>10.2f}  {fs['gt_std']:>10.2f}  {fs['mae']:>10.2f}  {mark}")
         elif result.redi_stats and result.ground_truth_stats:
             print_section("Basic Statistics")
             header = f"    {'':20s} {'REDI':>14s}  {'Ground Truth':>14s}"
