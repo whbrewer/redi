@@ -2801,6 +2801,9 @@ Examples:
                                  help="Run AIDRIN metric comparison (slow)")
     validate_parser.add_argument("--per-feature", action="store_true", dest="per_feature",
                                  help="Per-feature similarity breakdown")
+    validate_parser.add_argument("--samples", type=int, nargs="?", const=10, default=0,
+                                 metavar="N",
+                                 help="Show N random job samples side-by-side (default 10)")
     validate_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                                  help="Output style")
     validate_parser.add_argument("-v", "--verbose", action="store_true",
@@ -3148,6 +3151,7 @@ def _handle_validate_command(args):
         per_feature=args.per_feature,
         style=args.style,
         output_dir=args.output,
+        samples=args.samples,
     )
 
 
@@ -3158,6 +3162,7 @@ def run_validate(
     per_feature: bool = False,
     style: str = "rich",
     output_dir: Optional[str] = None,
+    samples: int = 0,
 ):
     """Run validation and display results.
 
@@ -3254,6 +3259,23 @@ def run_validate(
                         print_metric("MAE", f"{sim['mae']:.6f}")
                     if sim.get("corr") is not None:
                         print_metric("Correlation", f"{sim['corr']:.6f}")
+
+        if samples > 0:
+            from .validate import raps_sample_comparison
+            gt_path = config.get("ground_truth", "")
+            job_samples = raps_sample_comparison(input_dir, gt_path, n=samples)
+            if job_samples:
+                print_section(f"Samples ({len(job_samples)} jobs)")
+                for job in job_samples:
+                    print(f"\n    {Colors.BOLD}job {job['id']}{Colors.END}")
+                    print(f"    {'field':<22s}  {'REDI':>14s}  {'GT':>14s}  {'':>2s}")
+                    for f in job["fields"]:
+                        rv = f["redi"]
+                        gv = f["gt"]
+                        mark = f"{Colors.GREEN}=={Colors.END}" if f["match"] else f"{Colors.YELLOW}!={Colors.END}"
+                        rv_s = f"{rv:.2f}" if isinstance(rv, float) else str(rv)
+                        gv_s = f"{gv:.2f}" if isinstance(gv, float) else str(gv)
+                        print(f"    {f['field']:<22s}  {rv_s:>14s}  {gv_s:>14s}  {mark}")
 
         print()
         print(f"{Colors.GREEN}{Colors.BOLD}v Validation complete{Colors.END} "

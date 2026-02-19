@@ -307,6 +307,80 @@ def _load_npz_with_raps_fallback(path: Path) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# RAPS sample comparison
+# ---------------------------------------------------------------------------
+
+_RAPS_SAMPLE_FIELDS = _RAPS_SCALAR_FIELDS + ["submit_time", "start_time", "end_time"]
+
+
+def _load_raps_jobs_dict(path: Path) -> Optional[Dict[str, dict]]:
+    """Load a RAPS NPZ file and return {job_id: job_dict}, or None if not RAPS format."""
+    if path.suffix.lower() != ".npz":
+        return None
+    _install_raps_stub()
+    try:
+        data = np.load(path, allow_pickle=True)
+    except Exception:
+        return None
+    if "jobs" not in data.keys():
+        return None
+    try:
+        jobs = data["jobs"]
+        if jobs.ndim != 1 or len(jobs) == 0 or not isinstance(jobs[0], dict):
+            return None
+        return {str(j.get("id", i)): j for i, j in enumerate(jobs)}
+    except Exception:
+        return None
+
+
+def raps_sample_comparison(
+    redi_path: str,
+    gt_path: str,
+    n: int = 10,
+    seed: int = 42,
+) -> Optional[List[dict]]:
+    """Compare n randomly sampled jobs between a REDI RAPS output and a ground-truth NPZ.
+
+    Returns a list of per-job dicts with keys: id, fields (list of field comparison dicts).
+    Returns None if either file is not in RAPS NPZ format.
+    """
+    import random
+
+    redi_jobs = _load_raps_jobs_dict(Path(redi_path))
+    gt_jobs   = _load_raps_jobs_dict(Path(gt_path))
+    if redi_jobs is None or gt_jobs is None:
+        return None
+
+    shared = sorted(set(redi_jobs) & set(gt_jobs), key=lambda x: int(x) if x.isdigit() else x)
+    if not shared:
+        return None
+
+    rng = random.Random(seed)
+    sample_ids = rng.sample(shared, min(n, len(shared)))
+    sample_ids.sort(key=lambda x: int(x) if x.isdigit() else x)
+
+    results = []
+    for jid in sample_ids:
+        r, g = redi_jobs[jid], gt_jobs[jid]
+        fields = []
+        for field in _RAPS_SAMPLE_FIELDS:
+            rv = r.get(field, None)
+            gv = g.get(field, None)
+            fields.append({"field": field, "redi": rv, "gt": gv, "match": rv == gv})
+        # Derived durations
+        for name, key_a, key_b in [("wait_time", "start_time", "submit_time"),
+                                    ("run_time",  "end_time",   "start_time")]:
+            try:
+                rv = float(r.get(key_a, 0)) - float(r.get(key_b, 0))
+                gv = float(g.get(key_a, 0)) - float(g.get(key_b, 0))
+                fields.append({"field": name, "redi": rv, "gt": gv, "match": rv == gv})
+            except (TypeError, ValueError):
+                pass
+        results.append({"id": jid, "fields": fields})
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Load ground truth
 # ---------------------------------------------------------------------------
 

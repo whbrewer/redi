@@ -23,7 +23,8 @@ raps_jobs:
   jobprofile_path: "/opt/data/frontier/jobprofile/date=2024-01-18/*.parquet"
 
   # Trace time-step from RAPS scheduler config (seconds)
-  trace_quanta: 60
+  # From raps/config/frontier.yaml: scheduler.trace_quanta = 15
+  trace_quanta: 15
 
   # Power config for trace normalization (from RAPS frontier.yaml)
   # Used when RAPS is not installed; overridden by RAPS system config when available
