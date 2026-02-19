@@ -17,6 +17,8 @@
 domain: hpc
 input_path: /opt/data/philly/trace-data
 output_dir: ./output/philly_raps
+start: "2017-10-03T00:00"
+end: "2017-10-04T00:00"
 
 raps_jobs:
   enabled: true

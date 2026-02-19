@@ -30,6 +30,32 @@ HPC_FIELDS = {
 CATEGORICAL_FIELDS = ["user", "project", "queue", "partition", "status", "state", "system", "machine"]
 
 
+def _parse_date_range(start_str, end_str):
+    """Parse start/end strings to Unix epoch seconds (floats).
+
+    Accepts ISO format (2017-10-03T00:00, 2017-10-03, 20170328) or bare floats.
+    Returns (ts_start, ts_end) where either may be None if the input was None.
+    """
+    from datetime import datetime
+
+    def _parse(s):
+        if s is None:
+            return None
+        s = str(s).strip().strip('"').strip("'")
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(s, fmt).timestamp()
+            except ValueError:
+                pass
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            pass
+        raise ValueError(f"Cannot parse date: {s!r}. Use ISO format e.g. 2017-10-03T00:00")
+
+    return _parse(start_str), _parse(end_str)
+
+
 def get_ingest_steps():
     """Get HPC-specific ingest steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
@@ -338,11 +364,27 @@ def get_ingest_steps():
             except ValueError:
                 return None
 
-        def _load_daily_traces(self, trace_dir: Path, colname: str) -> dict:
-            """Load all daily CSVs → dict of date → DataFrame."""
+        def _load_daily_traces(self, trace_dir: Path, colname: str,
+                               min_date=None, max_date=None) -> dict:
+            """Load daily CSVs → dict of date-string → DataFrame.
+
+            Args:
+                min_date: datetime.date — skip files strictly before this date
+                max_date: datetime.date — skip files strictly after this date
+            """
             import pandas as pd
+            from datetime import datetime as _dt
             traces = {}
             for f in sorted(trace_dir.glob("*.csv")):
+                if min_date is not None or max_date is not None:
+                    try:
+                        file_date = _dt.strptime(f.stem, "%Y-%m-%d").date()
+                        if min_date is not None and file_date < min_date:
+                            continue
+                        if max_date is not None and file_date > max_date:
+                            continue
+                    except ValueError:
+                        pass  # unparseable filename — load anyway
                 try:
                     df = pd.read_csv(f, dtype={"machine_id": str, colname: float})
                     df["time"] = pd.to_datetime(df["time"], errors="coerce",
@@ -411,49 +453,93 @@ def get_ingest_steps():
                 df = pd.DataFrame(records)
                 logger.debug(f"     {len(df):,} jobs with valid attempts")
 
+                # Apply date range filter before the expensive per-job trace loop
+                _ds = ctx.config.get('start')
+                _de = ctx.config.get('end')
+                ts0, ts1 = None, None
+                if _ds or _de:
+                    try:
+                        ts0, ts1 = _parse_date_range(_ds, _de)
+                        filter_col = "submitted_time" if "submitted_time" in df.columns else "start_time"
+                        pre = len(df)
+                        if ts0 is not None:
+                            df = df[df[filter_col] >= ts0]
+                        if ts1 is not None:
+                            df = df[df[filter_col] < ts1]
+                        df = df.reset_index(drop=True)
+                        logger.info(f"Date filter [{_ds} – {_de}]: {pre:,} → {len(df):,} jobs")
+                    except Exception as _e:
+                        logger.warning(f"Date filter failed: {_e}")
+
                 # Load CPU/GPU traces if directories exist
                 cpu_dir = trace_dir / "cpu_by_day"
                 gpu_dir = trace_dir / "gpu_by_day"
                 has_traces = cpu_dir.is_dir() and gpu_dir.is_dir()
 
-                if has_traces:
-                    logger.debug(f"     Loading CPU/GPU daily traces...")
-                    all_cpu = self._load_daily_traces(cpu_dir, "cpu_util")
-                    all_gpu = self._load_daily_traces(gpu_dir, "gpu_util")
+                if has_traces and not df.empty:
+                    # Compute the date window for trace loading.
+                    # If the user specified a date range, clamp to that window
+                    # (jobs may run much longer than the requested window; loading
+                    # all their trace files would be extremely slow).
+                    from datetime import date as _date, timedelta as _td
+                    _ts0 = ts0 if (_ds or _de) else None
+                    _ts1 = ts1 if (_ds or _de) else None
+                    if _ts0 is not None:
+                        _min_date = datetime.fromtimestamp(_ts0).date() - _td(days=1)
+                    else:
+                        _min_date = (datetime.fromtimestamp(df["start_time"].min()).date()
+                                     - _td(days=1))
+                    if _ts1 is not None:
+                        _max_date = datetime.fromtimestamp(_ts1).date() + _td(days=1)
+                    else:
+                        _max_date = (datetime.fromtimestamp(df["end_time"].max()).date()
+                                     + _td(days=1))
+                    logger.debug(
+                        f"     Loading CPU/GPU daily traces "
+                        f"[{_min_date} – {_max_date}]..."
+                    )
+                    all_cpu = self._load_daily_traces(cpu_dir, "cpu_util",
+                                                      min_date=_min_date, max_date=_max_date)
+                    all_gpu = self._load_daily_traces(gpu_dir, "gpu_util",
+                                                      min_date=_min_date, max_date=_max_date)
                     logger.debug(f"     Loaded {len(all_cpu)} CPU days, {len(all_gpu)} GPU days")
+
+                    # Pre-concat all daily frames then build a machine_id → DataFrame
+                    # index so per-job lookup only touches that machine's rows.
+                    def _build_machine_index(daily_dict):
+                        if not daily_dict:
+                            return {}
+                        combined = pd.concat(list(daily_dict.values()), ignore_index=True)
+                        return {mid: grp.reset_index(drop=True)
+                                for mid, grp in combined.groupby("machine_id")}
+
+                    cpu_by_machine = _build_machine_index(all_cpu)
+                    gpu_by_machine = _build_machine_index(all_gpu)
+
+                    def extract_trace(by_machine, colname, machines, start_dt, end_dt):
+                        sub_frames = [by_machine[m] for m in machines if m in by_machine]
+                        if not sub_frames:
+                            return np.array([], dtype=float)
+                        sub = (pd.concat(sub_frames, ignore_index=True)
+                               if len(sub_frames) > 1 else sub_frames[0])
+                        mask = (sub["time"] >= start_dt) & (sub["time"] <= end_dt)
+                        filtered = sub.loc[mask]
+                        if filtered.empty:
+                            return np.array([], dtype=float)
+                        if len(machines) > 1:
+                            filtered = (filtered.groupby("time")[colname]
+                                        .mean().reset_index())
+                        return filtered[colname].to_numpy() * 0.01
 
                     cpu_traces, gpu_traces = [], []
                     for _, row in df.iterrows():
                         machines = row["_machine_ids"]
                         start_dt = datetime.fromtimestamp(row["start_time"])
                         end_dt   = datetime.fromtimestamp(row["end_time"])
-
-                        def extract_trace(daily_dict, colname):
-                            dfs = []
-                            cur = start_dt.date()
-                            while cur <= end_dt.date():
-                                day_df = daily_dict.get(str(cur))
-                                if day_df is not None:
-                                    dfs.append(day_df)
-                                cur += timedelta(days=1)
-                            if not dfs:
-                                return np.array([], dtype=float)
-                            combined = pd.concat(dfs, ignore_index=True)
-                            mask = (
-                                combined["machine_id"].isin(machines)
-                                & (combined["time"] >= start_dt)
-                                & (combined["time"] <= end_dt)
-                            )
-                            filtered = combined.loc[mask].copy()
-                            if filtered.empty:
-                                return np.array([], dtype=float)
-                            if len(machines) > 1:
-                                filtered = (filtered.groupby("time")[colname]
-                                            .mean().reset_index())
-                            return (filtered[colname].to_numpy() * 0.01)
-
-                        cpu_traces.append(extract_trace(all_cpu, "cpu_util"))
-                        gpu_traces.append(extract_trace(all_gpu, "gpu_util"))
+                        cpu_traces.append(extract_trace(cpu_by_machine, "cpu_util",
+                                                        machines, start_dt, end_dt))
+                        gpu_traces.append(extract_trace(gpu_by_machine, "gpu_util",
+                                                        machines, start_dt, end_dt))
 
                     df["cpu_trace"] = cpu_traces
                     df["gpu_trace"] = gpu_traces
@@ -958,6 +1044,66 @@ def _get_load_jobprofile_step(jobprofile_path=None):
     return [LoadJobProfile(jobprofile_path)]
 
 
+def _get_date_filter_step():
+    """Return a FilterByDateRange step that reads start/end from ctx.config.
+
+    Runs after AutoMapColumns so column names are canonical (submit_time / start_time).
+    Is a no-op when neither start nor end is set in the config.
+    """
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class FilterByDateRange(PipelineStep):
+        """Filter jobs to the configured date window."""
+
+        name = "filter_date_range"
+        stage = PipelineStage.PREPROCESS
+        description = "Filter jobs by date range"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            import pandas as pd
+
+            _ds = ctx.config.get('start')
+            _de = ctx.config.get('end')
+            if not _ds and not _de:
+                return ctx
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            try:
+                ts0, ts1 = _parse_date_range(_ds, _de)
+            except Exception as e:
+                ctx.add_error(f"Date filter: {e}")
+                return ctx
+
+            df = ctx.data
+            # Prefer canonical submit_time; fall back to start_time
+            col = next((c for c in ("submit_time", "start_time") if c in df.columns), None)
+            if col is None:
+                logger.warning("Date filter: no submit_time/start_time column found")
+                return ctx
+
+            series = df[col]
+            if pd.api.types.is_datetime64_any_dtype(series):
+                series = series.astype("int64") / 1e9  # ns → s
+            else:
+                series = pd.to_numeric(series, errors="coerce")
+
+            pre = len(df)
+            mask = pd.Series(True, index=df.index)
+            if ts0 is not None:
+                mask &= series >= ts0
+            if ts1 is not None:
+                mask &= series < ts1
+
+            ctx.data = df[mask].reset_index(drop=True)
+            logger.info(
+                f"Date filter [{_ds} – {_de}] on {col}: {pre:,} → {len(ctx.data):,} jobs"
+            )
+            return ctx
+
+    return FilterByDateRange()
+
+
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
                       jobprofile_path=None, topology=None, priority_policy=None):
@@ -981,6 +1127,7 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
     preprocess = _get_raps_preprocess_steps()             # RAPS-specific cleaning
     raps_steps = [
         AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
+        _get_date_filter_step(),                         # filter by start/end (no-op if unset)
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
                       topology=topology, system_name=system_name,

@@ -11,6 +11,8 @@
 domain: hpc
 input_path: /opt/data/bluewaters
 output_dir: ./output/bluewaters_raps
+start: "2017-03-28T00:00"
+end: "2017-03-29T00:00"
 
 raps_jobs:
   enabled: true

@@ -2698,6 +2698,14 @@ Download examples (climate domain):
                            help="Run verification checks after each pipeline step")
     run_parser.add_argument("--raps-jobs", action="store_true", dest="raps_jobs",
                            help="Extract RAPS Job objects from HPC telemetry (HPC domain only)")
+    run_parser.add_argument("--start",
+                           help="Filter jobs from this datetime, inclusive "
+                                "(ISO format: 2017-10-03T00:00 or YYYYMMDD). "
+                                "Overrides 'start' key in YAML config.")
+    run_parser.add_argument("--end",
+                           help="Filter jobs until this datetime, exclusive "
+                                "(ISO format: 2017-10-04T00:00 or YYYYMMDD). "
+                                "Overrides 'end' key in YAML config.")
     run_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                            help="Output style")
     run_parser.add_argument("-c", "--config", help="YAML configuration file path")
@@ -2908,6 +2916,12 @@ def _handle_run_command(args):
         }
         # Remove None values
         config['download'] = {k: v for k, v in config['download'].items() if v is not None}
+
+    # --start / --end: CLI takes priority over YAML config
+    if getattr(args, 'start', None):
+        config['start'] = args.start
+    if getattr(args, 'end', None):
+        config['end'] = args.end
 
     verbose = args.verbose or config.get('verbose', False)
     if verbose:
