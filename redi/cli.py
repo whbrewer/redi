@@ -760,6 +760,7 @@ def run_pipeline(
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
             ctx.metadata["saved_files"].append(str(metadata_path))
+            ctx.output_dir.touch()  # update directory mtime on re-runs
             print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
             # Display recommendations in terminal
