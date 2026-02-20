@@ -21,6 +21,7 @@ pip install -e ".[life_sciences]" # Life sciences (biopython)
 pip install -e ".[hpc]"          # HPC data (scikit-learn)
 pip install -e ".[fusion]"       # Fusion energy (h5py)
 pip install -e ".[geospatial]"   # Geospatial/H3 hexagonal indexing (h3, geopandas)
+pip install -e ".[flowcept]"     # Provenance capture + Flowcept reports
 
 # Install with all dependencies
 pip install -e ".[all]"
@@ -208,6 +209,7 @@ input_path: /path/to/data.nc
 domain: climate
 output_dir: ./output
 output_format: npz
+provenance: true
 ```
 
 ```yaml
@@ -232,6 +234,31 @@ redi run config.yaml
 # or just:
 redi config.yaml
 ```
+
+## Provenance (Flowcept)
+
+REDI uses Flowcept to capture task-level provenance and generate a provenance report.
+
+- Install REDI with Flowcept support:
+
+```bash
+pip install -e ".[flowcept]"
+```
+
+- Enable provenance in your run YAML:
+
+```yaml
+input_path: /path/to/data.nc
+output_dir: ./output
+provenance: true
+```
+
+When enabled, `redi run` generates and saves:
+
+- `PROVENANCE_CARD.md`
+- `flowcept_buffer.jsonl`
+
+Both are written to the run output directory and reported in terminal output.
 
 ### Analyze Mode Config
 

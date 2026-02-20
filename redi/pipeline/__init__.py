@@ -33,6 +33,68 @@ def _safe_json_value(value: Any) -> Any:
     return value
 
 
+def _snapshot_dataset_state(ctx: "PipelineContext") -> Dict[str, Any]:
+    """Capture a lightweight, JSON-safe snapshot of current dataset context."""
+    state: Dict[str, Any] = {}
+    data = ctx.data
+    if data is None:
+        return state
+
+    cls_name = data.__class__.__name__
+    state["data_kind"] = cls_name
+
+    # pandas.DataFrame-like
+    if hasattr(data, "shape") and hasattr(data, "columns") and hasattr(data, "dtypes"):
+        try:
+            rows, cols = data.shape
+            state["shape"] = [int(rows), int(cols)]
+            state["columns"] = [str(c) for c in list(data.columns)]
+            state["dtypes"] = {str(k): str(v) for k, v in data.dtypes.to_dict().items()}
+            return _safe_json_value(state)
+        except Exception:
+            pass
+
+    # numpy/xarray/torch-like objects
+    if hasattr(data, "shape"):
+        try:
+            shape = getattr(data, "shape")
+            if shape is not None:
+                state["shape"] = [int(v) for v in shape]
+        except Exception:
+            pass
+
+    # Split dictionary (e.g., {"train": ..., "val": ..., "test": ...})
+    if isinstance(data, dict):
+        split_sizes: Dict[str, Any] = {}
+        for split_key in ("train", "val", "test"):
+            split_val = data.get(split_key)
+            if split_val is None:
+                continue
+            if isinstance(split_val, dict) and "X" in split_val and hasattr(split_val["X"], "__len__"):
+                try:
+                    split_sizes[split_key] = len(split_val["X"])
+                    continue
+                except Exception:
+                    pass
+            if hasattr(split_val, "__len__"):
+                try:
+                    split_sizes[split_key] = len(split_val)
+                except Exception:
+                    pass
+        if split_sizes:
+            state["split_sizes"] = split_sizes
+
+    return _safe_json_value(state)
+
+
+def _clean_metadata_for_provenance(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove redundant input path/name fields from custom metadata."""
+    cleaned = dict(metadata)
+    for key in ("input_path", "input_paths", "input_files", "file_name"):
+        cleaned.pop(key, None)
+    return cleaned
+
+
 def missing_dependency_error(package: str, extra: Optional[str] = None) -> str:
     """Create a consistent missing-dependency error with an install hint."""
     if extra:
@@ -149,6 +211,9 @@ class PipelineStep:
         def wrapped_execute(self, ctx: PipelineContext) -> PipelineContext:
             flowcept_task = None
             flowcept_task_ended = False
+            metadata_snapshot_before: Dict[str, Any] = {}
+            input_files: List[str] = []
+            state_before: Dict[str, Any] = {}
             try:
                 if (
                     ctx.with_flowcept
@@ -157,19 +222,35 @@ class PipelineStep:
                 ):
                     from flowcept.instrumentation.task_capture import FlowceptTask
 
-                    input_path_str = str(ctx.input_path)
-                    input_paths_str = [str(p) for p in ctx.input_paths]
-                    unique_input_paths = list(dict.fromkeys(input_paths_str))
+                    input_files = [str(p) for p in (ctx.input_paths or [ctx.input_path])]
+                    input_files = list(dict.fromkeys(input_files))
+                    metadata_snapshot = _safe_json_value(ctx.metadata)
+                    if not isinstance(metadata_snapshot, dict):
+                        metadata_snapshot = {}
+                    metadata_snapshot_before = dict(metadata_snapshot)
+                    state_before = _snapshot_dataset_state(ctx)
+
+                    # Input-related fields move under "used".
                     used_dict = {
-                        "input_path": input_path_str,
+                        "input_files": input_files,
                         "output_dir": str(ctx.output_dir),
+                        "num_input_files": metadata_snapshot.pop("num_input_files", len(input_files)),
                     }
-                    if not (len(unique_input_paths) == 1 and unique_input_paths[0] == input_path_str):
-                        used_dict["input_paths"] = unique_input_paths
+                    for key in ("file_size_bytes",): #
+                        value = metadata_snapshot.pop(key, None)
+                        if value is not None:
+                            used_dict[key] = value
+                    # Keep columns/dtypes in custom metadata, not in used/generated state.
+                    for key in ("columns", "dtypes"):
+                        value = state_before.pop(key, None)
+                        if value is not None:
+                            metadata_snapshot[key] = value
+                    used_dict.update(state_before)
+
                     custom_metadata = {
                         "current_stage": ctx.current_stage.value,
                         "completed_stages": [s.value for s in ctx.completed_stages],
-                        "metadata": _safe_json_value(ctx.metadata),
+                        "metadata": _clean_metadata_for_provenance(metadata_snapshot),
                     }
 
                     flowcept_task = FlowceptTask(
@@ -178,13 +259,47 @@ class PipelineStep:
                         custom_metadata=custom_metadata,
                     )
 
-                return execute(self, ctx)
+                next_ctx = execute(self, ctx)
+
+                if flowcept_task:
+                    after_metadata = _safe_json_value(next_ctx.metadata)
+                    if not isinstance(after_metadata, dict):
+                        after_metadata = {}
+                    state_after = _snapshot_dataset_state(next_ctx)
+                    for key in ("columns", "dtypes"):
+                        value = state_after.pop(key, None)
+                        if value is not None:
+                            after_metadata[key] = value
+                    state_after["current_stage"] = next_ctx.current_stage.value
+                    custom_metadata_after = {
+                        "completed_stages": [s.value for s in next_ctx.completed_stages],
+                        "metadata": _clean_metadata_for_provenance(after_metadata),
+                    }
+                    flowcept_task.end(
+                        generated=state_after,
+                        custom_metadata=custom_metadata_after,
+                    )
+                    flowcept_task_ended = True
+
+                return next_ctx
             except Exception:
                 if flowcept_task:
                     try:
                         from flowcept.commons.vocabulary import Status
 
+                        error_state = _snapshot_dataset_state(ctx)
+                        error_metadata = _clean_metadata_for_provenance(metadata_snapshot_before)
+                        for key in ("columns", "dtypes"):
+                            value = error_state.pop(key, None)
+                            if value is not None:
+                                error_metadata[key] = value
                         flowcept_task.end(
+                            generated=error_state,
+                            custom_metadata={
+                                "current_stage": ctx.current_stage.value,
+                                "completed_stages": [s.value for s in ctx.completed_stages],
+                                "metadata": error_metadata,
+                            },
                             status=Status.ERROR,
                             stderr=traceback.format_exc(),
                         )
