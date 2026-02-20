@@ -247,16 +247,9 @@ class PipelineStep:
                             metadata_snapshot[key] = value
                     used_dict.update(state_before)
 
-                    custom_metadata = {
-                        "current_stage": ctx.current_stage.value,
-                        "completed_stages": [s.value for s in ctx.completed_stages],
-                        "metadata": _clean_metadata_for_provenance(metadata_snapshot),
-                    }
-
                     flowcept_task = FlowceptTask(
                         activity_id=self.__class__.__name__,
                         used=used_dict,
-                        custom_metadata=custom_metadata,
                     )
 
                 next_ctx = execute(self, ctx)
@@ -271,13 +264,8 @@ class PipelineStep:
                         if value is not None:
                             after_metadata[key] = value
                     state_after["current_stage"] = next_ctx.current_stage.value
-                    custom_metadata_after = {
-                        "completed_stages": [s.value for s in next_ctx.completed_stages],
-                        "metadata": _clean_metadata_for_provenance(after_metadata),
-                    }
                     flowcept_task.end(
                         generated=state_after,
-                        custom_metadata=custom_metadata_after,
                     )
                     flowcept_task_ended = True
 
