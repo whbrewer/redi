@@ -3,23 +3,16 @@
 # Data: Torque/PBS job accounting logs (semi-colon delimited key=value records)
 # Source: /opt/data/bluewaters/torque_logs/
 # Records: ~365 daily log files (2017), millions of job records total
-# Format: Raw PBS Torque logs — requires pre-extraction to CSV before REDI processing
+# Format: Raw PBS Torque directory layout (native ingest supported)
 #
-# NOTE: Blue Waters torque logs are NOT standard CSV/Parquet. They are semi-colon
-# delimited PBS accounting records (e.g., "01/01/2017 00:00:05;E;12345.sdb;...").
-# You must first extract them to CSV. Example pre-processing:
-#
-#   python scripts/parse_torque_logs.py /opt/data/bluewaters/torque_logs/ -o bw_jobs.csv
-#
-# After extraction, the resulting CSV will have columns like:
-#   jobid, user, group, account, queue, ctime, qtime, etime, start, end,
-#   exit_status, exec_host, Resource_List.nodect, Resource_List.walltime, ...
-#
-# The config below assumes a pre-extracted CSV.
+# This config follows the RAPS Blue Waters convention and points at the root
+# dataset directory (same style as: `raps run -f /opt/data/bluewaters ...`).
 
 domain: hpc
-input_path: ./bw_jobs.csv  # Output of torque log parser
+input_path: /opt/data/bluewaters
 output_dir: ./output/bluewaters_raps
+start: "2017-03-28T00:00"
+end: "2017-03-29T00:00"
 
 raps_jobs:
   enabled: true

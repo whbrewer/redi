@@ -178,6 +178,7 @@ def generate_output_dir(
     base_dir: str = "./output",
     unique: bool = False,
     hash_content: bool = False,
+    name_override: Optional[str] = None,
 ) -> str:
     """Generate a hash-based output directory name.
 
@@ -189,9 +190,11 @@ def generate_output_dir(
         base_dir: Base output directory (default: ./output)
         unique: If True, append timestamp to ensure uniqueness
         hash_content: If True, hash file content (slower but more accurate)
+        name_override: If set, use this as the base name instead of the input
+            filename (e.g. pass the YAML config stem when one is used)
 
     Returns:
-        Path string like "./output/mydata_a3f2b1c" or "./output/mydata_a3f2b1c_0204_1430"
+        Path string like "./output/frontier_a3f2b1c" or "./output/mydata_a3f2b1c_0204_1430"
     """
     import hashlib
     from datetime import datetime
@@ -199,9 +202,9 @@ def generate_output_dir(
     if not input_paths:
         return base_dir
 
-    # Use first file for the base name
+    # Base name: prefer the override (e.g. YAML config stem), else first input file
     primary = input_paths[0]
-    basename = primary.stem  # filename without extension
+    basename = name_override if name_override else primary.stem
 
     # Build hash input: path + size for each file
     hash_input = []
@@ -413,6 +416,7 @@ def run_pipeline(
                 _trace_quanta = _raps_cfg.get("trace_quanta") if isinstance(_raps_cfg, dict) else None
             # Jobprofile path from config
             _jp_path = _raps_cfg.get("jobprofile_path") if isinstance(_raps_cfg, dict) else None
+            _priority_policy = _raps_cfg.get("priority_policy") if isinstance(_raps_cfg, dict) else None
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
@@ -422,6 +426,7 @@ def run_pipeline(
                 system_name=_sys_name,
                 jobprofile_path=_jp_path,
                 topology=_topology,
+                priority_policy=_priority_policy,
             )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline
@@ -777,6 +782,7 @@ def run_pipeline(
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
             ctx.metadata["saved_files"].append(str(metadata_path))
+            ctx.output_dir.touch()  # update directory mtime on re-runs
             print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
             if getattr(ctx, "with_flowcept", False):
@@ -2671,17 +2677,20 @@ Commands:
   run        Run the pipeline (orchestrator mode) - default
   analyze    Observe existing workflows
   discover   Analyze unknown datasets and propose pipelines
+  validate   Validate REDI output against ground truth
 
 Examples:
   redi run data.csv                     # Run pipeline on data
   redi data.csv                         # Same as above (run is default)
   redi analyze --workflow Snakefile     # Observe Snakemake workflow
   redi discover /path/to/data/          # Analyze unknown dataset
+  redi validate output/ -c config.yaml  # Validate against ground truth
 
 For command-specific help:
   redi run --help
   redi analyze --help
   redi discover --help
+  redi validate --help
         """
     )
 
@@ -2731,6 +2740,14 @@ Download examples (climate domain):
                            help="Run verification checks after each pipeline step")
     run_parser.add_argument("--raps-jobs", action="store_true", dest="raps_jobs",
                            help="Extract RAPS Job objects from HPC telemetry (HPC domain only)")
+    run_parser.add_argument("--start",
+                           help="Filter jobs from this datetime, inclusive "
+                                "(ISO format: 2017-10-03T00:00 or YYYYMMDD). "
+                                "Overrides 'start' key in YAML config.")
+    run_parser.add_argument("--end",
+                           help="Filter jobs until this datetime, exclusive "
+                                "(ISO format: 2017-10-04T00:00 or YYYYMMDD). "
+                                "Overrides 'end' key in YAML config.")
     run_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                            help="Output style")
     run_parser.add_argument("-c", "--config", help="YAML configuration file path")
@@ -2813,6 +2830,38 @@ Examples:
                                 help="Don't prompt for confirmation")
     discover_parser.add_argument("-c", "--config", help="YAML configuration file")
 
+    # =========================================================================
+    # redi validate
+    # =========================================================================
+    validate_parser = subparsers.add_parser(
+        'validate',
+        help='Validate REDI output against ground truth',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  redi validate output/usa_0_data_5c79b84 -c examples/nasa_power_validate.yaml
+  redi validate output/usa_0_data_5c79b84 --ground-truth /path/to/truth.pt
+  redi validate output/usa_0_data_5c79b84 -c config.yaml --aidrin
+  redi validate output/usa_0_data_5c79b84 -c config.yaml --style json
+        """
+    )
+    validate_parser.add_argument("input", help="Path to REDI output directory or a direct output file (npz, npy, parquet, csv)")
+    validate_parser.add_argument("-g", "--ground-truth", dest="ground_truth",
+                                 help="Path to ground truth file (overrides config)")
+    validate_parser.add_argument("-c", "--config", help="Validation YAML config file")
+    validate_parser.add_argument("-o", "--output", help="Output directory for validation report")
+    validate_parser.add_argument("--aidrin", action="store_true",
+                                 help="Run AIDRIN metric comparison (slow)")
+    validate_parser.add_argument("--per-feature", action="store_true", dest="per_feature",
+                                 help="Per-feature similarity breakdown")
+    validate_parser.add_argument("--samples", type=int, nargs="?", const=10, default=0,
+                                 metavar="N",
+                                 help="Show N random job samples side-by-side (default 10)")
+    validate_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+                                 help="Output style")
+    validate_parser.add_argument("-v", "--verbose", action="store_true",
+                                 help="Verbose output")
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -2840,6 +2889,8 @@ Examples:
         _handle_analyze_command(args)
     elif args.command == 'discover':
         _handle_discover_command(args)
+    elif args.command == 'validate':
+        _handle_validate_command(args)
     else:
         parser.print_help()
 
@@ -2908,6 +2959,12 @@ def _handle_run_command(args):
         # Remove None values
         config['download'] = {k: v for k, v in config['download'].items() if v is not None}
 
+    # --start / --end: CLI takes priority over YAML config
+    if getattr(args, 'start', None):
+        config['start'] = args.start
+    if getattr(args, 'end', None):
+        config['end'] = args.end
+
     verbose = args.verbose or config.get('verbose', False)
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -2937,11 +2994,15 @@ def _handle_run_command(args):
         output_dir = args.output
     elif input_paths:
         base_dir = config.get('output_dir') or './output'
+        # If a YAML config was supplied, name the output after the config file
+        # (e.g. "frontier") rather than the obscure input data filename.
+        _name = Path(config_path).stem if config_path else None
         output_dir = generate_output_dir(
             input_paths=input_paths,
             base_dir=base_dir,
             unique=getattr(args, 'unique', False),
             hash_content=getattr(args, 'hash_content', False),
+            name_override=_name,
         )
     else:
         # Download mode without input files - use config or default
@@ -3112,6 +3173,302 @@ def _handle_discover_command(args):
         interactive=interactive,
         config=config,
     )
+
+
+def _handle_validate_command(args):
+    """Handle the 'validate' subcommand."""
+    import yaml
+
+    config = {}
+
+    # Load YAML config if provided
+    if args.config:
+        try:
+            with open(args.config) as f:
+                config = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            print(f"{Colors.RED}Error: Config file not found: {args.config}{Colors.END}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
+            sys.exit(1)
+
+    # CLI --ground-truth overrides config
+    if args.ground_truth:
+        config["ground_truth"] = args.ground_truth
+
+    # Must have ground truth from config or CLI
+    if not config.get("ground_truth"):
+        print(f"{Colors.RED}Error: ground truth path required. "
+              f"Use --ground-truth or set 'ground_truth' in config YAML.{Colors.END}")
+        sys.exit(1)
+
+    verbose = args.verbose
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    run_validate(
+        input_dir=args.input,
+        config=config,
+        aidrin=args.aidrin,
+        per_feature=args.per_feature,
+        style=args.style,
+        output_dir=args.output,
+        samples=args.samples,
+    )
+
+
+def run_validate(
+    input_dir: str,
+    config: dict,
+    aidrin: bool = False,
+    per_feature: bool = False,
+    style: str = "rich",
+    output_dir: Optional[str] = None,
+    samples: int = 0,
+):
+    """Run validation and display results.
+
+    Args:
+        input_dir: Path to REDI output directory.
+        config: Validation config dict (must include 'ground_truth').
+        aidrin: If True, run AIDRIN metric comparison.
+        per_feature: If True, compute per-feature breakdown.
+        style: Output style: rich, simple, json.
+        output_dir: Optional output directory for saving report files.
+    """
+    from .validate import run_validation
+
+    t0 = time.time()
+
+    if style == "rich":
+        print_banner()
+        print_section("Validation")
+        print_metric("REDI output", input_dir)
+        print_metric("Ground truth", config.get("ground_truth", ""))
+        if config.get("description"):
+            print_metric("Description", config["description"])
+
+    try:
+        result = run_validation(
+            redi_dir=input_dir,
+            config=config,
+            aidrin=aidrin,
+            per_feature=per_feature,
+        )
+    except Exception as e:
+        if style == "json":
+            import json as _json
+            print(_json.dumps({"error": str(e)}, indent=2))
+        elif style == "rich":
+            print(f"\n{Colors.RED}Error: {e}{Colors.END}")
+        else:
+            print(f"Error: {e}")
+        sys.exit(1)
+
+    elapsed = time.time() - t0
+
+    if style == "json":
+        import json as _json
+        print(_json.dumps(result.to_dict(), indent=2, default=str))
+        return result
+
+    if style == "rich":
+        print_metric("REDI shape", str(result.redi_shape))
+        print_metric("Truth shape", str(result.ground_truth_shape))
+        if result.aligned:
+            # Infer the aligned shape from the target or ground truth shape
+            alignment_cfg = config.get("alignment", {})
+            target_shape = alignment_cfg.get("target_shape")
+            if target_shape:
+                print_metric("Aligned shape", str(tuple(target_shape)))
+            else:
+                print_metric("Aligned shape", str(result.ground_truth_shape))
+
+        # Try per-field RAPS stats first; fall back to aggregate stats
+        from .validate import raps_field_stats
+        gt_path_for_stats = config.get("ground_truth", "")
+        field_stats = raps_field_stats(input_dir, gt_path_for_stats)
+
+        if field_stats:
+            print_section("Per-Field Statistics")
+            header = (f"    {'field':<22s}  {'REDI mean':>10s}  {'GT mean':>10s}"
+                      f"  {'REDI std':>10s}  {'GT std':>10s}  {'MAE':>10s}")
+            print(header)
+            for fs in field_stats:
+                mark = (f"{Colors.GREEN}=={Colors.END}" if fs["match"]
+                        else f"{Colors.YELLOW}!={Colors.END}")
+                print(f"    {fs['field']:<22s}  {fs['redi_mean']:>10.2f}  {fs['gt_mean']:>10.2f}"
+                      f"  {fs['redi_std']:>10.2f}  {fs['gt_std']:>10.2f}  {fs['mae']:>10.2f}  {mark}")
+        elif result.redi_stats and result.ground_truth_stats:
+            print_section("Basic Statistics")
+            header = f"    {'':20s} {'REDI':>14s}  {'Ground Truth':>14s}"
+            print(header)
+            for key in ("mean", "std", "min", "max"):
+                redi_val = result.redi_stats.get(key, float("nan"))
+                gt_val = result.ground_truth_stats.get(key, float("nan"))
+                print(f"    {key:20s} {redi_val:>14.4f}  {gt_val:>14.4f}")
+
+        if not field_stats and result.similarity:
+            print_section("Similarity")
+            print_metric("MAE", f"{result.similarity.get('mae', float('nan')):.6f}")
+            print_metric("RMSE", f"{result.similarity.get('rmse', float('nan')):.6f}")
+            print_metric("Correlation", f"{result.similarity.get('corr', float('nan')):.6f}")
+            print_metric("KL Divergence", f"{result.similarity.get('kl', float('nan')):.6f}")
+
+        if result.per_feature:
+            print_section("Per-Feature Similarity")
+            header = f"    {'Feature':>8s}  {'MAE':>10s}  {'RMSE':>10s}  {'Corr':>10s}  {'KL':>10s}"
+            print(header)
+            for feat in result.per_feature:
+                idx = feat.get("feature_index", "?")
+                print(f"    {idx:>8}  {feat['mae']:>10.6f}  {feat['rmse']:>10.6f}  "
+                      f"{feat['corr']:>10.6f}  {feat['kl']:>10.6f}")
+
+        if result.aidrin:
+            print_section("AIDRIN Comparison")
+            if "error" in result.aidrin:
+                print(f"    {Colors.YELLOW}Warning: {result.aidrin['error']}{Colors.END}")
+            else:
+                if result.aidrin.get("similarity"):
+                    sim = result.aidrin["similarity"]
+                    print_metric("Overlap keys", str(sim.get("overlap_count", 0)))
+                    if sim.get("mae") is not None:
+                        print_metric("MAE", f"{sim['mae']:.6f}")
+                    if sim.get("corr") is not None:
+                        print_metric("Correlation", f"{sim['corr']:.6f}")
+
+        if samples > 0:
+            from .validate import raps_sample_comparison
+            gt_path = config.get("ground_truth", "")
+            job_samples = raps_sample_comparison(input_dir, gt_path, n=samples)
+            if job_samples:
+                print_section(f"Samples ({len(job_samples)} jobs)")
+                for job in job_samples:
+                    print(f"\n    {Colors.BOLD}job {job['id']}{Colors.END}")
+                    print(f"    {'field':<22s}  {'REDI':>14s}  {'GT':>14s}  {'':>2s}")
+                    for f in job["fields"]:
+                        rv = f["redi"]
+                        gv = f["gt"]
+                        mark = f"{Colors.GREEN}=={Colors.END}" if f["match"] else f"{Colors.YELLOW}!={Colors.END}"
+                        rv_s = f"{rv:.2f}" if isinstance(rv, float) else str(rv)
+                        gv_s = f"{gv:.2f}" if isinstance(gv, float) else str(gv)
+                        print(f"    {f['field']:<22s}  {rv_s:>14s}  {gv_s:>14s}  {mark}")
+
+        print()
+        print(f"{Colors.GREEN}{Colors.BOLD}v Validation complete{Colors.END} "
+              f"{Colors.DIM}({elapsed:.1f}s){Colors.END}")
+        print()
+
+    else:
+        # simple style
+        print(f"REDI shape:   {result.redi_shape}")
+        print(f"Truth shape:  {result.ground_truth_shape}")
+        print(f"Aligned:      {result.aligned}")
+        if result.redi_stats:
+            print(f"REDI stats:   {result.redi_stats}")
+        if result.ground_truth_stats:
+            print(f"Truth stats:  {result.ground_truth_stats}")
+        if result.similarity:
+            print(f"Similarity:   {result.similarity}")
+        if result.per_feature:
+            print(f"Per-feature:  {len(result.per_feature)} features")
+        if result.aidrin:
+            print(f"AIDRIN:       {result.aidrin}")
+        print(f"Elapsed: {elapsed:.1f}s")
+
+    # Save report if output dir requested
+    if output_dir:
+        import json as _json
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        report_json_path = out_path / "validation_report.json"
+        with open(report_json_path, "w") as f:
+            _json.dump(result.to_dict(), f, indent=2, default=str)
+
+        report_md = _generate_validation_markdown(result, elapsed)
+        report_md_path = out_path / "validation_report.md"
+        report_md_path.write_text(report_md)
+
+        if style == "rich":
+            print_section("Output")
+            print(f"    {Colors.BOLD}validation_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+            print(f"    {Colors.BOLD}validation_report.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+            print()
+        elif style == "simple":
+            print(f"Saved: {report_json_path}")
+            print(f"Saved: {report_md_path}")
+
+    return result
+
+
+def _generate_validation_markdown(result, elapsed: float) -> str:
+    """Generate a markdown validation report."""
+    lines = [
+        "# REDI Validation Report",
+        "",
+        f"**REDI output:** `{result.redi_dir}`",
+        f"**Ground truth:** `{result.ground_truth_path}`",
+        "",
+        "## Shapes",
+        "",
+        f"| | Shape |",
+        f"|---|---|",
+        f"| REDI | `{result.redi_shape}` |",
+        f"| Ground truth | `{result.ground_truth_shape}` |",
+        f"| Aligned | `{result.aligned}` |",
+        "",
+    ]
+
+    if result.redi_stats and result.ground_truth_stats:
+        lines.extend([
+            "## Basic Statistics",
+            "",
+            "| Metric | REDI | Ground Truth |",
+            "|---|---|---|",
+        ])
+        for key in ("count", "mean", "std", "min", "max"):
+            rv = result.redi_stats.get(key, "")
+            gv = result.ground_truth_stats.get(key, "")
+            if isinstance(rv, float):
+                rv = f"{rv:.6f}"
+            if isinstance(gv, float):
+                gv = f"{gv:.6f}"
+            lines.append(f"| {key} | {rv} | {gv} |")
+        lines.append("")
+
+    if result.similarity:
+        lines.extend([
+            "## Similarity",
+            "",
+            "| Metric | Value |",
+            "|---|---|",
+        ])
+        for key in ("mae", "rmse", "corr", "kl"):
+            val = result.similarity.get(key, "")
+            if isinstance(val, float):
+                val = f"{val:.6f}"
+            lines.append(f"| {key} | {val} |")
+        lines.append("")
+
+    if result.per_feature:
+        lines.extend([
+            "## Per-Feature Similarity",
+            "",
+            "| Feature | MAE | RMSE | Corr | KL |",
+            "|---|---|---|---|---|",
+        ])
+        for feat in result.per_feature:
+            idx = feat.get("feature_index", "?")
+            lines.append(
+                f"| {idx} | {feat['mae']:.6f} | {feat['rmse']:.6f} | "
+                f"{feat['corr']:.6f} | {feat['kl']:.6f} |"
+            )
+        lines.append("")
+
+    lines.append(f"*Elapsed: {elapsed:.1f}s*")
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":

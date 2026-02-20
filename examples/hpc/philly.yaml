@@ -1,26 +1,24 @@
 # REDI RAPS Job Extraction — Philly (Microsoft Research)
 #
 # Data: GPU cluster job trace log (single-line JSON array)
-# Source: /opt/data/philly/trace-data/cluster_job_log
-# Format: JSON array of job objects
+# Source: /opt/data/philly/trace-data/
+# Format: Directory with cluster_job_log (JSON), cpu_by_day/, gpu_by_day/
 # Records: Thousands of deep-learning training jobs (Oct-Dec 2017)
 #
 # Each job object has:
 #   status, vc, jobid, user, submitted_time,
 #   attempts: [{start_time, end_time, detail: [{ip, gpus: [...]}]}]
 #
-# NOTE: Philly's "attempts" field is nested — each job may have multiple
-# scheduling attempts with different start/end times and GPU assignments.
-# The mapper will use the top-level fields. For multi-attempt jobs, you may
-# want to pre-process to flatten the last attempt's times.
-#
-# Also available:
-#   - gpu_by_day/*.csv — per-machine GPU utilization time series
-#   - cpu_by_day/*.csv — per-machine CPU utilization time series
+# REDI auto-detects the Philly layout and handles the multi-attempt nesting:
+# uses first attempt's start_time, last attempt's end_time, and last attempt's
+# detail for nodes_required. CPU/GPU traces are joined from cpu_by_day/ and
+# gpu_by_day/ if those directories exist (created by parse_philly_traces.py).
 
 domain: hpc
-input_path: /opt/data/philly/trace-data/cluster_job_log
+input_path: /opt/data/philly/trace-data
 output_dir: ./output/philly_raps
+start: "2017-10-03T00:00"
+end: "2017-10-04T00:00"
 
 raps_jobs:
   enabled: true

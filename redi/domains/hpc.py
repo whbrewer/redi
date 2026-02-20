@@ -30,6 +30,32 @@ HPC_FIELDS = {
 CATEGORICAL_FIELDS = ["user", "project", "queue", "partition", "status", "state", "system", "machine"]
 
 
+def _parse_date_range(start_str, end_str):
+    """Parse start/end strings to Unix epoch seconds (floats).
+
+    Accepts ISO format (2017-10-03T00:00, 2017-10-03, 20170328) or bare floats.
+    Returns (ts_start, ts_end) where either may be None if the input was None.
+    """
+    from datetime import datetime
+
+    def _parse(s):
+        if s is None:
+            return None
+        s = str(s).strip().strip('"').strip("'")
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(s, fmt).timestamp()
+            except ValueError:
+                pass
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            pass
+        raise ValueError(f"Cannot parse date: {s!r}. Use ISO format e.g. 2017-10-03T00:00")
+
+    return _parse(start_str), _parse(end_str)
+
+
 def get_ingest_steps():
     """Get HPC-specific ingest steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
@@ -61,7 +87,7 @@ def get_ingest_steps():
                     if file_format == "parquet":
                         df = pd.read_parquet(paths[0])
                     else:
-                        df = pd.read_csv(paths[0])
+                        df = pd.read_csv(paths[0], low_memory=False)
                 else:
                     # Multiple files - concatenate
                     dfs = []
@@ -70,7 +96,7 @@ def get_ingest_steps():
                         if file_format == "parquet":
                             dfs.append(pd.read_parquet(path))
                         else:
-                            dfs.append(pd.read_csv(path))
+                            dfs.append(pd.read_csv(path, low_memory=False))
                     df = pd.concat(dfs, axis=0, ignore_index=True)
                     logger.info(f"Concatenated {len(paths)} files")
 
@@ -102,7 +128,443 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadHPCData()]
+    class LoadTorqueData(PipelineStep):
+        """Load PBS/Torque accounting logs from a directory layout."""
+
+        name = "load_torque"
+        stage = PipelineStage.INGEST
+        description = "Load PBS/Torque accounting logs"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "torque-pbs"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import pandas as pd
+
+                root = ctx.input_path
+
+                # Locate log files: prefer torque_logs/ subdir, fall back to root
+                torque_dir = root / "torque_logs"
+                log_dir = torque_dir if torque_dir.is_dir() else root
+                log_files = sorted(
+                    f for f in log_dir.iterdir()
+                    if f.is_file() and f.name.isdigit() and len(f.name) == 8
+                )
+
+                if not log_files:
+                    ctx.add_error(f"No PBS accounting log files found in {log_dir}")
+                    return ctx
+
+                logger.debug(f"     Found {len(log_files)} PBS log files in {log_dir}")
+
+                records = []
+                skipped = 0
+                for log_file in log_files:
+                    with open(log_file, errors="replace") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            parts = line.split(";", 3)
+                            if len(parts) < 4 or parts[1] != "E":
+                                skipped += 1
+                                continue
+                            _, _, job_id, attrs_str = parts
+                            record = {"jobid": job_id}
+                            for token in attrs_str.split():
+                                if "=" in token:
+                                    key, _, val = token.partition("=")
+                                    record[key.lower()] = val
+                            records.append(record)
+
+                if not records:
+                    ctx.add_error("No completed job records (event type 'E') found in PBS logs")
+                    return ctx
+
+                df = pd.DataFrame(records)
+                ctx.data = df
+
+                ctx.metadata["num_rows"] = len(df)
+                ctx.metadata["num_columns"] = len(df.columns)
+                ctx.metadata["columns"] = list(df.columns)
+                ctx.metadata["log_files_parsed"] = len(log_files)
+                ctx.metadata["records_skipped"] = skipped
+
+                logger.info(
+                    f"Loaded PBS/Torque logs: {len(df):,} completed jobs from "
+                    f"{len(log_files)} files ({skipped:,} non-E records skipped)"
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error loading PBS/Torque logs: {str(e)}")
+
+            return ctx
+
+    class LoadGCloudV2Data(PipelineStep):
+        """Load Google Cluster Trace v2 from its multi-table directory layout.
+
+        Joins job_events, task_events, machine_events, and task_usage to produce
+        a flat DataFrame with nodes_required and per-job CPU traces, matching
+        the logic from raps/dataloaders/gcloudv2.py.
+        """
+
+        name = "load_gcloud_v2"
+        stage = PipelineStage.INGEST
+        description = "Load Google Cluster Trace v2"
+
+        # Column schemas for each sub-table (headerless CSVs)
+        _COLUMNS = {
+            "job_events": [
+                "timestamp", "missing_info", "job_ID", "event_type",
+                "user_name", "scheduling_class", "job_name", "logical_job_name",
+            ],
+            "machine_events": [
+                "timestamp", "machine_ID", "event_type", "platform_ID",
+                "CPU_capacity", "memory_capacity",
+            ],
+            "task_events": [
+                "timestamp", "missing_info", "job_ID", "task_index",
+                "machine_ID", "event_type", "user_name", "scheduling_class",
+                "priority", "CPU_request", "memory_request",
+                "disk_space_request", "different_machine_constraint",
+            ],
+            "task_usage": [
+                "start_time", "end_time", "job_ID", "task_index", "machine_ID",
+                "CPU_usage_rate", "memory_usage_avg", "memory_usage_max",
+                "assigned_memory", "unmapped_page_cache_memory",
+                "page_cache_memory", "maximum_memory_usage",
+                "disk_IO_time_avg", "disk_IO_time_max", "local_disk_space_used",
+                "cycles_per_instruction", "memory_accesses_per_instruction",
+                "sampling_rate", "aggregation_type", "missing_col_19",
+            ],
+        }
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "gcloud-v2"
+
+        def _load_table(self, base: Path, table: str) -> "pd.DataFrame":
+            import pandas as pd
+            table_dir = base / table
+            files = sorted(table_dir.glob("part-*.csv.gz"))
+            if not files:
+                raise FileNotFoundError(f"No part files in {table_dir}")
+            names = self._COLUMNS[table]
+            dfs = [pd.read_csv(f, compression="gzip", header=None,
+                               names=names, dtype={names[0]: float})
+                   for f in files]
+            return pd.concat(dfs, ignore_index=True) if len(dfs) > 1 else dfs[0]
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+                import pandas as pd
+
+                base = ctx.input_path
+                logger.debug(f"     Loading Google Cluster v2 from {base}")
+
+                # 1. Machine capacity (mode of CPU/memory across all machines)
+                machine_df = self._load_table(base, "machine_events")
+                cpu_cap = machine_df["CPU_capacity"].mode()[0]
+                mem_cap = machine_df["memory_capacity"].mode()[0]
+                logger.debug(f"     Machine capacity: cpu={cpu_cap}, mem={mem_cap}")
+
+                # 2. nodes_required per job from task_events
+                task_df = self._load_table(base, "task_events")
+                task_df = task_df[task_df["event_type"] == 0]
+                job_res = task_df.groupby("job_ID").agg(
+                    CPU_request=("CPU_request", "sum"),
+                    memory_request=("memory_request", "sum"),
+                ).reset_index()
+                job_res["nodes_required"] = np.maximum(
+                    np.ceil(job_res["CPU_request"] / cpu_cap),
+                    np.ceil(job_res["memory_request"] / mem_cap),
+                ).astype(int)
+                job_res = job_res[job_res["nodes_required"] > 0]
+                nodes_map = job_res.set_index("job_ID")["nodes_required"].to_dict()
+                logger.debug(f"     {len(nodes_map):,} jobs with resource requests")
+
+                # 3. Job submit events (event_type=0), timestamps μs → s
+                job_df = self._load_table(base, "job_events")
+                job_df = job_df[job_df["event_type"] == 0].copy()
+                job_df["timestamp"] = job_df["timestamp"].astype(float) / 1e6
+                t0 = job_df["timestamp"].min()
+
+                # 4. Task usage → per-job start/end times and CPU traces
+                usage_df = self._load_table(base, "task_usage")
+                usage_df["start_time"] = usage_df["start_time"].astype(float) / 1e6
+                usage_df["end_time"] = usage_df["end_time"].astype(float) / 1e6
+                usage_df["job_ID"] = usage_df["job_ID"].astype(int)
+
+                start_map = usage_df.groupby("job_ID")["start_time"].min().to_dict()
+                end_map   = usage_df.groupby("job_ID")["end_time"].max().to_dict()
+                trace_map = (usage_df.groupby("job_ID")["CPU_usage_rate"]
+                             .apply(lambda s: s.to_numpy()).to_dict())
+
+                # 5. Filter jobs that have both usage data and resource requests
+                valid_ids = set(trace_map) & set(nodes_map)
+                job_df = job_df[job_df["job_ID"].isin(valid_ids)].copy()
+                logger.debug(f"     {len(job_df):,} jobs after filtering to valid set")
+
+                # 6. Build flat DataFrame
+                job_df["submit_time"] = job_df["timestamp"] - t0
+                job_df["start_time"]  = job_df["job_ID"].map(start_map) - t0
+                job_df["end_time"]    = job_df["job_ID"].map(end_map) - t0
+                job_df["nodes_required"] = job_df["job_ID"].map(nodes_map)
+                job_df["cpu_trace"]   = job_df["job_ID"].map(trace_map)
+
+                cols = [
+                    "job_ID", "user_name", "scheduling_class", "job_name",
+                    "submit_time", "start_time", "end_time",
+                    "nodes_required", "cpu_trace",
+                ]
+                ctx.data = job_df[cols].reset_index(drop=True)
+
+                ctx.metadata["num_rows"] = len(ctx.data)
+                ctx.metadata["num_columns"] = len(ctx.data.columns)
+                ctx.metadata["columns"] = list(ctx.data.columns)
+
+                logger.info(
+                    f"Loaded Google Cluster v2: {len(ctx.data):,} jobs "
+                    f"({len(valid_ids):,} with usage+resources)"
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error loading Google Cluster v2 data: {str(e)}")
+
+            return ctx
+
+    class LoadPhillyData(PipelineStep):
+        """Load Microsoft Philly GPU cluster traces.
+
+        Reads cluster_job_log (JSON), flattens nested attempts to extract
+        start/end times and nodes_required, then joins per-machine CPU/GPU
+        utilization traces from cpu_by_day/ and gpu_by_day/ if present.
+        """
+
+        name = "load_philly"
+        stage = PipelineStage.INGEST
+        description = "Load Philly GPU cluster traces"
+
+        _DATE_FMT = "%Y-%m-%d %H:%M:%S"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "philly"
+
+        def _parse_ts(self, val) -> float:
+            """Convert Philly timestamp (str or epoch) to epoch seconds."""
+            if val is None or val == "None":
+                return None
+            if isinstance(val, (int, float)):
+                return float(val)
+            val = val.replace(" PST", "").replace(" PDT", "")
+            try:
+                from datetime import datetime
+                return datetime.strptime(val, self._DATE_FMT).timestamp()
+            except ValueError:
+                return None
+
+        def _load_daily_traces(self, trace_dir: Path, colname: str,
+                               min_date=None, max_date=None) -> dict:
+            """Load daily CSVs → dict of date-string → DataFrame.
+
+            Args:
+                min_date: datetime.date — skip files strictly before this date
+                max_date: datetime.date — skip files strictly after this date
+            """
+            import pandas as pd
+            from datetime import datetime as _dt
+            traces = {}
+            for f in sorted(trace_dir.glob("*.csv")):
+                if min_date is not None or max_date is not None:
+                    try:
+                        file_date = _dt.strptime(f.stem, "%Y-%m-%d").date()
+                        if min_date is not None and file_date < min_date:
+                            continue
+                        if max_date is not None and file_date > max_date:
+                            continue
+                    except ValueError:
+                        pass  # unparseable filename — load anyway
+                try:
+                    df = pd.read_csv(f, dtype={"machine_id": str, colname: float})
+                    df["time"] = pd.to_datetime(df["time"], errors="coerce",
+                                                format=self._DATE_FMT)
+                    traces[f.stem] = df  # stem = "2017-10-03"
+                except Exception:
+                    pass
+            return traces
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+                import pandas as pd
+                from datetime import datetime, timedelta
+
+                trace_dir = ctx.input_path
+                job_log_path = trace_dir / "cluster_job_log"
+
+                logger.debug(f"     Loading Philly job log from {job_log_path}")
+                import json
+                with open(job_log_path, encoding="utf-8") as f:
+                    raw_jobs = json.load(f)
+
+                logger.debug(f"     {len(raw_jobs):,} raw jobs in log")
+
+                # Flatten job records
+                records = []
+                for raw in raw_jobs:
+                    attempts = raw.get("attempts", [])
+                    if not attempts:
+                        continue
+
+                    # Use first attempt's start, last attempt's end
+                    start_ts = self._parse_ts(attempts[0].get("start_time"))
+                    end_ts   = self._parse_ts(attempts[-1].get("end_time"))
+                    submitted_ts = self._parse_ts(raw.get("submitted_time"))
+
+                    if not start_ts or not end_ts:
+                        continue
+
+                    # Collect machines and GPU count from last attempt
+                    detail = attempts[-1].get("detail", [])
+                    machine_ids = [d["ip"] for d in detail if "ip" in d]
+                    num_gpus = sum(len(d.get("gpus", [])) for d in detail)
+
+                    if not machine_ids:
+                        continue
+
+                    records.append({
+                        "jobid":          raw.get("jobid"),
+                        "user":           raw.get("user"),
+                        "status":         raw.get("status"),
+                        "vc":             raw.get("vc"),
+                        "submitted_time": submitted_ts,
+                        "start_time":     start_ts,
+                        "end_time":       end_ts,
+                        "nodes_required": len(machine_ids),
+                        "num_gpus":       num_gpus,
+                        "_machine_ids":   machine_ids,
+                    })
+
+                if not records:
+                    ctx.add_error("No valid Philly job records found")
+                    return ctx
+
+                df = pd.DataFrame(records)
+                logger.debug(f"     {len(df):,} jobs with valid attempts")
+
+                # Apply date range filter before the expensive per-job trace loop
+                _ds = ctx.config.get('start')
+                _de = ctx.config.get('end')
+                ts0, ts1 = None, None
+                if _ds or _de:
+                    try:
+                        ts0, ts1 = _parse_date_range(_ds, _de)
+                        filter_col = "submitted_time" if "submitted_time" in df.columns else "start_time"
+                        pre = len(df)
+                        if ts0 is not None:
+                            df = df[df[filter_col] >= ts0]
+                        if ts1 is not None:
+                            df = df[df[filter_col] < ts1]
+                        df = df.reset_index(drop=True)
+                        logger.info(f"Date filter [{_ds} – {_de}]: {pre:,} → {len(df):,} jobs")
+                    except Exception as _e:
+                        logger.warning(f"Date filter failed: {_e}")
+
+                # Load CPU/GPU traces if directories exist
+                cpu_dir = trace_dir / "cpu_by_day"
+                gpu_dir = trace_dir / "gpu_by_day"
+                has_traces = cpu_dir.is_dir() and gpu_dir.is_dir()
+
+                if has_traces and not df.empty:
+                    # Compute the date window for trace loading.
+                    # If the user specified a date range, clamp to that window
+                    # (jobs may run much longer than the requested window; loading
+                    # all their trace files would be extremely slow).
+                    from datetime import date as _date, timedelta as _td
+                    _ts0 = ts0 if (_ds or _de) else None
+                    _ts1 = ts1 if (_ds or _de) else None
+                    if _ts0 is not None:
+                        _min_date = datetime.fromtimestamp(_ts0).date() - _td(days=1)
+                    else:
+                        _min_date = (datetime.fromtimestamp(df["start_time"].min()).date()
+                                     - _td(days=1))
+                    if _ts1 is not None:
+                        _max_date = datetime.fromtimestamp(_ts1).date() + _td(days=1)
+                    else:
+                        _max_date = (datetime.fromtimestamp(df["end_time"].max()).date()
+                                     + _td(days=1))
+                    logger.debug(
+                        f"     Loading CPU/GPU daily traces "
+                        f"[{_min_date} – {_max_date}]..."
+                    )
+                    all_cpu = self._load_daily_traces(cpu_dir, "cpu_util",
+                                                      min_date=_min_date, max_date=_max_date)
+                    all_gpu = self._load_daily_traces(gpu_dir, "gpu_util",
+                                                      min_date=_min_date, max_date=_max_date)
+                    logger.debug(f"     Loaded {len(all_cpu)} CPU days, {len(all_gpu)} GPU days")
+
+                    # Pre-concat all daily frames then build a machine_id → DataFrame
+                    # index so per-job lookup only touches that machine's rows.
+                    def _build_machine_index(daily_dict):
+                        if not daily_dict:
+                            return {}
+                        combined = pd.concat(list(daily_dict.values()), ignore_index=True)
+                        return {mid: grp.reset_index(drop=True)
+                                for mid, grp in combined.groupby("machine_id")}
+
+                    cpu_by_machine = _build_machine_index(all_cpu)
+                    gpu_by_machine = _build_machine_index(all_gpu)
+
+                    def extract_trace(by_machine, colname, machines, start_dt, end_dt):
+                        sub_frames = [by_machine[m] for m in machines if m in by_machine]
+                        if not sub_frames:
+                            return np.array([], dtype=float)
+                        sub = (pd.concat(sub_frames, ignore_index=True)
+                               if len(sub_frames) > 1 else sub_frames[0])
+                        mask = (sub["time"] >= start_dt) & (sub["time"] <= end_dt)
+                        filtered = sub.loc[mask]
+                        if filtered.empty:
+                            return np.array([], dtype=float)
+                        if len(machines) > 1:
+                            filtered = (filtered.groupby("time")[colname]
+                                        .mean().reset_index())
+                        return filtered[colname].to_numpy() * 0.01
+
+                    cpu_traces, gpu_traces = [], []
+                    for _, row in df.iterrows():
+                        machines = row["_machine_ids"]
+                        start_dt = datetime.fromtimestamp(row["start_time"])
+                        end_dt   = datetime.fromtimestamp(row["end_time"])
+                        cpu_traces.append(extract_trace(cpu_by_machine, "cpu_util",
+                                                        machines, start_dt, end_dt))
+                        gpu_traces.append(extract_trace(gpu_by_machine, "gpu_util",
+                                                        machines, start_dt, end_dt))
+
+                    df["cpu_trace"] = cpu_traces
+                    df["gpu_trace"] = gpu_traces
+                    logger.debug(f"     Traces attached to {len(df):,} jobs")
+
+                # Drop internal helper column
+                df = df.drop(columns=["_machine_ids"])
+                ctx.data = df
+
+                ctx.metadata["num_rows"] = len(df)
+                ctx.metadata["num_columns"] = len(df.columns)
+                ctx.metadata["columns"] = list(df.columns)
+                ctx.metadata["has_traces"] = has_traces
+
+                logger.info(
+                    f"Loaded Philly: {len(df):,} jobs"
+                    + (" with CPU/GPU traces" if has_traces else " (no traces)")
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error loading Philly data: {str(e)}")
+
+            return ctx
+
+    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(), LoadPhillyData()]
 
 
 def get_preprocess_steps():
@@ -582,9 +1044,69 @@ def _get_load_jobprofile_step(jobprofile_path=None):
     return [LoadJobProfile(jobprofile_path)]
 
 
+def _get_date_filter_step():
+    """Return a FilterByDateRange step that reads start/end from ctx.config.
+
+    Runs after AutoMapColumns so column names are canonical (submit_time / start_time).
+    Is a no-op when neither start nor end is set in the config.
+    """
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class FilterByDateRange(PipelineStep):
+        """Filter jobs to the configured date window."""
+
+        name = "filter_date_range"
+        stage = PipelineStage.PREPROCESS
+        description = "Filter jobs by date range"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            import pandas as pd
+
+            _ds = ctx.config.get('start')
+            _de = ctx.config.get('end')
+            if not _ds and not _de:
+                return ctx
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            try:
+                ts0, ts1 = _parse_date_range(_ds, _de)
+            except Exception as e:
+                ctx.add_error(f"Date filter: {e}")
+                return ctx
+
+            df = ctx.data
+            # Prefer canonical submit_time; fall back to start_time
+            col = next((c for c in ("submit_time", "start_time") if c in df.columns), None)
+            if col is None:
+                logger.warning("Date filter: no submit_time/start_time column found")
+                return ctx
+
+            series = df[col]
+            if pd.api.types.is_datetime64_any_dtype(series):
+                series = series.astype("int64") / 1e9  # ns → s
+            else:
+                series = pd.to_numeric(series, errors="coerce")
+
+            pre = len(df)
+            mask = pd.Series(True, index=df.index)
+            if ts0 is not None:
+                mask &= series >= ts0
+            if ts1 is not None:
+                mask &= series < ts1
+
+            ctx.data = df[mask].reset_index(drop=True)
+            logger.info(
+                f"Date filter [{_ds} – {_de}] on {col}: {pre:,} → {len(ctx.data):,} jobs"
+            )
+            return ctx
+
+    return FilterByDateRange()
+
+
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
-                      jobprofile_path=None, topology=None):
+                      jobprofile_path=None, topology=None, priority_policy=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -595,6 +1117,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         system_name: RAPS system name stored in the NPZ snapshot (e.g. "adastraMI250")
         jobprofile_path: Path/glob to jobprofile parquet files for per-timestep traces
         topology: System topology dict (sc_shape, blades_per_chassis, nodes_per_blade)
+        priority_policy: Named priority policy to apply when priority is absent from
+            the source data. Supported: "frontier" (aging boost by node count).
     """
     from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
 
@@ -603,9 +1127,11 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
     preprocess = _get_raps_preprocess_steps()             # RAPS-specific cleaning
     raps_steps = [
         AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
+        _get_date_filter_step(),                         # filter by start/end (no-op if unset)
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
-                      topology=topology, system_name=system_name),
+                      topology=topology, system_name=system_name,
+                      priority_policy=priority_policy),
         SaveJobDicts(output_format=output_format, system_name=system_name),
     ]
     return ingest + jobprofile + preprocess + raps_steps

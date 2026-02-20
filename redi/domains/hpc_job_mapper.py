@@ -16,6 +16,8 @@ import difflib
 import json
 import logging
 import re
+import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +29,41 @@ import pandas as pd
 from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
 logger = logging.getLogger(__name__)
+
+
+# Timestamp unit thresholds (absolute epoch magnitudes).
+# Values above these ranges are normalized to epoch seconds.
+_EPOCH_NS_THRESHOLD = 1e17
+_EPOCH_US_THRESHOLD = 1e14
+_EPOCH_MS_THRESHOLD = 1e11
+_EPOCH_SECONDS_THRESHOLD = 1e9
+
+
+def _normalize_epoch_seconds(value: float) -> float:
+    """Normalize epoch value to seconds when input is ns/us/ms."""
+    abs_value = abs(value)
+    if abs_value >= _EPOCH_NS_THRESHOLD:
+        return value / 1e9
+    if abs_value >= _EPOCH_US_THRESHOLD:
+        return value / 1e6
+    if abs_value >= _EPOCH_MS_THRESHOLD:
+        return value / 1e3
+    return value
+
+
+def _normalize_epoch_array(values: np.ndarray) -> np.ndarray:
+    """Vectorized epoch unit normalization to seconds."""
+    arr = values.astype(float, copy=True)
+    abs_arr = np.abs(arr)
+
+    ns_mask = abs_arr >= _EPOCH_NS_THRESHOLD
+    us_mask = (abs_arr >= _EPOCH_US_THRESHOLD) & (abs_arr < _EPOCH_NS_THRESHOLD)
+    ms_mask = (abs_arr >= _EPOCH_MS_THRESHOLD) & (abs_arr < _EPOCH_US_THRESHOLD)
+
+    arr[ns_mask] = arr[ns_mask] / 1e9
+    arr[us_mask] = arr[us_mask] / 1e6
+    arr[ms_mask] = arr[ms_mask] / 1e3
+    return arr
 
 
 # ---------------------------------------------------------------------------
@@ -344,9 +381,15 @@ class FieldDeriver:
             start_col = mapped["start_time"]
             end_col = mapped["end_time"]
             derived_col = "_derived_expected_run_time"
-            start = pd.to_datetime(df[start_col], errors="coerce")
-            end = pd.to_datetime(df[end_col], errors="coerce")
-            df[derived_col] = (end - start).dt.total_seconds()
+            start_num = pd.to_numeric(df[start_col], errors="coerce")
+            end_num = pd.to_numeric(df[end_col], errors="coerce")
+            if start_num.notna().any() and end_num.notna().any():
+                # Epoch-like numeric timestamps (common in scheduler logs).
+                df[derived_col] = end_num - start_num
+            else:
+                start = pd.to_datetime(df[start_col], errors="coerce")
+                end = pd.to_datetime(df[end_col], errors="coerce")
+                df[derived_col] = (end - start).dt.total_seconds()
             mapped["expected_run_time"] = derived_col
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
@@ -612,6 +655,28 @@ _STATE_MAP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Priority policies
+# ---------------------------------------------------------------------------
+
+def _priority_frontier(nodes_required: int) -> int:
+    """Frontier aging boost policy.
+
+    Source: https://docs.olcf.ornl.gov/systems/frontier_user_guide.html#job-priority-by-node-count
+    Reproduced from raps/dataloaders/frontier.py::aging_boost().
+    """
+    if nodes_required >= 5645:
+        return 8 * 24 * 3600   # 691200 s
+    elif nodes_required >= 1882:
+        return 4 * 24 * 3600   # 345600 s
+    return 0
+
+
+_PRIORITY_POLICIES: Dict[str, Any] = {
+    "frontier": _priority_frontier,
+}
+
+
 class JobDictBuilder:
     """Builds RAPS-compatible job_dict dictionaries from mapped DataFrame rows."""
 
@@ -619,7 +684,8 @@ class JobDictBuilder:
                  trace_quanta: Optional[int] = None,
                  jobprofile_df: Optional[pd.DataFrame] = None,
                  topology: Optional[Dict[str, Any]] = None,
-                 system_name: str = "unknown"):
+                 system_name: str = "unknown",
+                 priority_policy: Optional[str] = None):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
@@ -627,6 +693,7 @@ class JobDictBuilder:
         self.topology = topology
         self.system_name = system_name
         self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
+        self._priority_fn = _PRIORITY_POLICIES.get(priority_policy) if priority_policy else None
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -650,11 +717,16 @@ class JobDictBuilder:
 
         # Find reference time
         ref_time = self._find_reference_time(df, mapped)
+        timestamp_cache = self._build_timestamp_cache(df, mapped, ref_time)
 
         skipped = 0
-        for idx, row in df.iterrows():
+        total_rows = len(df)
+        started_at = time.perf_counter()
+        progress_every = 50000
+
+        for pos, (idx, row) in enumerate(df.iterrows(), start=1):
             try:
-                job = self._build_one(row, mapped, ref_time)
+                job = self._build_one(row, mapped, ref_time, timestamp_cache=timestamp_cache, row_pos=pos - 1)
                 if job is not None:
                     jobs.append(job)
                 else:
@@ -663,11 +735,86 @@ class JobDictBuilder:
                 logger.warning(f"Skipping row {idx}: {e}")
                 skipped += 1
 
+            if pos % progress_every == 0 or pos == total_rows:
+                elapsed = time.perf_counter() - started_at
+                rate = pos / elapsed if elapsed > 0 else 0.0
+                if total_rows >= progress_every:
+                    print(
+                        f"\r  ⏳ build_job_dicts ... {pos:,}/{total_rows:,} rows ({rate:.0f} rows/s)",
+                        end="",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                logger.info(
+                    f"build_job_dicts progress: {pos}/{total_rows} rows "
+                    f"({rate:.0f} rows/s, skipped={skipped})"
+                )
+
         if skipped:
             logger.info(f"Skipped {skipped} invalid rows")
         logger.info(f"Built {len(jobs)} RAPS job dicts")
 
         return jobs, ref_time
+
+    def _build_timestamp_cache(
+        self, df: pd.DataFrame, mapped: Dict[str, str], ref_time: float
+    ) -> Dict[str, np.ndarray]:
+        """Precompute timestamp fields once to avoid per-row datetime parsing."""
+        cache: Dict[str, np.ndarray] = {}
+
+        for fs in FIELD_REGISTRY:
+            canon = fs.canonical_name
+            if fs.field_type != "timestamp" or canon not in mapped:
+                continue
+
+            col = mapped[canon]
+            if col not in df.columns:
+                continue
+
+            series = df[col]
+
+            # Numeric timestamps: treat >1e9 as epoch seconds, else relative seconds.
+            if pd.api.types.is_numeric_dtype(series):
+                raw = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+                raw_sec = _normalize_epoch_array(raw)
+                rel = np.where(
+                    np.isnan(raw_sec),
+                    0.0,
+                    np.where(raw_sec > _EPOCH_SECONDS_THRESHOLD, raw_sec - ref_time, raw_sec),
+                )
+                cache[canon] = rel
+                continue
+
+            # Object columns that are mostly numeric epoch timestamps.
+            numeric = pd.to_numeric(series, errors="coerce")
+            numeric_valid_ratio = float(numeric.notna().mean()) if len(series) else 0.0
+            if numeric_valid_ratio >= 0.9:
+                raw = numeric.to_numpy(dtype=float)
+                raw_sec = _normalize_epoch_array(raw)
+                rel = np.where(
+                    np.isnan(raw_sec),
+                    0.0,
+                    np.where(raw_sec > _EPOCH_SECONDS_THRESHOLD, raw_sec - ref_time, raw_sec),
+                )
+                cache[canon] = rel
+                continue
+
+            # Datetime-like strings/objects: parse once, then fallback to duration parsing.
+            parsed = pd.to_datetime(series, errors="coerce")
+            ns = parsed.to_numpy(dtype="datetime64[ns]")
+            rel = np.zeros(len(series), dtype=float)
+            valid = ~pd.isna(ns)
+            if valid.any():
+                rel[valid] = ns[valid].astype("int64") / 1e9 - ref_time
+
+            invalid = ~valid
+            if invalid.any():
+                fallback = series[invalid].map(_parse_duration).to_numpy(dtype=float)
+                rel[invalid] = np.where(fallback > 0, fallback, 0.0)
+
+            cache[canon] = rel
+
+        return cache
 
     def _find_reference_time(self, df: pd.DataFrame, mapped: Dict[str, str]) -> float:
         """Find the earliest timestamp to use as reference (epoch seconds).
@@ -685,21 +832,39 @@ class JobDictBuilder:
         # Fallback: use start_time.min()
         if "start_time" in mapped:
             col = mapped["start_time"]
-            series = pd.to_datetime(df[col], errors="coerce")
+            raw = df[col]
+            numeric = pd.to_numeric(raw, errors="coerce").dropna()
+            numeric_sec = numeric.map(_normalize_epoch_seconds)
+            numeric_valid = numeric_sec[numeric_sec > _EPOCH_SECONDS_THRESHOLD]
+            if not numeric_valid.empty:
+                return float(numeric_valid.min())
+            series = pd.to_datetime(raw, errors="coerce")
             valid = series.dropna()
             if not valid.empty:
                 return valid.min().timestamp()
         # Last resort: submit_time
         if "submit_time" in mapped:
             col = mapped["submit_time"]
-            series = pd.to_datetime(df[col], errors="coerce")
+            raw = df[col]
+            numeric = pd.to_numeric(raw, errors="coerce").dropna()
+            numeric_sec = numeric.map(_normalize_epoch_seconds)
+            numeric_valid = numeric_sec[numeric_sec > _EPOCH_SECONDS_THRESHOLD]
+            if not numeric_valid.empty:
+                return float(numeric_valid.min())
+            series = pd.to_datetime(raw, errors="coerce")
             valid = series.dropna()
             if not valid.empty:
                 return valid.min().timestamp()
         return 0.0
 
-    def _build_one(self, row: pd.Series, mapped: Dict[str, str],
-                   ref_time: float) -> Optional[Dict[str, Any]]:
+    def _build_one(
+        self,
+        row: pd.Series,
+        mapped: Dict[str, str],
+        ref_time: float,
+        timestamp_cache: Optional[Dict[str, np.ndarray]] = None,
+        row_pos: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Build a single job dict from a DataFrame row."""
         job: Dict[str, Any] = {}
         trace_fields: List[Tuple[FieldSpec, Any, str]] = []  # (spec, raw, col_name)
@@ -715,7 +880,15 @@ class JobDictBuilder:
                     if isinstance(job[canon], list):
                         job[canon] = list(job[canon])
                     continue
-                value = self._convert_value(raw, fs, mapped.get(canon, ""), ref_time)
+                if (
+                    fs.field_type == "timestamp"
+                    and timestamp_cache is not None
+                    and row_pos is not None
+                    and canon in timestamp_cache
+                ):
+                    value = float(timestamp_cache[canon][row_pos])
+                else:
+                    value = self._convert_value(raw, fs, mapped.get(canon, ""), ref_time)
             else:
                 value = fs.default
                 # Deep copy mutable defaults
@@ -723,6 +896,10 @@ class JobDictBuilder:
                     value = list(value)
 
             job[canon] = value
+
+        # Apply priority policy when the source data has no priority column
+        if self._priority_fn is not None and not job.get("priority"):
+            job["priority"] = self._priority_fn(int(job.get("nodes_required") or 0))
 
         # Validation: skip if raw end_time is NaN/NaT (still-running jobs)
         if "end_time" in mapped:
@@ -945,9 +1122,9 @@ class JobDictBuilder:
         """Convert a timestamp value to relative seconds from ref_time."""
         # Already numeric (epoch seconds)
         if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-            val = float(raw)
+            val = _normalize_epoch_seconds(float(raw))
             # If value is very large, assume it's epoch seconds
-            if val > 1e9:
+            if val > _EPOCH_SECONDS_THRESHOLD:
                 return val - ref_time
             # Otherwise assume it's already relative
             return val
@@ -1343,12 +1520,14 @@ class BuildJobDicts(PipelineStep):
     def __init__(self, power_config: Optional[Dict[str, Dict[str, float]]] = None,
                  trace_quanta: Optional[int] = None,
                  topology: Optional[Dict[str, Any]] = None,
-                 system_name: str = "unknown"):
+                 system_name: str = "unknown",
+                 priority_policy: Optional[str] = None):
         super().__init__()
         self.power_config = power_config
         self.trace_quanta = trace_quanta
         self.topology = topology
         self.system_name = system_name
+        self.priority_policy = priority_policy
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1369,6 +1548,7 @@ class BuildJobDicts(PipelineStep):
             jobprofile_df=jobprofile_df,
             topology=self.topology,
             system_name=self.system_name,
+            priority_policy=self.priority_policy,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 
@@ -1466,8 +1646,16 @@ class SaveJobDicts(PipelineStep):
         from types import SimpleNamespace
 
         # Use actual telemetry start datetime (from ref_time) instead of now()
-        if ref_time and ref_time > 0:
-            start_date = datetime.fromtimestamp(ref_time, tz=timezone.utc)
+        ref_time_sec = _normalize_epoch_seconds(float(ref_time)) if ref_time else 0.0
+        if ref_time_sec > 0:
+            try:
+                start_date = datetime.fromtimestamp(ref_time_sec, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                logger.warning(
+                    "Invalid ref_time for datetime conversion (%s); falling back to now().",
+                    ref_time,
+                )
+                start_date = datetime.now(timezone.utc)
         else:
             start_date = datetime.now(timezone.utc)
 
