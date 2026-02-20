@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Callable, Union
 from enum import Enum
 from pathlib import Path
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ class PipelineStep:
         @wraps(execute)
         def wrapped_execute(self, ctx: PipelineContext) -> PipelineContext:
             flowcept_task = None
+            flowcept_task_ended = False
             try:
                 if (
                     ctx.with_flowcept
@@ -177,8 +179,22 @@ class PipelineStep:
                     )
 
                 return execute(self, ctx)
-            finally:
+            except Exception:
                 if flowcept_task:
+                    try:
+                        from flowcept.commons.vocabulary import Status
+
+                        flowcept_task.end(
+                            status=Status.ERROR,
+                            stderr=traceback.format_exc(),
+                        )
+                    except Exception:
+                        # Keep pipeline semantics: instrumentation failures must not hide root cause.
+                        pass
+                    flowcept_task_ended = True
+                raise
+            finally:
+                if flowcept_task and not flowcept_task_ended:
                     flowcept_task.end()
 
         wrapped_execute._redi_wrapped = True
@@ -231,6 +247,14 @@ class Pipeline:
         """Start Flowcept once for this execution path. Returns True if started here."""
         if not ctx.with_flowcept:
             return False
+        # Flowcept already configures its own handlers/formatters. Prevent duplicate
+        # plain-text lines via root logger propagation.
+        try:
+            from flowcept.configs import PROJECT_NAME as FLOWCEPT_LOGGER_NAME
+
+            logging.getLogger(FLOWCEPT_LOGGER_NAME).propagate = False
+        except Exception:
+            logging.getLogger("flowcept").propagate = False
         if ctx.flowcept is None:
             from flowcept import Flowcept
 

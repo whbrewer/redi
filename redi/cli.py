@@ -563,12 +563,11 @@ def run_pipeline(
         try:
             old_metadata = dict(ctx.metadata)
             next_ctx = step.execute(ctx)
-            if (
-                getattr(next_ctx, "with_flowcept", False)
-                and flowcept_ref is not None
-                and getattr(next_ctx, "flowcept", None) is None
-            ):
-                next_ctx.flowcept = flowcept_ref
+            if flowcept_ref is not None and getattr(next_ctx, "flowcept", None) is None:
+                try:
+                    next_ctx.flowcept = flowcept_ref
+                except Exception:
+                    pass
             ctx = next_ctx
             step_time = time.time() - step_start
 
@@ -668,6 +667,22 @@ def run_pipeline(
         ctx.mark_complete(current_stage)
     if flowcept_started_here and flowcept_ref:
         flowcept_ref.stop()
+    provenance_result = {"enabled": False, "generated": False, "error": None}
+    if getattr(ctx, "with_flowcept", False):
+        from redi.provenance_card import finalize_provenance_for_context
+
+        provenance_result = finalize_provenance_for_context(
+            ctx=ctx,
+            flowcept_ref=flowcept_ref,
+            verbose=verbose,
+            logger=logger,
+        )
+        if provenance_result.get("error"):
+            err = provenance_result["error"]
+            if style == "rich":
+                print(f"    {Colors.YELLOW}⚠ Could not generate provenance card: {err}{Colors.END}")
+            elif style == "simple":
+                print(f"  [WARN] Could not generate provenance card: {err}")
 
     total_time = time.time() - total_start
 
@@ -720,6 +735,8 @@ def run_pipeline(
             print_section("Output Files")
             for f in ctx.metadata["saved_files"]:
                 fpath = Path(f)
+                if fpath.name in {"flowcept_buffer.jsonl", "PROVENANCE_CARD.md", "provenance_card.md"}:
+                    continue
                 if fpath.exists():
                     fsize = fpath.stat().st_size
                     size_str = f"{fsize / 1024:.1f} KB" if fsize < 1024*1024 else f"{fsize / (1024*1024):.2f} MB"
@@ -767,6 +784,18 @@ def run_pipeline(
             ctx.metadata["saved_files"].append(str(metadata_path))
             ctx.output_dir.touch()  # update directory mtime on re-runs
             print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+
+            if getattr(ctx, "with_flowcept", False):
+                from .provenance_card import render_provenance_summary
+
+                render_provenance_summary(
+                    ctx=ctx,
+                    style="rich",
+                    datacard_path=datacard_path,
+                    print_section=print_section,
+                    printer=print,
+                    colors=Colors,
+                )
 
             # Display recommendations in terminal
             data_card = analyze_dataset(str(primary_path))
@@ -889,6 +918,16 @@ def run_pipeline(
             ctx.metadata["saved_files"].append(str(metadata_path))
         except Exception:
             pass  # Silent in simple mode
+
+        if getattr(ctx, "with_flowcept", False):
+            from .provenance_card import render_provenance_summary
+
+            render_provenance_summary(
+                ctx=ctx,
+                style="simple",
+                datacard_path=datacard_path if 'datacard_path' in locals() else None,
+                printer=print,
+            )
 
         if ctx.metadata.get("saved_files"):
             for f in ctx.metadata["saved_files"]:
