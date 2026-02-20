@@ -2645,14 +2645,16 @@ Commands:
   discover   Analyze unknown datasets and propose pipelines
   validate   Validate REDI output against ground truth
 
-Examples:
+Examples::
+
   redi run data.csv                     # Run pipeline on data
   redi data.csv                         # Same as above (run is default)
   redi analyze --workflow Snakefile     # Observe Snakemake workflow
   redi discover /path/to/data/          # Analyze unknown dataset
   redi validate output/ -c config.yaml  # Validate against ground truth
 
-For command-specific help:
+For command-specific help::
+
   redi run --help
   redi analyze --help
   redi discover --help
@@ -2670,14 +2672,16 @@ For command-specific help:
         help='Run the REDI pipeline (orchestrator mode)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples::
+
   redi run data.csv                      # Auto-detect and run full pipeline
   redi run data.csv --domain hpc         # Specify domain
   redi run data.csv -o ./processed       # Custom output directory
   redi run data.csv --stages ingest,preprocess  # Run specific stages
   redi run "data_*.nc"                   # Process multiple files (glob)
 
-Download examples (climate domain):
+Download examples (climate domain)::
+
   redi run --download --source esgf --variable tas --model TaiESM1
   redi run --download --source cds --variable 2m_temperature --year 2020
         """
@@ -2745,7 +2749,8 @@ Download examples (climate domain):
         help='Observe existing workflows (analyze mode)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples::
+
   redi analyze --workflow Snakefile
   redi analyze --workflow pipeline.nf --type nextflow
   redi analyze --workflow Snakefile --watch
@@ -2779,7 +2784,8 @@ Examples:
         help='Analyze unknown datasets and propose pipelines',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples::
+
   redi discover /path/to/data/
   redi discover dataset.csv -o ./analysis
   redi discover /data --no-interactive
@@ -2804,7 +2810,8 @@ Examples:
         help='Validate REDI output against ground truth',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples::
+
   redi validate output/usa_0_data_5c79b84 -c examples/nasa_power_validate.yaml
   redi validate output/usa_0_data_5c79b84 --ground-truth /path/to/truth.pt
   redi validate output/usa_0_data_5c79b84 -c config.yaml --aidrin
