@@ -24,23 +24,38 @@ def generate_provenance_artifacts(output_dir: Path, flowcept_ref: Any = None) ->
         raise FileNotFoundError(f"Flowcept JSONL not found after move: {buffer_dst}")
 
     card_path = output_dir / "PROVENANCE_CARD.md"
+    pdf_path = output_dir / "PROVENANCE_REPORT.pdf"
     report = generate_report(
         report_type="provenance_card",
         format="markdown",
         output_path=str(card_path),
         input_jsonl_path=str(buffer_dst),
     )
+    pdf_file = None
+    pdf_error = None
+    try:
+        generate_report(
+            report_type="provenance_report",
+            format="pdf",
+            output_path=str(pdf_path),
+            input_jsonl_path=str(buffer_dst),
+        )
+        pdf_file = str(pdf_path)
+    except ModuleNotFoundError as exc:
+        pdf_error = str(exc)
     stats = {
         "parsed_lines": report.get("total_records"),
         "tasks": report.get("total_tasks"),
         "skipped_lines": report.get("skipped_lines", 0),
         "output": report.get("output", str(card_path)),
         "flowcept_report": report,
+        "pdf_error": pdf_error,
     }
 
     return {
         "buffer_file": str(buffer_dst) if buffer_dst.exists() else None,
         "card_file": str(card_path),
+        "pdf_file": pdf_file,
         "stats": stats,
     }
 
@@ -79,7 +94,7 @@ def finalize_provenance_for_context(
         if not isinstance(saved_files, list):
             saved_files = []
             ctx.metadata["saved_files"] = saved_files
-        for key in ("buffer_file", "card_file"):
+        for key in ("buffer_file", "card_file", "pdf_file"):
             value = result.get(key)
             if value and value not in saved_files:
                 saved_files.append(value)
@@ -123,6 +138,7 @@ def render_provenance_summary(
     file_names = {Path(str(sf)).name for sf in saved_files}
     has_provenance = "PROVENANCE_CARD.md" in file_names
     has_buffer = "flowcept_buffer.jsonl" in file_names
+    has_pdf = "PROVENANCE_REPORT.pdf" in file_names
 
     if not has_provenance:
         return False
@@ -136,6 +152,8 @@ def render_provenance_summary(
     if style == "simple":
         printer("Provenance Card:")
         printer("  Saved: PROVENANCE_CARD.md")
+        if has_pdf:
+            printer("  Saved: PROVENANCE_REPORT.pdf")
         if has_buffer:
             printer("  Saved: flowcept_buffer.jsonl")
         return True
@@ -153,6 +171,8 @@ def render_provenance_summary(
         printer("\n▸ Provenance Card")
 
     printer(f"    📋 {bold}PROVENANCE_CARD.md{end} {dim}(saved){end}")
+    if has_pdf:
+        printer(f"    📋 {bold}PROVENANCE_REPORT.pdf{end} {dim}(saved){end}")
     if has_buffer:
         printer(f"    📋 {bold}flowcept_buffer.jsonl{end} {dim}(saved){end}")
     return True

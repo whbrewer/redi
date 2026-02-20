@@ -61,7 +61,7 @@ geospatial = [
 
 # Provenance capture package
 flowcept = [
-    "flowcept",
+    "flowcept[report_pdf]",
 ]
 
 # Output format dependencies

@@ -212,8 +212,6 @@ class PipelineStep:
             flowcept_task = None
             flowcept_task_ended = False
             metadata_snapshot_before: Dict[str, Any] = {}
-            input_files: List[str] = []
-            state_before: Dict[str, Any] = {}
             try:
                 if (
                     ctx.with_flowcept
@@ -224,60 +222,48 @@ class PipelineStep:
 
                     input_files = [str(p) for p in (ctx.input_paths or [ctx.input_path])]
                     input_files = list(dict.fromkeys(input_files))
-                    metadata_snapshot = _safe_json_value(ctx.metadata)
-                    if not isinstance(metadata_snapshot, dict):
-                        metadata_snapshot = {}
-                    metadata_snapshot_before = dict(metadata_snapshot)
+
+                    metadata_before = ctx.metadata
                     state_before = _snapshot_dataset_state(ctx)
 
                     # Input-related fields move under "used".
-                    used_dict = {
-                        "input_files": input_files,
-                        "output_dir": str(ctx.output_dir),
-                        "num_input_files": metadata_snapshot.pop("num_input_files", len(input_files)),
-                    }
-                    for key in ("file_size_bytes",): #
-                        value = metadata_snapshot.pop(key, None)
-                        if value is not None:
-                            used_dict[key] = value
+                    used_dict = {}
+                    metadata_before.copy()
+
                     # Keep columns/dtypes in custom metadata, not in used/generated state.
-                    for key in ("columns", "dtypes"):
+                    for key in ("columns", "dtypes", "file_size_bytes"):
                         value = state_before.pop(key, None)
                         if value is not None:
-                            metadata_snapshot[key] = value
+                            metadata_before[key] = value
+
                     used_dict.update(state_before)
 
-                    custom_metadata = {
-                        "current_stage": ctx.current_stage.value,
-                        "completed_stages": [s.value for s in ctx.completed_stages],
-                        "metadata": _clean_metadata_for_provenance(metadata_snapshot),
-                    }
-
                     flowcept_task = FlowceptTask(
+                        tags=[ctx.current_stage.value],
                         activity_id=self.__class__.__name__,
                         used=used_dict,
-                        custom_metadata=custom_metadata,
                     )
 
                 next_ctx = execute(self, ctx)
 
                 if flowcept_task:
-                    after_metadata = _safe_json_value(next_ctx.metadata)
-                    if not isinstance(after_metadata, dict):
-                        after_metadata = {}
+
+                    metadata_after = next_ctx.metadata
                     state_after = _snapshot_dataset_state(next_ctx)
+
                     for key in ("columns", "dtypes"):
                         value = state_after.pop(key, None)
                         if value is not None:
-                            after_metadata[key] = value
-                    state_after["current_stage"] = next_ctx.current_stage.value
-                    custom_metadata_after = {
+                            metadata_after[key] = value
+
+                    custom_metadata = {
+                        "before": metadata_before,
+                        "after": metadata_after,
                         "completed_stages": [s.value for s in next_ctx.completed_stages],
-                        "metadata": _clean_metadata_for_provenance(after_metadata),
                     }
                     flowcept_task.end(
                         generated=state_after,
-                        custom_metadata=custom_metadata_after,
+                        custom_metadata=custom_metadata,
                     )
                     flowcept_task_ended = True
 
@@ -288,18 +274,9 @@ class PipelineStep:
                         from flowcept.commons.vocabulary import Status
 
                         error_state = _snapshot_dataset_state(ctx)
-                        error_metadata = _clean_metadata_for_provenance(metadata_snapshot_before)
-                        for key in ("columns", "dtypes"):
-                            value = error_state.pop(key, None)
-                            if value is not None:
-                                error_metadata[key] = value
                         flowcept_task.end(
                             generated=error_state,
-                            custom_metadata={
-                                "current_stage": ctx.current_stage.value,
-                                "completed_stages": [s.value for s in ctx.completed_stages],
-                                "metadata": error_metadata,
-                            },
+                            custom_metadata=metadata_before,
                             status=Status.ERROR,
                             stderr=traceback.format_exc(),
                         )
