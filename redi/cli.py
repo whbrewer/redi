@@ -735,7 +735,12 @@ def run_pipeline(
             print_section("Output Files")
             for f in ctx.metadata["saved_files"]:
                 fpath = Path(f)
-                if fpath.name in {"flowcept_buffer.jsonl", "PROVENANCE_CARD.md", "provenance_card.md"}:
+                if fpath.name in {
+                    "flowcept_buffer.jsonl",
+                    "PROVENANCE_CARD.md",
+                    "provenance_card.md",
+                    "PROVENANCE_REPORT.pdf",
+                }:
                     continue
                 if fpath.exists():
                     fsize = fpath.stat().st_size
@@ -931,6 +936,13 @@ def run_pipeline(
 
         if ctx.metadata.get("saved_files"):
             for f in ctx.metadata["saved_files"]:
+                if Path(f).name in {
+                    "flowcept_buffer.jsonl",
+                    "PROVENANCE_CARD.md",
+                    "provenance_card.md",
+                    "PROVENANCE_REPORT.pdf",
+                }:
+                    continue
                 print(f"  Output: {f}")
 
     elif style == "json":

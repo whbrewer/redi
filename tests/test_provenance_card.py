@@ -75,3 +75,19 @@ def test_generate_provenance_card_keeps_workflow_name_when_present(temp_dir, mon
 
     assert "# Workflow Provenance Card: redi-run" in content
     assert "- **Workflow Name:** `redi-run`" in content
+
+def test_link_datacard_to_provenance_inserts_under_section(temp_dir):
+    from redi.provenance_card import link_datacard_to_provenance
+
+    datacard = temp_dir / "DATA_CARD.md"
+    datacard.write_text(
+        "# Data Card\n\n## 1. Summary\ntext\n\n## 2. Provenance\n\n## 3. Notes\n",
+        encoding="utf-8",
+    )
+
+    changed = link_datacard_to_provenance(datacard)
+    content = datacard.read_text(encoding="utf-8")
+
+    assert changed is True
+    assert "## 2. Provenance\n\n- [Data Transformation Pipeline Provenance Card](PROVENANCE_CARD.md)" in content
+    assert "## Provenance" not in content

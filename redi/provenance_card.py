@@ -61,7 +61,7 @@ def generate_provenance_artifacts(output_dir: Path, flowcept_ref: Any = None) ->
 
 
 def link_datacard_to_provenance(datacard_path: Path, provenance_filename: str = "PROVENANCE_CARD.md") -> bool:
-    """Append provenance link to DATA_CARD.md if missing."""
+    """Insert provenance link into DATA_CARD.md under '## 2. Provenance' if missing."""
     if not datacard_path.exists():
         return False
 
@@ -69,11 +69,28 @@ def link_datacard_to_provenance(datacard_path: Path, provenance_filename: str = 
     if "Data Transformation Pipeline Provenance Card" in content:
         return False
 
-    link_block = (
-        "\n## Provenance\n"
-        f"- [Data Transformation Pipeline Provenance Card]({provenance_filename})\n"
-    )
-    datacard_path.write_text(content.rstrip() + "\n" + link_block, encoding="utf-8")
+    link_line = f"- [Data Transformation Pipeline Provenance Card]({provenance_filename})"
+    section_header = "## 2. Provenance"
+    if section_header in content:
+        lines = content.splitlines()
+        updated_lines = []
+        inserted = False
+        for i, line in enumerate(lines):
+            updated_lines.append(line)
+            if line.strip() == section_header and not inserted:
+                # Insert after the section header and optional blank line.
+                j = i + 1
+                while j < len(lines) and lines[j].strip() == "":
+                    updated_lines.append(lines[j])
+                    j += 1
+                updated_lines.append(link_line)
+                inserted = True
+        if inserted:
+            datacard_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+            return True
+
+    # Fallback: append without creating an extra trailing provenance section.
+    datacard_path.write_text(content.rstrip() + "\n" + link_line + "\n", encoding="utf-8")
     return True
 
 

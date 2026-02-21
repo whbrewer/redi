@@ -211,17 +211,13 @@ class PipelineStep:
         def wrapped_execute(self, ctx: PipelineContext) -> PipelineContext:
             flowcept_task = None
             flowcept_task_ended = False
-            metadata_snapshot_before: Dict[str, Any] = {}
             try:
                 if (
-                    ctx.with_flowcept
-                    and ctx.flowcept is not None
-                    and getattr(ctx.flowcept, "is_started", False)
+                        ctx.with_flowcept
+                        and ctx.flowcept is not None
+                        and getattr(ctx.flowcept, "is_started", False)
                 ):
                     from flowcept.instrumentation.task_capture import FlowceptTask
-
-                    input_files = [str(p) for p in (ctx.input_paths or [ctx.input_path])]
-                    input_files = list(dict.fromkeys(input_files))
 
                     metadata_before = ctx.metadata
                     state_before = _snapshot_dataset_state(ctx)
