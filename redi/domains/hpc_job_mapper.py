@@ -381,15 +381,19 @@ class FieldDeriver:
             start_col = mapped["start_time"]
             end_col = mapped["end_time"]
             derived_col = "_derived_expected_run_time"
-            start_num = pd.to_numeric(df[start_col], errors="coerce")
-            end_num = pd.to_numeric(df[end_col], errors="coerce")
-            if start_num.notna().any() and end_num.notna().any():
-                # Epoch-like numeric timestamps (common in scheduler logs).
-                df[derived_col] = end_num - start_num
+            if pd.api.types.is_datetime64_any_dtype(df[start_col]) and pd.api.types.is_datetime64_any_dtype(df[end_col]):
+                # Already datetime — subtract directly in seconds.
+                df[derived_col] = (df[end_col] - df[start_col]).dt.total_seconds()
             else:
-                start = pd.to_datetime(df[start_col], errors="coerce")
-                end = pd.to_datetime(df[end_col], errors="coerce")
-                df[derived_col] = (end - start).dt.total_seconds()
+                start_num = pd.to_numeric(df[start_col], errors="coerce")
+                end_num = pd.to_numeric(df[end_col], errors="coerce")
+                if start_num.notna().any() and end_num.notna().any():
+                    # Epoch-like numeric timestamps (common in scheduler logs).
+                    df[derived_col] = end_num - start_num
+                else:
+                    start = pd.to_datetime(df[start_col], errors="coerce")
+                    end = pd.to_datetime(df[end_col], errors="coerce")
+                    df[derived_col] = (end - start).dt.total_seconds()
             mapped["expected_run_time"] = derived_col
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
