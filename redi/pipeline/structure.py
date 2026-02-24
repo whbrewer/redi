@@ -34,6 +34,10 @@ class ToNumPyArrays(PipelineStep):
         self.target_column = target_column
         self.feature_columns = feature_columns
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd

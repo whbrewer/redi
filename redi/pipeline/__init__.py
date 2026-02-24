@@ -507,7 +507,7 @@ def __getattr__(name):
         return getattr(ingest, name)
     elif name in ('NormalizeArray', 'ComputeArrayStats', 'HandleMissingValues',
                   'RemoveDuplicates', 'ValidateDataTypes', 'HandleOutliers',
-                  'AnonymizePII', 'RegridClimate', 'get_preprocess_steps'):
+                  'AnonymizePII', 'get_preprocess_steps'):
         from . import preprocess
         return getattr(preprocess, name)
     elif name in ('TrainValTestSplit', 'ShardData', 'SaveNPZ', 'SaveHDF5',

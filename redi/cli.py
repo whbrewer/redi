@@ -551,9 +551,9 @@ def run_pipeline(
             step_time = time.time() - step_start
             if style == "rich":
                 if verbose:
-                    print(f"     {Colors.DIM}↳ skipped (validation failed){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    print(f"     {Colors.DIM}↳ skipped (not applicable){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                 else:
-                    print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (validation) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (not applicable) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
             elif style == "simple":
                 print(f"  [SKIP] {step.name}")
             step_results.append(("skipped", step.name, "", step_time))
