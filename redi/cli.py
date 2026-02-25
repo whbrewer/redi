@@ -2945,7 +2945,7 @@ def _handle_run_command(args):
     # CLI arguments override YAML config
     if args.domain:
         config['domain'] = args.domain
-    if args.output != './output':
+    if args.output is not None:
         config['output_dir'] = args.output
     if args.format != 'npz':
         config['output_format'] = args.format
