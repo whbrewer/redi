@@ -160,7 +160,8 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadFusionHDF5(), LoadFusionCSV()]
+    from ..pipeline.ingest import LoadADIOS
+    return [DetectFormat(), LoadFusionHDF5(), LoadFusionCSV(), LoadADIOS()]
 
 
 def get_preprocess_steps():
@@ -186,14 +187,14 @@ def get_preprocess_steps():
                 if not isinstance(ctx.data, dict):
                     return ctx
 
-                # Find time arrays
+                # Find time arrays (1-D or higher; skip scalars)
                 time_arrays = {}
                 for key, arr in ctx.data.items():
-                    if "time" in key.lower():
+                    if "time" in key.lower() and isinstance(arr, np.ndarray) and arr.ndim >= 1:
                         time_arrays[key] = arr
 
                 if not time_arrays:
-                    logger.warning("No time arrays found for alignment")
+                    logger.debug("No 1-D+ time arrays found for alignment, skipping")
                     return ctx
 
                 # Create common timebase

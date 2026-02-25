@@ -68,6 +68,54 @@ class TrainValTestSplit(PipelineStep):
                 ctx.add_error("Expected numpy array or dict with 'X' key for splitting")
                 return ctx
 
+            if X is None and isinstance(ctx.data, dict):
+                # Named-variable dict (e.g., ADIOS2, NPZ multi-array): split each 1-D+
+                # array along axis 0 and pass scalars through unchanged.
+                splittable = {k: v for k, v in ctx.data.items()
+                              if isinstance(v, np.ndarray) and v.ndim >= 1}
+                if not splittable:
+                    logger.info("No splittable arrays in data dict, skipping split")
+                    return ctx
+
+                n_samples = len(next(iter(splittable.values())))
+                logger.debug(f"     Named-variable dict: splitting {len(splittable)} arrays "
+                             f"along axis 0, n={n_samples}")
+
+                indices = np.arange(n_samples)
+                if self.shuffle:
+                    np.random.seed(self.random_seed)
+                    np.random.shuffle(indices)
+
+                train_end = int(n_samples * self.train_ratio)
+                val_end = train_end + int(n_samples * self.val_ratio)
+                train_idx = indices[:train_end]
+                val_idx = indices[train_end:val_end]
+                test_idx = indices[val_end:]
+
+                splits: Dict[str, Dict] = {"train": {}, "val": {}, "test": {}}
+                for k, v in ctx.data.items():
+                    if isinstance(v, np.ndarray) and v.ndim >= 1 and len(v) == n_samples:
+                        splits["train"][k] = v[train_idx]
+                        splits["val"][k]   = v[val_idx]
+                        splits["test"][k]  = v[test_idx]
+                    else:
+                        # Scalars or arrays with a different leading dimension: broadcast
+                        for split in splits.values():
+                            split[k] = v
+
+                ctx.data = splits
+                ctx.metadata["split"] = {
+                    "train_size": len(train_idx),
+                    "val_size": len(val_idx),
+                    "test_size": len(test_idx),
+                    "ratios": {"train": self.train_ratio, "val": self.val_ratio, "test": self.test_ratio},
+                    "shuffle": self.shuffle,
+                    "random_seed": self.random_seed,
+                }
+                logger.info(f"Split {len(splittable)} arrays: "
+                            f"train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
+                return ctx
+
             if X is None:
                 ctx.add_error("No data to split")
                 return ctx
@@ -286,6 +334,7 @@ class SaveHDF5(PipelineStep):
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import h5py
+            import numpy as np
 
             output_dir = ctx.output_dir
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -314,8 +363,11 @@ class SaveHDF5(PipelineStep):
                                         shard_grp.create_dataset(k, data=v, compression=self.compression)
                                 logger.debug(f"       {len(value)} shards saved")
                             elif hasattr(value, '__array__'):
-                                grp.create_dataset(key, data=value, compression=self.compression)
-                                logger.debug(f"       {key}: shape {value.shape}")
+                                arr = np.asarray(value)
+                                # Scalar (0-d) arrays can't use chunk/filter options
+                                kw = {} if arr.ndim == 0 else {"compression": self.compression}
+                                grp.create_dataset(key, data=arr, **kw)
+                                logger.debug(f"       {key}: shape {arr.shape}")
 
             file_size = file_path.stat().st_size
             size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"

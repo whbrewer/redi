@@ -1,0 +1,109 @@
+# REDI Fusion Pipeline — XGC KSTAR Simulation
+#
+# Data: XGC (X-point Gyrokinetic Code) particle-in-cell simulation output
+#       from the KSTAR (Korea Superconducting Tokamak Advanced Research) device.
+# Format: ADIOS2 BP5 directory (xgc.3d.NNNNN.bp, xgc.f3d.NNNNN.bp)
+# Source: /opt/drai/xgc-fusion-data/KSTART/
+#
+# Each BP file is a single time step snapshot containing:
+#   - 3D electrostatic/electromagnetic fields on an unstructured poloidal mesh
+#   - nphi=32 toroidal planes, nnode=45291 poloidal mesh nodes
+#   - Electron/ion densities, temperatures, parallel electric field, B-field perturbations
+#
+# Usage:
+#   redi run xgc.3d.00090.bp -c xgc_kstar.yaml
+#   redi run -c xgc_kstar.yaml          # uses input_path below
+
+domain: fusion
+input_path: "/opt/drai/xgc-fusion-data/KSTART/xgc.3d.00090.bp"
+output_dir: ./output/xgc_kstar
+output_format: hdf5   # hdf5 or npz; hdf5 preferred for array data
+
+# ── Variables ─────────────────────────────────────────────────────────────────
+#
+# XGC 3D field variables (all loaded by default).
+# Uncomment 'select' to restrict to a subset.
+#
+#   Electrostatic:  dpot, phi, phi_left, phi_right, pot0, pot0m
+#   Electron fields: eden, epara, epsi, etheta, e_marker_den,
+#                    e_mean_weight, e_weight_variance
+#   Ion fields:      iden, iphi, i_marker_den, i_mean_weight, i_weight_variance
+#   B-field pert.:   dBphi, dBpsi, dBtheta
+#   Geometry/misc:   nnode, nphi, nwall, node_to_wall, sheath_nphi, shpot, time
+
+variables:
+  select: null    # null = all variables
+
+# ── Normalization ──────────────────────────────────────────────────────────────
+normalize:
+  enabled: true
+  method: zscore  # zscore or minmax; applied per variable
+
+# ── Train/val/test split ───────────────────────────────────────────────────────
+#
+# For a single-snapshot file this splits the nnode dimension (mesh nodes).
+# For multi-snapshot runs (glob pattern), splits across time steps.
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  shuffle: true
+  random_seed: 42
+
+# ── Fusion-specific settings ───────────────────────────────────────────────────
+fusion:
+  device: KSTAR                 # Tokamak device name
+  code: XGC                     # Simulation code
+  data_type: 3d_fields          # 3d_fields | diagnostics | disruption
+
+  # Mesh geometry (from xgc.3d file scalars)
+  mesh:
+    nphi: 32                    # Number of toroidal planes
+    nnode: 45291                # Number of poloidal mesh nodes
+
+  # Signal alignment — used when processing multi-signal time-series data
+  # (applies to diagnostics / disruption cases, not 3D field snapshots)
+  align:
+    target_dt: 0.001            # Common timebase resolution (seconds)
+    method: linear              # Interpolation method: linear, nearest
+
+  # Disruption prediction labeling
+  # (applies when data_type is 'disruption' or 'diagnostics')
+  disruption:
+    warning_time: 0.1           # Seconds before disruption to label as warning
+    sequence_length: 100        # Time steps per input sequence
+    prediction_horizon: 10      # Steps ahead to predict
+
+# ── Multiple time steps ────────────────────────────────────────────────────────
+#
+# To process a sequence of XGC snapshots use a glob pattern:
+#
+#   input_path: "/opt/drai/xgc-fusion-data/KSTART/xgc.3d.*.bp"
+#
+# REDI will load each BP directory as a separate time step and
+# concatenate along the step dimension.
+
+# ── Disruption prediction (alternative config) ─────────────────────────────────
+#
+# For tokamak diagnostic time-series (CSV or HDF5 with named signals),
+# set data_type: disruption and point to the diagnostic data:
+#
+#   input_path: "/path/to/d3d_disruption_db.csv"
+#   fusion:
+#     data_type: disruption
+#     disruption:
+#       warning_time: 0.15
+#       sequence_length: 200
+#       prediction_horizon: 20
+#
+# The pipeline will then:
+#   1. Detect shot/pulse boundaries (HandleShotBoundaries)
+#   2. Align multi-diagnostic signals to a common timebase (AlignSignals)
+#   3. Engineer derived plasma features: beta_N proxy, Greenwald fraction,
+#      d/dt of ip, ne, te, etc. (EngineerPlasmaFeatures)
+#   4. Create disruption warning labels t_warn seconds before disruption
+#      (LabelDisruptions)
+#   5. Slide a window of sequence_length over each shot, producing
+#      (N_sequences, sequence_length, N_features) arrays (CreateSequences)
