@@ -377,7 +377,20 @@ class FieldDeriver:
         conf = dict(mapping.confidence)
 
         # expected_run_time ← end_time - start_time
-        if "expected_run_time" not in mapped and "start_time" in mapped and "end_time" in mapped:
+        # Also override if an existing mapping has epoch-like values (> 1e8 s ≈ 3 years),
+        # which indicates a fuzzy match landed on a raw timestamp column (e.g. ctime in PBS).
+        _should_derive_ert = "expected_run_time" not in mapped
+        if not _should_derive_ert and "expected_run_time" in mapped:
+            _ert_col = mapped["expected_run_time"]
+            if _ert_col in df.columns:
+                _ert_vals = pd.to_numeric(df[_ert_col], errors="coerce").dropna()
+                if not _ert_vals.empty and _ert_vals.median() > 1e8:
+                    _should_derive_ert = True
+                    logger.info(
+                        f"expected_run_time mapping '{_ert_col}' has epoch-like values "
+                        f"(median={_ert_vals.median():.2e}); re-deriving from end_time - start_time"
+                    )
+        if _should_derive_ert and "start_time" in mapped and "end_time" in mapped:
             start_col = mapped["start_time"]
             end_col = mapped["end_time"]
             derived_col = "_derived_expected_run_time"

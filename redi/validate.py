@@ -186,12 +186,25 @@ def _raps_jobs_to_matrix(jobs_array: np.ndarray) -> np.ndarray:
     rows = []
     for job in jobs:
         row = []
+        # Pre-extract start_time for time_limit normalization below.
+        try:
+            _start = float(job.get("start_time", 0) or 0)
+        except (TypeError, ValueError):
+            _start = 0.0
         for field in _RAPS_SCALAR_FIELDS:
             val = job.get(field, 0)
             try:
-                row.append(float(val) if val is not None else 0.0)
+                fval = float(val) if val is not None else 0.0
             except (TypeError, ValueError):
-                row.append(0.0)
+                fval = 0.0
+            # time_limit: some RAPS snapshots (e.g. Philly run-parts) store the
+            # absolute-epoch end time here instead of a duration.  Detect by
+            # checking whether the value exceeds a plausible job duration
+            # threshold (> 1e8 s ≈ 3 years) and, if so, subtract start_time to
+            # recover the relative duration.
+            if field == "time_limit" and fval > 1e8 and _start > 0:
+                fval = fval - _start
+            row.append(fval)
         # Derived duration fields (reference-frame independent)
         try:
             wait = float(job.get("start_time", 0)) - float(job.get("submit_time", 0))
