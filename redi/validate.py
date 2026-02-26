@@ -399,6 +399,39 @@ _RAPS_STAT_FIELDS = [
 ]
 
 
+def _get_job_field_value(job: dict, field: str) -> float:
+    """Extract a single scalar value from a RAPS job dict, with epoch normalization.
+
+    Handles derived fields (wait_time, run_time) and normalizes time_limit when
+    it looks like an absolute epoch timestamp (> 1e8 s ≈ 3 years) by subtracting
+    start_time to recover the relative duration.
+    """
+    if field == "wait_time":
+        try:
+            return float(job.get("start_time", 0) or 0) - float(job.get("submit_time", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    if field == "run_time":
+        try:
+            return float(job.get("end_time", 0) or 0) - float(job.get("start_time", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    v = job.get(field, None)
+    try:
+        fval = float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    # time_limit: some snapshots store absolute end-time epoch; recover duration.
+    if field == "time_limit" and fval > 1e8:
+        try:
+            start = float(job.get("start_time", 0) or 0)
+            if start > 0:
+                fval = fval - start
+        except (TypeError, ValueError):
+            pass
+    return fval
+
+
 def raps_field_stats(
     redi_path: str,
     gt_path: str,
@@ -419,18 +452,10 @@ def raps_field_stats(
     if not shared:
         return None
 
-    def _get(job, field):
-        if field == "wait_time":
-            return float(job.get("start_time", 0)) - float(job.get("submit_time", 0))
-        if field == "run_time":
-            return float(job.get("end_time", 0)) - float(job.get("start_time", 0))
-        v = job.get(field, None)
-        return float(v) if v is not None else 0.0
-
     results = []
     for field in _RAPS_STAT_FIELDS:
-        redi_vals = np.array([_get(redi_jobs[jid], field) for jid in shared], dtype=np.float32)
-        gt_vals   = np.array([_get(gt_jobs[jid],   field) for jid in shared], dtype=np.float32)
+        redi_vals = np.array([_get_job_field_value(redi_jobs[jid], field) for jid in shared], dtype=np.float32)
+        gt_vals   = np.array([_get_job_field_value(gt_jobs[jid],   field) for jid in shared], dtype=np.float32)
         mae = float(np.mean(np.abs(redi_vals - gt_vals)))
         results.append({
             "field":    field,
@@ -446,6 +471,67 @@ def raps_field_stats(
             "match":     mae == 0.0,
         })
     return results
+
+
+def raps_aligned_similarity(
+    redi_path: str,
+    gt_path: str,
+) -> Optional[dict]:
+    """Compute similarity metrics using ID-aligned job comparison for RAPS NPZ files.
+
+    Aligns jobs by their 'id' field (intersection of job IDs present in both files),
+    then computes MAE, RMSE, and correlation across all aligned field values.
+
+    Returns a dict with keys: method, shared_jobs, mae, rmse, corr, kl, field_mae.
+    Returns None if either file is not RAPS NPZ format or there are no shared job IDs.
+    """
+    redi_jobs = _load_raps_jobs_dict(Path(redi_path))
+    gt_jobs   = _load_raps_jobs_dict(Path(gt_path))
+    if redi_jobs is None or gt_jobs is None:
+        return None
+
+    def _sort_key(x: str):
+        try:
+            return (0, int(x))
+        except (ValueError, TypeError):
+            return (1, x)
+
+    shared = sorted(set(redi_jobs) & set(gt_jobs), key=_sort_key)
+    if not shared:
+        return None
+
+    all_redi: List[float] = []
+    all_gt:   List[float] = []
+    field_mae: dict = {}
+
+    for field in _RAPS_STAT_FIELDS:
+        redi_vals = np.array(
+            [_get_job_field_value(redi_jobs[jid], field) for jid in shared], dtype=np.float32
+        )
+        gt_vals = np.array(
+            [_get_job_field_value(gt_jobs[jid], field) for jid in shared], dtype=np.float32
+        )
+        field_mae[field] = float(np.mean(np.abs(redi_vals - gt_vals)))
+        all_redi.extend(redi_vals.tolist())
+        all_gt.extend(gt_vals.tolist())
+
+    a = np.array(all_redi, dtype=np.float32)
+    b = np.array(all_gt,   dtype=np.float32)
+    diff = a - b
+    mae  = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    corr = float(np.corrcoef(a, b)[0, 1]) if a.size > 1 else float("nan")
+    kl   = compute_kl_divergence(a, b, bins=50)
+
+    return {
+        "method":      "id_aligned",
+        "shared_jobs": len(shared),
+        "mae":         mae,
+        "rmse":        rmse,
+        "corr":        corr,
+        "kl":          kl,
+        "field_mae":   field_mae,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -910,10 +996,19 @@ def run_validation(
     redi_stats = compute_metrics(redi_data) if metrics_cfg.get("basic_stats", True) else {}
     gt_stats = compute_metrics(gt_data) if metrics_cfg.get("basic_stats", True) else {}
 
-    # Compute similarity
+    # Compute similarity — prefer ID-aligned comparison for RAPS NPZ files
     similarity = {}
     if metrics_cfg.get("similarity", True):
-        similarity = compute_similarity_metrics(redi_data.ravel(), gt_data.ravel())
+        aligned_sim = raps_aligned_similarity(redi_dir, ground_truth_path)
+        if aligned_sim is not None:
+            similarity = aligned_sim
+            logger.info(
+                "ID-aligned similarity over %d shared jobs: MAE=%.4f corr=%.4f",
+                aligned_sim["shared_jobs"], aligned_sim["mae"], aligned_sim["corr"],
+            )
+        else:
+            similarity = compute_similarity_metrics(redi_data.ravel(), gt_data.ravel())
+            similarity["method"] = "matrix"
 
     # Per-feature similarity
     per_feature_results = None

@@ -17,6 +17,7 @@ output_dir: ./output/fugaku_raps
 raps_jobs:
   enabled: true
   system_name: fugaku
+  trace_quanta: 10
 
   column_overrides:
     # Fugaku's abbreviated field names → RAPS canonical fields

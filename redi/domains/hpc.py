@@ -1106,7 +1106,8 @@ def _get_date_filter_step():
 
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
-                      jobprofile_path=None, topology=None, priority_policy=None):
+                      jobprofile_path=None, topology=None, priority_policy=None,
+                      id_strip_suffix=False):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -1119,6 +1120,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         topology: System topology dict (sc_shape, blades_per_chassis, nodes_per_blade)
         priority_policy: Named priority policy to apply when priority is absent from
             the source data. Supported: "frontier" (aging boost by node count).
+        id_strip_suffix: If True, strip the dot-suffix from the job id field
+            (e.g. "1242841.aurora" → "1242841") to match RAPS GT id format.
     """
     from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
 
@@ -1131,7 +1134,7 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
                       topology=topology, system_name=system_name,
-                      priority_policy=priority_policy),
+                      priority_policy=priority_policy, id_strip_suffix=id_strip_suffix),
         SaveJobDicts(output_format=output_format, system_name=system_name),
     ]
     return ingest + jobprofile + preprocess + raps_steps

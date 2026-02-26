@@ -702,7 +702,8 @@ class JobDictBuilder:
                  jobprofile_df: Optional[pd.DataFrame] = None,
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
-                 priority_policy: Optional[str] = None):
+                 priority_policy: Optional[str] = None,
+                 id_strip_suffix: bool = False):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
@@ -711,6 +712,7 @@ class JobDictBuilder:
         self.system_name = system_name
         self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
         self._priority_fn = _PRIORITY_POLICIES.get(priority_policy) if priority_policy else None
+        self.id_strip_suffix = id_strip_suffix
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -912,6 +914,9 @@ class JobDictBuilder:
                 if isinstance(value, list):
                     value = list(value)
 
+            # Strip dot-suffix from id field when requested (e.g. "1242841.aurora" → "1242841")
+            if canon == "id" and self.id_strip_suffix and isinstance(value, str) and "." in value:
+                value = value.rsplit(".", 1)[0]
             job[canon] = value
 
         # Apply priority policy when the source data has no priority column
@@ -1538,13 +1543,15 @@ class BuildJobDicts(PipelineStep):
                  trace_quanta: Optional[int] = None,
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
-                 priority_policy: Optional[str] = None):
+                 priority_policy: Optional[str] = None,
+                 id_strip_suffix: bool = False):
         super().__init__()
         self.power_config = power_config
         self.trace_quanta = trace_quanta
         self.topology = topology
         self.system_name = system_name
         self.priority_policy = priority_policy
+        self.id_strip_suffix = id_strip_suffix
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1566,6 +1573,7 @@ class BuildJobDicts(PipelineStep):
             topology=self.topology,
             system_name=self.system_name,
             priority_policy=self.priority_policy,
+            id_strip_suffix=self.id_strip_suffix,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 

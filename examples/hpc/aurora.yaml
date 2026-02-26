@@ -13,10 +13,14 @@ raps_jobs:
   enabled: true
   system_name: aurora
 
+  # COBALT_JOBID is always 0 in this dataset; use JOB_NAME (e.g. "1242841.aurora")
+  # and strip the ".aurora" suffix so IDs match RAPS GT format ("1242841").
+  id_strip_suffix: true
+
   column_overrides:
     # Aurora uses COBALT scheduler, not SLURM — different naming conventions
-    COBALT_JOBID: id
-    JOB_NAME: name
+    # JOB_NAME used for id (suffix stripped to match RAPS GT) and name (full value)
+    JOB_NAME: id
     USERNAME_GENID: account
     NODES_USED: nodes_required
     QUEUED_TIMESTAMP: submit_time
