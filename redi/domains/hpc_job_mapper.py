@@ -411,6 +411,24 @@ class FieldDeriver:
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
 
+        # time_limit ← clean up SLURM UINT32_MAX sentinel (4294967295 = unlimited).
+        # sacct stores "no limit" as 2^32-1; treat those as 0 (RAPS default for unlimited).
+        _UINT32_MAX = 4294967295
+        if "time_limit" in mapped:
+            _tl_col = mapped["time_limit"]
+            if _tl_col in df.columns:
+                _tl_vals = pd.to_numeric(df[_tl_col], errors="coerce")
+                _n_sentinel = (_tl_vals == _UINT32_MAX).sum()
+                if _n_sentinel > 0:
+                    derived_col = "_derived_time_limit"
+                    df[derived_col] = _tl_vals.where(_tl_vals != _UINT32_MAX, other=0.0)
+                    mapped["time_limit"] = derived_col
+                    conf["time_limit"] = 0.9
+                    logger.info(
+                        f"time_limit column '{_tl_col}' has {_n_sentinel} UINT32_MAX sentinel "
+                        f"values (SLURM 'unlimited'); replaced with 0"
+                    )
+
         # name ← uuid4[:6] (matches RAPS convention)
         if "name" not in mapped:
             derived_col = "_derived_name"

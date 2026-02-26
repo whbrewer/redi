@@ -328,6 +328,8 @@ _RAPS_SAMPLE_FIELDS = _RAPS_SCALAR_FIELDS + ["submit_time", "start_time", "end_t
 
 def _load_raps_jobs_dict(path: Path) -> Optional[Dict[str, dict]]:
     """Load a RAPS NPZ file and return {job_id: job_dict}, or None if not RAPS format."""
+    if path.is_dir():
+        path = path / "raps_jobs.npz"
     if path.suffix.lower() != ".npz":
         return None
     _install_raps_stub()
