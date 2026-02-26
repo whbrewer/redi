@@ -327,25 +327,49 @@ _RAPS_SAMPLE_FIELDS = _RAPS_SCALAR_FIELDS + ["submit_time", "start_time", "end_t
 
 
 def _load_raps_jobs_dict(path: Path) -> Optional[Dict[str, dict]]:
-    """Load a RAPS NPZ file and return {job_id: job_dict}, or None if not RAPS format."""
-    if path.is_dir():
-        path = path / "raps_jobs.npz"
-    if path.suffix.lower() != ".npz":
-        return None
+    """Load a RAPS NPZ file (or directory of NPZ files) and return {job_id: job_dict}.
+
+    When *path* is a directory, all *.npz files in that directory are loaded and
+    merged by job ID (later files override earlier ones for duplicate IDs).  This
+    handles multi-partition ground-truth directories such as Philly (2-gpu.npz /
+    8-gpu.npz) and MIT Supercloud (part-cpu.npz / part-gpu.npz).
+
+    Returns None if no RAPS-format NPZ is found or all files are empty.
+    """
     _install_raps_stub()
-    try:
-        data = np.load(path, allow_pickle=True)
-    except Exception:
-        return None
-    if "jobs" not in data.keys():
-        return None
-    try:
-        jobs = data["jobs"]
-        if jobs.ndim != 1 or len(jobs) == 0 or not isinstance(jobs[0], dict):
+
+    def _load_one(p: Path) -> Optional[Dict[str, dict]]:
+        if p.suffix.lower() != ".npz":
             return None
-        return {str(j.get("id", i)): j for i, j in enumerate(jobs)}
-    except Exception:
-        return None
+        try:
+            data = np.load(p, allow_pickle=True)
+        except Exception:
+            return None
+        if "jobs" not in data.keys():
+            return None
+        try:
+            jobs = data["jobs"]
+            if jobs.ndim != 1 or len(jobs) == 0 or not isinstance(jobs[0], dict):
+                return None
+            return {str(j.get("id", i)): j for i, j in enumerate(jobs)}
+        except Exception:
+            return None
+
+    if path.is_dir():
+        # Load all NPZ files in the directory and merge by job ID.
+        npz_files = sorted(path.glob("*.npz"))
+        if not npz_files:
+            return None
+        merged: Dict[str, dict] = {}
+        found_any = False
+        for npz in npz_files:
+            d = _load_one(npz)
+            if d:
+                merged.update(d)
+                found_any = True
+        return merged if found_any else None
+
+    return _load_one(path)
 
 
 def raps_sample_comparison(
@@ -429,6 +453,13 @@ def _get_job_field_value(job: dict, field: str) -> float:
             start = float(job.get("start_time", 0) or 0)
             if start > 0:
                 fval = fval - start
+        except (TypeError, ValueError):
+            pass
+    # time_limit=0 means it was not available in the source data (e.g. Philly).
+    # Fall back to expected_run_time so both sides compare the same quantity.
+    if field == "time_limit" and fval == 0.0:
+        try:
+            fval = float(job.get("expected_run_time", 0) or 0)
         except (TypeError, ValueError):
             pass
     return fval
@@ -550,6 +581,14 @@ def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Ground truth file not found: {path}")
+
+    # Directory: merge all NPZ files (handles multi-partition GT like Philly/MIT)
+    if path.is_dir():
+        npz_files = sorted(path.glob("*.npz"))
+        if not npz_files:
+            raise ValueError(f"No .npz files found in directory: {path}")
+        arrays = [_load_npz_with_raps_fallback(p) for p in npz_files]
+        return np.concatenate(arrays, axis=0).astype(np.float32, copy=False)
 
     if fmt is None:
         fmt = path.suffix.lower().lstrip(".")

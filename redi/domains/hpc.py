@@ -1076,8 +1076,19 @@ def _get_date_filter_step():
                 return ctx
 
             df = ctx.data
-            # Prefer canonical submit_time; fall back to start_time
-            col = next((c for c in ("submit_time", "start_time") if c in df.columns), None)
+            # Prefer canonical submit_time; fall back to start_time.
+            # AutoMapColumns stores mapping in metadata but does NOT rename columns,
+            # so we also check the mapping to find the original column name.
+            col_mapping = ctx.metadata.get("raps_column_mapping", {})  # canonical → orig
+            col = None
+            for canonical in ("submit_time", "start_time"):
+                if canonical in df.columns:
+                    col = canonical
+                    break
+                orig = col_mapping.get(canonical)
+                if orig and orig in df.columns:
+                    col = orig
+                    break
             if col is None:
                 logger.warning("Date filter: no submit_time/start_time column found")
                 return ctx
@@ -1107,7 +1118,7 @@ def _get_date_filter_step():
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
                       jobprofile_path=None, topology=None, priority_policy=None,
-                      id_strip_suffix=False):
+                      id_strip_suffix=False, column_scalars=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -1122,14 +1133,17 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
             the source data. Supported: "frontier" (aging boost by node count).
         id_strip_suffix: If True, strip the dot-suffix from the job id field
             (e.g. "1242841.aurora" → "1242841") to match RAPS GT id format.
+        column_scalars: Dict mapping original_column_name → float multiplier for
+            unit conversions (e.g. {"timelimit": 60} for SLURM minutes → seconds).
     """
-    from .hpc_job_mapper import AutoMapColumns, DeriveJobFields, BuildJobDicts, SaveJobDicts
+    from .hpc_job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
 
     ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
     jobprofile = _get_load_jobprofile_step(jobprofile_path)  # optional jobprofile load
     preprocess = _get_raps_preprocess_steps()             # RAPS-specific cleaning
     raps_steps = [
         AutoMapColumns(overrides=column_overrides),      # map columns → canonical fields
+        ApplyColumnScalars(scalars=column_scalars),      # unit conversions (no-op if None)
         _get_date_filter_step(),                         # filter by start/end (no-op if unset)
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,

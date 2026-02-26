@@ -1484,6 +1484,40 @@ def _local_job_dict(**kwargs) -> Dict[str, Any]:
 # 7. Pipeline Steps
 # ---------------------------------------------------------------------------
 
+class ApplyColumnScalars(PipelineStep):
+    """Multiply specific source columns by a constant scalar (for unit conversion).
+
+    ``scalars`` is a dict mapping *original column name* → multiplier float.
+    Applied after AutoMapColumns so the mapping is already stored in metadata,
+    but the source columns haven't been renamed yet.
+
+    Example YAML::
+
+        column_scalars:
+          timelimit: 60   # SLURM timelimit is in minutes → convert to seconds
+    """
+
+    name = "apply_column_scalars"
+    stage = PipelineStage.INGEST
+    description = "Apply unit-conversion scalars to columns"
+
+    def __init__(self, scalars: Optional[Dict[str, float]] = None):
+        super().__init__()
+        self.scalars = scalars or {}
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        if not self.scalars or not isinstance(ctx.data, pd.DataFrame):
+            return ctx
+        df = ctx.data
+        for col, factor in self.scalars.items():
+            if col in df.columns:
+                df = df.copy() if df is ctx.data else df  # avoid in-place on original
+                df[col] = pd.to_numeric(df[col], errors="coerce") * factor
+                logger.info(f"Applied scalar ×{factor} to column '{col}'")
+        ctx.data = df
+        return ctx
+
+
 class AutoMapColumns(PipelineStep):
     """Map arbitrary HPC telemetry columns to canonical RAPS Job field names."""
 

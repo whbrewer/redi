@@ -23,6 +23,10 @@ end: "2021-05-22T00:00"
 raps_jobs:
   enabled: true
   system_name: mit_supercloud
+  trace_quanta: 10          # part-cpu trace resolution (part-gpu uses 20, but CPU partition dominates)
+
+  column_scalars:
+    timelimit: 60           # SLURM stores timelimit in minutes; convert to seconds
 
   column_overrides:
     # MIT Supercloud SLURM log field names

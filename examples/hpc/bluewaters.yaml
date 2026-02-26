@@ -17,6 +17,7 @@ end: "2017-03-29T00:00"
 raps_jobs:
   enabled: true
   system_name: bluewaters
+  trace_quanta: 60          # BlueWaters Cray system sampler trace resolution
 
   column_overrides:
     # PBS/Torque field names → RAPS canonical fields
