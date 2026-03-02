@@ -576,12 +576,13 @@ def raps_aligned_similarity(
 # Load ground truth
 # ---------------------------------------------------------------------------
 
-def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
+def load_ground_truth(path: str, fmt: Optional[str] = None, variable: Optional[str] = None) -> np.ndarray:
     """Load ground truth data from a file.
 
-    Supported formats: .pt, .npz, .npy, .csv, .parquet.
+    Supported formats: .pt, .npz, .npy, .csv, .parquet, .nc (NetCDF).
     Auto-detects format from extension if *fmt* is None.
-    Returns a numpy array.
+    *variable*: for NetCDF files, the variable name to extract (default: first data variable).
+    Returns a float32 numpy array.
     """
     path = Path(path)
     if not path.exists():
@@ -635,6 +636,28 @@ def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
         import pandas as pd
         df = pd.read_parquet(path)
         return df.select_dtypes(include=[np.number]).values.astype(np.float32)
+
+    elif fmt in ("nc", "netcdf", "nc4"):
+        try:
+            import xarray as xr
+        except ImportError as exc:
+            raise ImportError("xarray is required to load NetCDF ground truth files") from exc
+        ds = xr.open_dataset(path)
+        data_vars = [v for v in ds.data_vars]
+        if not data_vars:
+            raise ValueError(f"No data variables found in NetCDF file: {path}")
+        if variable is not None:
+            if variable not in ds:
+                raise ValueError(f"Variable '{variable}' not found in {path}. Available: {data_vars}")
+            arr = ds[variable].values
+        else:
+            if len(data_vars) > 1:
+                logger.warning("Multiple variables in %s: %s. Using first: %s. "
+                               "Pass --gt-variable to select a specific one.",
+                               path.name, data_vars, data_vars[0])
+            arr = ds[data_vars[0]].values
+        ds.close()
+        return arr.astype(np.float32, copy=False)
 
     else:
         raise ValueError(f"Unsupported ground truth format: {fmt}")
@@ -1008,7 +1031,8 @@ def run_validation(
     redi_shape = redi_data.shape
 
     logger.info("Loading ground truth from %s", ground_truth_path)
-    gt_data = load_ground_truth(ground_truth_path, fmt=gt_format)
+    gt_variable = config.get("gt_variable")
+    gt_data = load_ground_truth(ground_truth_path, fmt=gt_format, variable=gt_variable)
     gt_shape = gt_data.shape
 
     logger.info("REDI shape: %s, Ground truth shape: %s", redi_shape, gt_shape)

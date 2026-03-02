@@ -2864,6 +2864,8 @@ Examples:
     validate_parser.add_argument("input", help="Path to REDI output directory or a direct output file (npz, npy, parquet, csv)")
     validate_parser.add_argument("-g", "--ground-truth", dest="ground_truth",
                                  help="Path to ground truth file (overrides config)")
+    validate_parser.add_argument("--gt-variable", dest="gt_variable",
+                                 help="Variable name to extract from NetCDF ground truth (default: first variable)")
     validate_parser.add_argument("-c", "--config", help="Validation YAML config file")
     validate_parser.add_argument("-o", "--output", help="Output directory for validation report")
     validate_parser.add_argument("--aidrin", action="store_true",
@@ -3209,9 +3211,11 @@ def _handle_validate_command(args):
             print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
             sys.exit(1)
 
-    # CLI --ground-truth overrides config
+    # CLI --ground-truth and --gt-variable override config
     if args.ground_truth:
         config["ground_truth"] = args.ground_truth
+    if args.gt_variable:
+        config["gt_variable"] = args.gt_variable
 
     # Must have ground truth from config or CLI
     if not config.get("ground_truth"):

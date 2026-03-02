@@ -1,0 +1,37 @@
+# REDI config for TaiESM1 2m_temperature climate validation
+# Compares REDI output against ClimaX-preprocessed ground truth
+#
+# Ground truth (already exists):
+#   /opt/drai/datasets/CMIP6/TaiESM1/1.40625deg/2m_temperature/
+#   Method: xESMF bilinear, periodic, CMIP bounds dropped, tas -> t2m
+
+domain: climate
+input_path: /opt/drai/CMIP6/TaiESM1/raw/2m_temperature/2m_temperature_186001010600-187001010000_raw.nc
+output_dir: ./output/taiesm1_2m_temp_redi
+output_format: npz
+
+# Match ClimaX regrid settings exactly
+regrid:
+  enabled: true
+  target_resolution: 1.40625   # degrees, matches ClimaX default
+  method: bilinear              # matches ClimaX regrid.py
+  climax_grid: true             # use ClimaX lat convention: arange(-90+ddeg/2, 90, ddeg)
+
+# Disable normalization — comparing raw regridded values so that
+# differences reflect only regridding (not normalization strategy)
+normalize:
+  enabled: false
+
+# Rename tas -> t2m to match ClimaX variable naming
+variables:
+  select: null
+  rename:
+    tas: t2m
+
+# No train/val/test split — process all timesteps for comparison
+split:
+  enabled: false
+
+# No ClimaX sharding output needed — just NPZ for validate
+climax_output:
+  enabled: false
