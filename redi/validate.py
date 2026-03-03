@@ -90,21 +90,35 @@ def compute_kl_divergence(a_values, b_values, bins: int = 50, eps: float = 1e-8)
 # Similarity metrics
 # ---------------------------------------------------------------------------
 
+_MAX_SIMILARITY_ELEMENTS = 10_000_000  # sample threshold to avoid OOM on large tensors
+
+
 def compute_similarity_metrics(a_values, b_values) -> dict:
     """Return similarity metrics between two equal-length numeric sequences.
 
     Returns dict with keys: mae, rmse, corr, kl.
+    For arrays larger than _MAX_SIMILARITY_ELEMENTS, a random sample is used.
     """
     a = to_numpy(a_values).ravel()
     b = to_numpy(b_values).ravel()
     if a.shape != b.shape:
         raise ValueError(f"Shape mismatch for similarity metrics: {a.shape} vs {b.shape}")
+    sampled = False
+    if a.size > _MAX_SIMILARITY_ELEMENTS:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(a.size, size=_MAX_SIMILARITY_ELEMENTS, replace=False)
+        a = a[idx]
+        b = b[idx]
+        sampled = True
     diff = a - b
     mae = float(np.mean(np.abs(diff)))
     rmse = float(np.sqrt(np.mean(diff ** 2)))
     corr = float(np.corrcoef(a, b)[0, 1]) if a.size > 1 else float("nan")
     kl = compute_kl_divergence(a, b, bins=50)
-    return {"mae": mae, "rmse": rmse, "corr": corr, "kl": kl}
+    result = {"mae": mae, "rmse": rmse, "corr": corr, "kl": kl}
+    if sampled:
+        result["sampled_n"] = _MAX_SIMILARITY_ELEMENTS
+    return result
 
 
 # ---------------------------------------------------------------------------

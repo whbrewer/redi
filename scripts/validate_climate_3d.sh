@@ -56,7 +56,7 @@ for NAME in temperature u_component_of_wind v_component_of_wind; do
       --input_fns "$RAW" \
       --output_dir "$GT_DIR" \
       --ddeg_out 1.40625 \
-      --reuse_weights 1 \
+      --reuse_weights 0 \
       --cmip 1 \
       --rename "$CMIP" "$ERA"
     # regrid.py writes a .nc.tmp file; rename it
