@@ -310,6 +310,13 @@ def get_preprocess_steps():
                     'lon': (['lon'], lon_out),
                 })
 
+                # Drop CMIP bounds variables — xesmf cannot regrid them and
+                # ClimaX regrid.py also drops these (--cmip flag).
+                bounds_vars = [v for v in list(ds.data_vars) + list(ds.coords)
+                               if v.endswith('_bnds') or v.endswith('_bounds')]
+                if bounds_vars:
+                    ds = ds.drop_vars(bounds_vars, errors='ignore')
+
                 # Rename coordinates if needed
                 if lat_name != 'lat' or lon_name != 'lon':
                     ds = ds.rename({lat_name: 'lat', lon_name: 'lon'})
