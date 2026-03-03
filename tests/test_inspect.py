@@ -1,17 +1,17 @@
 """
-Unit tests for the REDI analyze module.
+Unit tests for the REDI inspect module.
 """
 
 import pytest
 from pathlib import Path
 
 
-class TestDataAnalyzer:
-    """Tests for DataAnalyzer class."""
+class TestDataInspector:
+    """Tests for DataAnalyzer class (used by redi inspect)."""
 
-    def test_analyze_csv_basic(self, sample_csv):
-        """Test basic CSV analysis."""
-        from redi.analyze import DataAnalyzer
+    def test_inspect_csv_basic(self, sample_csv):
+        """Test basic CSV inspection."""
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(sample_csv))
         data_card = analyzer.analyze()
@@ -22,9 +22,9 @@ class TestDataAnalyzer:
         assert data_card.overview.file_format == ".csv"
         assert "tabular" in data_card.characteristics.data_types
 
-    def test_analyze_csv_features(self, sample_csv):
+    def test_inspect_csv_features(self, sample_csv):
         """Test that CSV features are correctly identified."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(sample_csv))
         data_card = analyzer.analyze()
@@ -34,9 +34,9 @@ class TestDataAnalyzer:
         assert "temperature" in feature_names
         assert "category" in feature_names
 
-    def test_analyze_csv_types(self, sample_csv):
+    def test_inspect_csv_types(self, sample_csv):
         """Test that column types are correctly inferred."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(sample_csv))
         data_card = analyzer.analyze()
@@ -46,9 +46,9 @@ class TestDataAnalyzer:
         assert features["temperature"] == "float"
         assert features["category"] == "string"
 
-    def test_analyze_json(self, sample_json):
-        """Test JSON file analysis."""
-        from redi.analyze import DataAnalyzer
+    def test_inspect_json(self, sample_json):
+        """Test JSON file inspection."""
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(sample_json))
         data_card = analyzer.analyze()
@@ -57,9 +57,9 @@ class TestDataAnalyzer:
         assert data_card.overview.num_features == 4
         assert "json" in data_card.characteristics.data_types
 
-    def test_analyze_nonexistent_file(self, temp_dir):
-        """Test that analyzing nonexistent file raises error."""
-        from redi.analyze import DataAnalyzer
+    def test_inspect_nonexistent_file(self, temp_dir):
+        """Test that inspecting nonexistent file raises error."""
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(temp_dir / "nonexistent.csv"))
         with pytest.raises(FileNotFoundError):
@@ -67,7 +67,7 @@ class TestDataAnalyzer:
 
     def test_readiness_level_raw(self, temp_dir):
         """Test that minimal data gets RAW readiness level."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         csv_path = temp_dir / "minimal.csv"
         csv_path.write_text("a,b\n1,2\n")
@@ -80,7 +80,7 @@ class TestDataAnalyzer:
 
     def test_readiness_level_labeled(self, temp_dir):
         """Test that data with label column gets LABELED level."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         csv_path = temp_dir / "labeled.csv"
         csv_path.write_text("feature1,feature2,label\n1,2,A\n3,4,B\n")
@@ -97,7 +97,7 @@ class TestDomainDetection:
 
     def test_detect_hpc_domain(self, sample_hpc_csv):
         """Test HPC domain detection from column names."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(sample_hpc_csv))
         data_card = analyzer.analyze()
@@ -106,7 +106,7 @@ class TestDomainDetection:
 
     def test_detect_materials_domain(self, sample_materials_csv):
         """Test materials domain detection."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         analyzer = DataAnalyzer(str(sample_materials_csv))
         data_card = analyzer.analyze()
@@ -115,7 +115,7 @@ class TestDomainDetection:
 
     def test_detect_climate_keywords(self, temp_dir):
         """Test climate domain detection from column names."""
-        from redi.analyze import DataAnalyzer
+        from redi.assess import DataAnalyzer
 
         csv_path = temp_dir / "climate.csv"
         csv_path.write_text("lat,lon,temperature,precipitation\n0,0,25,10\n")
@@ -131,7 +131,7 @@ class TestPipelineRecommender:
 
     def test_recommendations_hpc(self, sample_hpc_csv):
         """Test that HPC data gets appropriate recommendations."""
-        from redi.analyze import analyze_dataset, PipelineRecommender
+        from redi.assess import analyze_dataset, PipelineRecommender
 
         data_card = analyze_dataset(str(sample_hpc_csv))
         recommender = PipelineRecommender(data_card)
@@ -142,7 +142,7 @@ class TestPipelineRecommender:
 
     def test_recommendations_materials(self, sample_materials_csv):
         """Test that materials data gets appropriate recommendations."""
-        from redi.analyze import analyze_dataset, PipelineRecommender
+        from redi.assess import analyze_dataset, PipelineRecommender
 
         data_card = analyze_dataset(str(sample_materials_csv))
         recommender = PipelineRecommender(data_card)
@@ -155,9 +155,9 @@ class TestPipelineRecommender:
 class TestConvenienceFunctions:
     """Tests for module-level convenience functions."""
 
-    def test_analyze_dataset(self, sample_csv):
+    def test_inspect_dataset(self, sample_csv):
         """Test analyze_dataset function."""
-        from redi.analyze import analyze_dataset
+        from redi.assess import analyze_dataset
 
         data_card = analyze_dataset(str(sample_csv))
         assert data_card is not None
@@ -165,7 +165,7 @@ class TestConvenienceFunctions:
 
     def test_get_recommendations(self, sample_csv):
         """Test get_recommendations function."""
-        from redi.analyze import get_recommendations
+        from redi.assess import get_recommendations
 
         recs = get_recommendations(str(sample_csv))
         assert "domain" in recs
@@ -174,7 +174,7 @@ class TestConvenienceFunctions:
 
     def test_generate_report(self, sample_csv):
         """Test generate_report function."""
-        from redi.analyze import generate_report
+        from redi.assess import generate_report
 
         report = generate_report(str(sample_csv))
         assert "Data Card" in report

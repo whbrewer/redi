@@ -1,5 +1,5 @@
 """
-Snakemake log parser for REDI observability.
+Snakemake log parser for REDI inspect.
 
 Parses Snakemake execution logs to extract:
 - Rule execution details (inputs, outputs, timing)

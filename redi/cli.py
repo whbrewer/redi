@@ -4,7 +4,7 @@ REDI CLI - Readiness Engine for Data Integration
 
 Unified entry point for running REDI in different modes:
   - run (orchestrator): Execute the full pipeline on data
-  - analyze: Observe and report on existing workflows
+  - inspect: Inspect data files or observe existing workflows (alias: analyze)
   - discover: Analyze unknown datasets and propose pipelines
 """
 
@@ -1087,7 +1087,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
 
     # Parse Snakemake logs for execution history
     log_report = None
-    from .observability import find_latest_log, parse_snakemake_log
+    from .inspect import find_latest_log, parse_snakemake_log
 
     latest_log = find_latest_log(workflow_path.parent)
     if latest_log:
@@ -1119,7 +1119,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
         if style == "rich":
             print_section("Scanning Data Files")
 
-        from .observability import capture_snapshot, check_snapshot, detect_transformations
+        from .inspect import capture_snapshot, check_snapshot, detect_transformations
 
         # Find all data files
         data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr'}
@@ -1212,7 +1212,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     # Check for data quality issues in transformation report
     transform_issues = []
     if transform_report:
-        from .observability import check_transformation_report
+        from .inspect import check_transformation_report
         transform_issues = check_transformation_report(transform_report)
 
         if transform_issues:
@@ -1228,7 +1228,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
     # Generate improvement suggestions
-    from .observability import generate_suggestions, format_suggestions_cli
+    from .inspect import generate_suggestions, format_suggestions_cli
     all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
     workflow_info = {'rules': rules, 'stage_mapping': stage_mapping}
     suggestions = generate_suggestions(
@@ -1567,7 +1567,7 @@ def _generate_analyze_datacard(workflow_path: Path, rules: list, stage_mapping: 
 
     # Suggestions section
     if suggestions:
-        from .observability import format_suggestions_markdown
+        from .inspect import format_suggestions_markdown
         lines.append("")
         lines.append(format_suggestions_markdown(suggestions))
 
@@ -1668,7 +1668,7 @@ def _analyze_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
         print_section("Parsing Nextflow Workflow")
 
     # Parse the Nextflow file to extract processes and workflows
-    from .observability import (
+    from .inspect import (
         parse_nextflow_file,
         map_processes_to_stages as nf_map_processes_to_stages,
         find_nextflow_logs,
@@ -1837,7 +1837,7 @@ def _analyze_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
     # Generate improvement suggestions
-    from .observability import generate_suggestions, format_suggestions_cli
+    from .inspect import generate_suggestions, format_suggestions_cli
     all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
     # Convert processes to rules-like format for workflow_info
     rules_like = [{'name': p.name, 'description': p.description} for p in parse_result.processes]
@@ -2123,7 +2123,7 @@ def _generate_nextflow_datacard(workflow_path: Path, parse_result, stage_mapping
 
     # Suggestions section
     if suggestions:
-        from .observability import format_suggestions_markdown
+        from .inspect import format_suggestions_markdown
         lines.append(format_suggestions_markdown(suggestions))
 
     lines.extend([
@@ -2691,20 +2691,21 @@ def main():
         epilog="""
 Commands:
   run        Run the pipeline (orchestrator mode) - default
-  analyze    Observe existing workflows
+  inspect    Inspect data files or observe existing workflows
   discover   Analyze unknown datasets and propose pipelines
   validate   Validate REDI output against ground truth
 
 Examples:
   redi run data.csv                     # Run pipeline on data
   redi data.csv                         # Same as above (run is default)
-  redi analyze --workflow Snakefile     # Observe Snakemake workflow
+  redi inspect data.csv                 # Inspect a data file
+  redi inspect Snakefile                # Observe Snakemake workflow
   redi discover /path/to/data/          # Analyze unknown dataset
   redi validate output/ -c config.yaml  # Validate against ground truth
 
 For command-specific help:
   redi run --help
-  redi analyze --help
+  redi inspect --help
   redi discover --help
   redi validate --help
         """
@@ -2788,38 +2789,40 @@ Download examples (climate domain):
 
 
     # =========================================================================
-    # redi analyze
+    # redi inspect (formerly analyze)
     # =========================================================================
-    analyze_parser = subparsers.add_parser(
-        'analyze',
-        help='Observe existing workflows (analyze mode)',
+    inspect_parser = subparsers.add_parser(
+        'inspect',
+        help='Inspect data files or observe existing workflows',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  redi analyze --workflow Snakefile
-  redi analyze --workflow pipeline.nf --type nextflow
-  redi analyze --workflow Snakefile --watch
-  redi analyze -c analyze_config.yaml
+  redi inspect data.csv                       # Inspect a data file
+  redi inspect /path/to/data.nc               # Inspect a NetCDF file
+  redi inspect Snakefile                      # Auto-detect and observe workflow
+  redi inspect pipeline.nf --type nextflow    # Observe Nextflow workflow
+  redi inspect --workflow Snakefile --watch   # Watch for changes
+  redi inspect -c inspect_config.yaml
         """
     )
-    analyze_parser.add_argument("workflow", nargs="?",
-                                help="Path to workflow file (Snakefile, *.nf, etc.)")
-    analyze_parser.add_argument("-w", "--workflow",
+    inspect_parser.add_argument("input", nargs="?",
+                                help="Path to data file, workflow file, or directory")
+    inspect_parser.add_argument("-w", "--workflow",
                                 dest="workflow_flag",
-                                help="Path to workflow file (Snakefile, *.nf, etc.)")
-    analyze_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
+                                help="Path to workflow file (overrides positional input)")
+    inspect_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
                                 choices=["auto", "snakemake", "nextflow", "bash"],
-                                help="Workflow type (auto-detected if not specified)")
-    analyze_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
-    analyze_parser.add_argument("--unique", action="store_true",
+                                help="Workflow type override (forces workflow mode)")
+    inspect_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
+    inspect_parser.add_argument("--unique", action="store_true",
                                 help="Append timestamp to output dir for unique runs")
-    analyze_parser.add_argument("--data-dir", dest="data_dir",
+    inspect_parser.add_argument("--data-dir", dest="data_dir",
                                 help="Directory containing data files to scan for statistics")
-    analyze_parser.add_argument("--watch", action="store_true",
+    inspect_parser.add_argument("--watch", action="store_true",
                                 help="Watch for changes and re-run")
-    analyze_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+    inspect_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                                 help="Output style")
-    analyze_parser.add_argument("-c", "--config", help="YAML configuration file")
+    inspect_parser.add_argument("-c", "--config", help="YAML configuration file")
 
     # =========================================================================
     # redi discover
@@ -2903,8 +2906,8 @@ Examples:
     # Dispatch to appropriate handler
     if args.command == 'run':
         _handle_run_command(args)
-    elif args.command == 'analyze':
-        _handle_analyze_command(args)
+    elif args.command == 'inspect':
+        _handle_inspect_command(args)
     elif args.command == 'discover':
         _handle_discover_command(args)
     elif args.command == 'validate':
@@ -3075,8 +3078,41 @@ def _handle_run_command(args):
 
 
 
-def _handle_analyze_command(args):
-    """Handle the 'analyze' subcommand."""
+_WORKFLOW_FILENAMES = {'Snakefile', 'Snakefile.smk'}
+_WORKFLOW_EXTENSIONS = {'.smk', '.nf', '.nextflow'}
+
+
+def _is_workflow(path: str, type_hint: str = 'auto') -> bool:
+    """Return True if path should be treated as a workflow file."""
+    if type_hint in ('snakemake', 'nextflow', 'bash'):
+        return True
+    p = Path(path)
+    return p.name in _WORKFLOW_FILENAMES or p.suffix in _WORKFLOW_EXTENSIONS
+
+
+def _run_data_inspect(path: str, output_dir: Optional[str], style: str):
+    """Inspect a data file using DataAnalyzer and print/save the report."""
+    from .assess import generate_report
+
+    try:
+        report = generate_report(path)
+    except Exception as e:
+        print(f"{Colors.RED}Error inspecting {path}: {e}{Colors.END}")
+        sys.exit(1)
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        report_path = out / "inspection_report.md"
+        report_path.write_text(report)
+        print(report)
+        print(f"\n{Colors.GREEN}Report saved to {report_path}{Colors.END}")
+    else:
+        print(report)
+
+
+def _handle_inspect_command(args):
+    """Handle the 'inspect' subcommand."""
     import yaml
 
     config = {}
@@ -3093,48 +3129,50 @@ def _handle_analyze_command(args):
             print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
             sys.exit(1)
 
-    # CLI args override config
-    workflow_file = args.workflow or args.workflow_flag or config.get('workflow')
-    if not workflow_file:
-        print(f"{Colors.RED}Error: workflow file required. Use -w/--workflow or set in config.{Colors.END}")
+    # Resolve path: -w/--workflow wins over positional, config is fallback
+    path = args.workflow_flag or getattr(args, 'input', None) or config.get('workflow') or config.get('input')
+    if not path:
+        print(f"{Colors.RED}Error: input required. Provide a file path or use -w/--workflow.{Colors.END}")
         sys.exit(1)
 
     workflow_type = args.workflow_type if args.workflow_type != 'auto' else config.get('workflow_type', 'auto')
 
-    # Determine output directory
-    # If -o is explicitly set, use it directly (no hash)
-    # Otherwise, generate hash-based output dir
-    if args.output:
-        output_dir = args.output
-    else:
-        base_dir = config.get('output_dir') or './output'
-        output_dir = generate_output_dir(
-            input_paths=[Path(workflow_file)],
-            base_dir=base_dir,
-            unique=getattr(args, 'unique', False),
+    if _is_workflow(path, workflow_type):
+        # Workflow analysis path
+        if args.output:
+            output_dir = args.output
+        else:
+            base_dir = config.get('output_dir') or './output'
+            output_dir = generate_output_dir(
+                input_paths=[Path(path)],
+                base_dir=base_dir,
+                unique=getattr(args, 'unique', False),
+            )
+
+        watch = args.watch or config.get('watch', False)
+        style = args.style if args.style != 'rich' else config.get('style', 'rich')
+        data_dir = args.data_dir or config.get('data_dir')
+
+        from .repro import log_analyze_run
+        log_analyze_run(
+            output_dir=output_dir,
+            workflow_file=path,
+            workflow_type=workflow_type,
         )
 
-    watch = args.watch or config.get('watch', False)
-    style = args.style if args.style != 'rich' else config.get('style', 'rich')
-    data_dir = args.data_dir or config.get('data_dir')
-
-    # Log command for reproducibility
-    from .repro import log_analyze_run
-    log_analyze_run(
-        output_dir=output_dir,
-        workflow_file=workflow_file,
-        workflow_type=workflow_type,
-    )
-
-    run_analyze(
-        workflow_file=workflow_file,
-        workflow_type=workflow_type,
-        output_dir=output_dir,
-        watch=watch,
-        style=style,
-        config=config,
-        data_dir=data_dir,
-    )
+        run_analyze(
+            workflow_file=path,
+            workflow_type=workflow_type,
+            output_dir=output_dir,
+            watch=watch,
+            style=style,
+            config=config,
+            data_dir=data_dir,
+        )
+    else:
+        # Data file / directory inspection
+        style = args.style if args.style != 'rich' else config.get('style', 'rich')
+        _run_data_inspect(path, args.output, style)
 
 
 def _handle_discover_command(args):

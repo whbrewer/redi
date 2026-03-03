@@ -1,5 +1,5 @@
 """
-Data quality checks for REDI observability.
+Data quality checks for REDI inspect.
 
 Detects potential issues in data transformations:
 - Distribution shift

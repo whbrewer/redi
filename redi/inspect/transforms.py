@@ -1,5 +1,5 @@
 """
-Transformation parameter detection for REDI observability.
+Transformation parameter detection for REDI inspect.
 
 Automatically detects and extracts parameters from common ML preprocessing steps:
 - Normalization (mean, std)
