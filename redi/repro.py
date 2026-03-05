@@ -8,6 +8,7 @@ repro.sh script in the output directory for experiment reproducibility.
 import os
 import shlex
 import socket
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,24 @@ except ImportError:
     __version__ = "unknown"
 
 
+def _get_git_commit() -> str:
+    """Get the current git commit hash of the REDI source tree."""
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
 def get_environment_info() -> dict:
     """Gather environment information for reproducibility."""
     return {
@@ -28,6 +47,7 @@ def get_environment_info() -> dict:
         "user": os.environ.get("USER", os.environ.get("USERNAME", "unknown")),
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "redi_version": __version__,
+        "git_commit": _get_git_commit(),
         "cwd": os.getcwd(),
     }
 
@@ -127,6 +147,7 @@ def generate_script_header() -> str:
 #   Date: {env['timestamp']}
 #   CWD:  {env['cwd']}
 #   Python: {env['python_version']}
+#   REDI commit: {env['git_commit']}
 #
 
 set -euo pipefail
