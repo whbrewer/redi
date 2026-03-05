@@ -11,6 +11,7 @@ Operations:
 - Save metadata and data cards
 """
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -439,6 +440,52 @@ class SaveParquet(PipelineStep):
         return ctx
 
 
+class WriteChecksums(PipelineStep):
+    """Write SHA-256 checksums for all saved output files."""
+
+    name = "write_checksums"
+    stage = PipelineStage.OUTPUT
+    description = "Write SHA-256 checksums for output files"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            saved_files = ctx.metadata.get("saved_files", [])
+            if not saved_files:
+                return ctx
+
+            output_dir = ctx.output_dir
+            checksum_file = output_dir / "checksums.sha256"
+
+            lines = []
+            for file_str in saved_files:
+                file_path = Path(file_str)
+                if not file_path.exists():
+                    continue
+                digest = _sha256(file_path)
+                # Relative path so the file is portable within the output dir
+                rel = file_path.relative_to(output_dir)
+                lines.append(f"{digest}  {rel}")
+
+            checksum_file.write_text("\n".join(lines) + "\n")
+            logger.info(f"Wrote checksums to {checksum_file}")
+
+        except Exception as e:
+            ctx.add_error(f"Error writing checksums: {str(e)}")
+        return ctx
+
+
+def _sha256(path: Path, chunk: int = 1 << 20) -> str:
+    """Return the hex SHA-256 digest of a file, reading in chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(chunk)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
 class SaveMetadata(PipelineStep):
     """Save pipeline metadata and data card"""
 
@@ -505,6 +552,7 @@ def get_output_steps(
     elif output_format == "parquet":
         steps.append(SaveParquet())
 
+    steps.append(WriteChecksums())
     steps.append(SaveMetadata())
 
     return steps
