@@ -1137,6 +1137,7 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
             unit conversions (e.g. {"timelimit": 60} for SLURM minutes → seconds).
     """
     from .hpc_job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
+    from ..pipeline.output import WriteChecksums
 
     ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
     jobprofile = _get_load_jobprofile_step(jobprofile_path)  # optional jobprofile load
@@ -1150,6 +1151,7 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
                       topology=topology, system_name=system_name,
                       priority_policy=priority_policy, id_strip_suffix=id_strip_suffix),
         SaveJobDicts(output_format=output_format, system_name=system_name),
+        WriteChecksums(),
     ]
     return ingest + jobprofile + preprocess + raps_steps
 

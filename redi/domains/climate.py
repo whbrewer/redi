@@ -751,7 +751,8 @@ def get_output_steps():
 
             return ctx
 
-    return [TrainValTestSplit(), SaveClimateOutput()]
+    from ..pipeline.output import WriteChecksums
+    return [TrainValTestSplit(), SaveClimateOutput(), WriteChecksums()]
 
 
 def get_full_pipeline():
