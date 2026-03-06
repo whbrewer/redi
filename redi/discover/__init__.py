@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from redi.discover.processors import ProcessorRegistry, FileDiscovery
+from redi.discover.report import render_processing_plan
+
 
 class Colors:
     HEADER = '\033[95m'
@@ -97,6 +100,10 @@ def run_discover(
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
+    # Pull FileDiscovery objects out before JSON serialisation (they are not
+    # plain dicts and are handled separately by render_processing_plan).
+    discoveries: list[FileDiscovery] = inspection.pop("discoveries", [])
+
     report = {
         "input_path": str(path),
         "mode": "discover",
@@ -113,10 +120,18 @@ def run_discover(
     md_path = out_path / "DISCOVERY_REPORT.md"
     md_path.write_text(md_report)
 
+    # Write per-file processing plan
+    report["discoveries"] = discoveries  # restore for return value
+    if discoveries:
+        plan_path = out_path / "processing_plan.md"
+        render_processing_plan(discoveries, plan_path)
+
     if style == "rich":
         _print_section("Output")
         print(f"    📋 {Colors.BOLD}discovery_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
         print(f"    📋 {Colors.BOLD}DISCOVERY_REPORT.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+        if discoveries:
+            print(f"    📋 {Colors.BOLD}processing_plan.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
         print()
 
         if interactive and proposal.get('pipeline_steps'):
@@ -145,6 +160,7 @@ def _inspect_data(path: Path, style: str) -> dict:
         'total_size': 0,
         'formats': set(),
         'sample_data': {},
+        'discoveries': [],
     }
 
     if path.is_file():
@@ -167,7 +183,12 @@ def _inspect_data(path: Path, style: str) -> dict:
     inspection['formats'] = list(inspection['formats'])
     inspection['file_count'] = len(files)
 
-    # Sample first file of each format
+    # Run per-file processor for every file (up to the cap)
+    for f in files[:100]:
+        discovery = ProcessorRegistry.analyze_file(f)
+        inspection['discoveries'].append(discovery)
+
+    # Also sample first file of each format for the existing inference logic
     for fmt in inspection['formats']:
         sample_file = next((f for f in files if f.suffix.lower() == fmt), None)
         if sample_file:

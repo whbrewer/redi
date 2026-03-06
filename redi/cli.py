@@ -2247,10 +2247,11 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
-  run        Run the pipeline (orchestrator mode) - default
-  inspect    Inspect data files or observe existing workflows
-  discover   Analyze unknown datasets and propose pipelines
-  validate   Validate REDI output against ground truth
+
+* ``run`` — Run the pipeline (orchestrator mode) - default
+* ``inspect`` — Inspect data files or observe existing workflows
+* ``discover`` — Analyze unknown datasets and propose pipelines
+* ``validate`` — Validate REDI output against ground truth
 
 Examples::
 
@@ -2393,6 +2394,12 @@ Examples:
         help='Analyze unknown datasets and propose pipelines',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Output files written to the output directory:
+
+- ``discovery_report.json`` -- full inspection/inference/proposal data
+- ``DISCOVERY_REPORT.md`` -- human-readable domain-level summary
+- ``processing_plan.md`` -- per-file discoveries and preprocessing suggestions
+
 Examples::
 
   redi discover /path/to/data/
