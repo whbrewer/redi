@@ -97,9 +97,9 @@ Observing an existing workflow
 
 ::
 
-    redi analyze --workflow Snakefile
-    redi analyze --workflow pipeline.nf --type nextflow
-    redi analyze --workflow Snakefile --watch   # watch for changes
+    redi inspect --workflow Snakefile
+    redi inspect --workflow pipeline.nf --type nextflow
+    redi inspect --workflow Snakefile --watch   # watch for changes
 
 Analyzing an unknown dataset
 ------------------------------

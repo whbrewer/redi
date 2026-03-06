@@ -12,4 +12,7 @@ API Reference
    domains
    downloaders
    dataloaders
-   observability
+   inspect
+   discover
+   provenance_card
+   repro

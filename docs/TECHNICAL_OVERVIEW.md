@@ -4,13 +4,14 @@
 
 REDI (Readiness Engine for Data Integration) is a modular pipeline framework that transforms raw scientific data into AI-ready datasets. It handles the full lifecycle: ingesting heterogeneous formats, cleaning, feature engineering, structuring for ML, and outputting optimized splits. It tracks data maturity across a 5-level readiness taxonomy (RAW → CLEANED → LABELED → FEATURE_ENGINEERED → FULLY_READY).
 
-## Three Operating Modes
+## Four Operating Modes
 
 | Mode | Purpose | Entry Point |
 |---|---|---|
-| **`redi run`** | Execute the full transformation pipeline on data | `cli.py:run_pipeline()` |
-| **`redi analyze`** | Observe existing workflows (Snakemake/Nextflow) and generate Data Cards without modifying anything | `cli.py:run_analyze()` |
-| **`redi discover`** | Analyze unknown datasets, auto-detect domain, and propose a pipeline | `cli.py:run_discover()` |
+| **`redi run`** | Execute the full transformation pipeline on data | `cli.py:_handle_run_command()` |
+| **`redi inspect`** | Observe existing workflows (Snakemake/Nextflow) and generate Data Cards without modifying anything | `cli.py:_handle_inspect_command()` |
+| **`redi discover`** | Analyze unknown datasets, auto-detect domain, and propose a pipeline | `cli.py:_handle_discover_command()` |
+| **`redi validate`** | Compare REDI output against ground-truth data with statistical similarity metrics | `cli.py:_handle_validate_command()` |
 
 ## Architecture
 
@@ -151,8 +152,10 @@ Factory: `get_dataloader(path, format_type="auto")` returns the appropriate load
 | **`datacard.py`** | Data Card data model: `MaturityLevel` enum (1-5), `DataCard` dataclass with 8 sections (overview, provenance, characteristics, sensitive attrs, transformations, annotations, limitations, readiness). Serializes to JSON/Markdown. |
 | **`assess.py`** | `DataAnalyzer` (inspects datasets → Data Cards) and `PipelineRecommender` (suggests processing steps per domain) |
 | **`config.py`** | YAML config loading, deep merge with defaults, validation. Covers regrid, normalize, split, shard, and ClimaX output settings. |
-| **`repro.py`** | Reproducibility: logs every command to `repro.sh` with full environment metadata (host, user, Python version, cwd). |
-| **`observability/`** | `snapshot.py` (execution context capture), `quality.py` (data quality metrics), `suggestions.py` (improvement recommendations), `transforms.py` (transformation tracking), `snakemake_log.py` and `nextflow_parser.py` (workflow parsers for analyze mode) |
+| **`repro.py`** | Reproducibility: logs every command to `repro.sh` with full environment metadata (host, user, Python version, git commit hash, cwd). |
+| **`provenance_card.py`** | Lightweight provenance helpers backed by Flowcept reports. Generates human-readable provenance artifacts from pipeline execution data. |
+| **`inspect/`** | `snapshot.py` (execution context capture), `quality.py` (data quality metrics), `suggestions.py` (improvement recommendations), `transforms.py` (transformation tracking), `snakemake_log.py` and `nextflow_parser.py` (workflow parsers for inspect mode) |
+| **`discover/`** | Three-phase discovery engine: inspect files → infer domain/modality → propose pipeline. Entry point for `redi discover`. |
 
 ## Configuration
 

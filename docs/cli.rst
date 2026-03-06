@@ -1,7 +1,7 @@
 CLI Reference
 =============
 
-REDI exposes four subcommands: ``run``, ``analyze``, ``discover``, and ``validate``.
+REDI exposes four subcommands: ``run``, ``inspect``, ``discover``, and ``validate``.
 The ``run`` subcommand is the default — passing a file directly without a subcommand
 is equivalent to ``redi run <file>``.
 
