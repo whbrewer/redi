@@ -32,6 +32,10 @@ class HandleMissingValues(PipelineStep):
         self.strategy = strategy  # "drop", "fill", "mean", "median", "mode"
         self.fill_value = fill_value
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
@@ -104,6 +108,10 @@ class RemoveDuplicates(PipelineStep):
         self.subset = subset  # Columns to consider for duplicates
         self.keep = keep  # "first", "last", or False
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
@@ -164,6 +172,10 @@ class ValidateDataTypes(PipelineStep):
     def __init__(self, type_mapping: Optional[Dict[str, str]] = None):
         super().__init__()
         self.type_mapping = type_mapping or {}
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
@@ -226,6 +238,10 @@ class HandleOutliers(PipelineStep):
         self.method = method  # "iqr" or "zscore"
         self.threshold = threshold  # IQR multiplier or z-score threshold
         self.action = action  # "clip", "remove", or "flag"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
@@ -303,6 +319,10 @@ class AnonymizePII(PipelineStep):
         self.columns = columns  # Explicit columns, or None for auto-detect
         self.method = method  # "hash", "remove", or "mask"
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
@@ -351,65 +371,6 @@ class AnonymizePII(PipelineStep):
 
         except Exception as e:
             ctx.add_error(f"Error anonymizing PII: {str(e)}")
-        return ctx
-
-
-class RegridClimate(PipelineStep):
-    """Regrid climate data to uniform resolution"""
-
-    name = "regrid_climate"
-    stage = PipelineStage.PREPROCESS
-    description = "Regrid climate data using xESMF"
-
-    def __init__(self, target_resolution: float = 1.0, method: str = "bilinear"):
-        super().__init__()
-        self.target_resolution = target_resolution  # degrees
-        self.method = method  # "bilinear", "conservative", "nearest_s2d"
-
-    def validate(self, ctx: PipelineContext) -> bool:
-        return ctx.domain == "climate" and ctx.metadata.get("file_format") in ["netcdf", "zarr"]
-
-    def execute(self, ctx: PipelineContext) -> PipelineContext:
-        try:
-            import xarray as xr
-            import xesmf as xe
-            import numpy as np
-
-            if not hasattr(ctx.data, 'dims'):  # Not an xarray object
-                return ctx
-
-            ds = ctx.data
-
-            logger.debug(f"     Target resolution: {self.target_resolution}°")
-            logger.debug(f"     Interpolation method: {self.method}")
-            logger.debug(f"     Input dimensions: {dict(ds.dims)}")
-
-            # Create target grid
-            lat_out = np.arange(-90, 90 + self.target_resolution, self.target_resolution)
-            lon_out = np.arange(0, 360, self.target_resolution)
-            ds_out = xr.Dataset({
-                'lat': (['lat'], lat_out),
-                'lon': (['lon'], lon_out),
-            })
-
-            logger.debug(f"     Output grid: {len(lat_out)} lat x {len(lon_out)} lon points")
-
-            # Build regridder
-            logger.debug(f"     Building regridder...")
-            regridder = xe.Regridder(ds, ds_out, self.method)
-            ctx.data = regridder(ds)
-
-            logger.debug(f"     Output dimensions: {dict(ctx.data.dims)}")
-
-            ctx.metadata["regridded"] = {
-                "target_resolution": self.target_resolution,
-                "method": self.method
-            }
-            logger.info(f"Regridded to {self.target_resolution}° resolution")
-        except ImportError:
-            ctx.add_error(missing_dependency_error("xesmf", "climate"))
-        except Exception as e:
-            ctx.add_error(f"Error regridding: {str(e)}")
         return ctx
 
 
@@ -573,9 +534,7 @@ def get_preprocess_steps(
         steps.append(HandleOutliers())
 
     # Domain-specific steps
-    if domain == "climate":
-        steps.append(RegridClimate())
-    elif domain == "life_sciences":
+    if domain == "life_sciences":
         steps.append(AnonymizePII())
 
     return steps

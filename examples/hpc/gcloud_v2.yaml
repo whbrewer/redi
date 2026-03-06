@@ -21,3 +21,4 @@ output_dir: ./output/gcloud_v2_raps
 raps_jobs:
   enabled: true
   system_name: gcloudv2
+  trace_quanta: 15

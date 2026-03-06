@@ -17,16 +17,19 @@ end: "2017-03-29T00:00"
 raps_jobs:
   enabled: true
   system_name: bluewaters
+  trace_quanta: 60          # BlueWaters Cray system sampler trace resolution
 
   column_overrides:
     # PBS/Torque field names → RAPS canonical fields
+    # Note: LoadTorqueData lowercases all keys, so overrides must use lowercase too.
     jobid: id
     user: account
-    "Resource_List.nodect": nodes_required
+    "resource_list.nodect": nodes_required      # was Resource_List.nodect (wrong case)
     qtime: submit_time
     start: start_time
     end: end_time
-    "Resource_List.walltime": time_limit
+    "resource_list.walltime": time_limit        # requested walltime (HH:MM:SS)
     exit_status: end_state
     queue: partition
     exec_host: scheduled_nodes
+    # expected_run_time is auto-derived from end_time - start_time by DeriveJobFields

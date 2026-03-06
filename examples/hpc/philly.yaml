@@ -23,6 +23,7 @@ end: "2017-10-04T00:00"
 raps_jobs:
   enabled: true
   system_name: philly
+  trace_quanta: 60          # Philly CPU/GPU traces are at 60-second intervals
 
   column_overrides:
     # Philly JSON field names → RAPS canonical

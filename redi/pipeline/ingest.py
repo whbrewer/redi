@@ -150,6 +150,14 @@ class DetectFormat(PipelineStep):
 
         return None
 
+    def _detect_adios_format(self, path: Path) -> Optional[str]:
+        """Detect ADIOS2 BP5 directory format (md.idx + data.N layout)."""
+        if not path.is_dir():
+            return None
+        if (path / "md.idx").exists() and (path / "md.0").exists():
+            return "adios"
+        return None
+
     def _detect_sickle_format(self, path: Path) -> Optional[str]:
         """Detect SICKLE turbulence data formats (GESTS or SST-binary)."""
         if not path.is_dir():
@@ -216,11 +224,17 @@ class DetectFormat(PipelineStep):
                         detected_format = gcloud_format
                         logger.debug(f"     Detected Google Cluster v2 format")
                     else:
-                        # Check for SICKLE formats
-                        sickle_format = self._detect_sickle_format(path)
-                        if sickle_format:
-                            detected_format = sickle_format
-                            logger.debug(f"     Detected SICKLE format: {sickle_format}")
+                        # Check for ADIOS2 BP5 directories
+                        adios_format = self._detect_adios_format(path)
+                        if adios_format:
+                            detected_format = adios_format
+                            logger.debug(f"     Detected ADIOS2 BP5 format")
+                        else:
+                            # Check for SICKLE formats
+                            sickle_format = self._detect_sickle_format(path)
+                            if sickle_format:
+                                detected_format = sickle_format
+                                logger.debug(f"     Detected SICKLE format: {sickle_format}")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():
@@ -872,6 +886,82 @@ class LoadSICKLE(PipelineStep):
         return ctx
 
 
+class LoadADIOS(PipelineStep):
+    """Load ADIOS2 BP files (BP4/BP5 format)"""
+
+    name = "load_adios"
+    stage = PipelineStage.INGEST
+    description = "Load ADIOS2 BP data into memory"
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        return ctx.metadata.get("file_format") == "adios"
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import adios2
+
+            path = ctx.input_path
+            logger.debug(f"     Reading ADIOS2 file: {path}")
+
+            with adios2.FileReader(str(path)) as f:
+                available_vars = f.available_variables()
+                available_attrs = f.available_attributes()
+                num_steps = f.num_steps()
+
+                logger.debug(f"     Variables: {len(available_vars)}, "
+                             f"Attributes: {len(available_attrs)}, Steps: {num_steps}")
+
+                # Read all variables
+                data = {}
+                var_shapes = {}
+                var_dtypes = {}
+                for name, info in available_vars.items():
+                    try:
+                        arr = f.read(name)
+                        data[name] = arr
+                        var_shapes[name] = list(arr.shape)
+                        var_dtypes[name] = str(arr.dtype)
+                        logger.debug(f"       {name}: shape={arr.shape}, dtype={arr.dtype}")
+                    except Exception as e:
+                        logger.warning(f"     Could not read variable '{name}': {e}")
+
+                # Read attributes
+                attrs = {}
+                for name in available_attrs:
+                    try:
+                        attrs[name] = f.read_attribute(name)
+                    except Exception:
+                        pass
+
+            ctx.data = data
+
+            ctx.metadata["adios_variables"] = list(data.keys())
+            ctx.metadata["array_shapes"] = var_shapes
+            ctx.metadata["array_dtypes"] = var_dtypes
+            ctx.metadata["num_variables"] = len(data)
+            ctx.metadata["adios_num_steps"] = num_steps
+            if attrs:
+                ctx.metadata["adios_attributes"] = {k: str(v) for k, v in attrs.items()}
+
+            # Convenience: surface scalar metadata fields
+            for scalar_name in ("time", "nphi", "nnode"):
+                if scalar_name in data and data[scalar_name].ndim == 0:
+                    ctx.metadata[f"adios_{scalar_name}"] = data[scalar_name].item()
+
+            total_bytes = sum(v.nbytes for v in data.values() if hasattr(v, "nbytes"))
+            size_str = (f"{total_bytes / (1024*1024):.2f} MB"
+                        if total_bytes >= 1024 * 1024
+                        else f"{total_bytes / 1024:.1f} KB")
+            logger.debug(f"     Total data loaded: {size_str}")
+            logger.info(f"Loaded ADIOS2: {len(data)} variables, {size_str}")
+
+        except ImportError:
+            ctx.add_error(missing_dependency_error("adios2"))
+        except Exception as e:
+            ctx.add_error(f"Failed to load ADIOS2 file: {str(e)}")
+        return ctx
+
+
 class ValidateInput(PipelineStep):
     """Basic input validation"""
 
@@ -955,6 +1045,7 @@ def get_ingest_steps() -> List[PipelineStep]:
         LoadNPZ(),
         LoadManifest(),
         LoadSICKLE(),
+        LoadADIOS(),
         ValidateInput(),
     ]
 

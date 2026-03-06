@@ -90,21 +90,35 @@ def compute_kl_divergence(a_values, b_values, bins: int = 50, eps: float = 1e-8)
 # Similarity metrics
 # ---------------------------------------------------------------------------
 
+_MAX_SIMILARITY_ELEMENTS = 10_000_000  # sample threshold to avoid OOM on large tensors
+
+
 def compute_similarity_metrics(a_values, b_values) -> dict:
     """Return similarity metrics between two equal-length numeric sequences.
 
     Returns dict with keys: mae, rmse, corr, kl.
+    For arrays larger than _MAX_SIMILARITY_ELEMENTS, a random sample is used.
     """
     a = to_numpy(a_values).ravel()
     b = to_numpy(b_values).ravel()
     if a.shape != b.shape:
         raise ValueError(f"Shape mismatch for similarity metrics: {a.shape} vs {b.shape}")
+    sampled = False
+    if a.size > _MAX_SIMILARITY_ELEMENTS:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(a.size, size=_MAX_SIMILARITY_ELEMENTS, replace=False)
+        a = a[idx]
+        b = b[idx]
+        sampled = True
     diff = a - b
     mae = float(np.mean(np.abs(diff)))
     rmse = float(np.sqrt(np.mean(diff ** 2)))
     corr = float(np.corrcoef(a, b)[0, 1]) if a.size > 1 else float("nan")
     kl = compute_kl_divergence(a, b, bins=50)
-    return {"mae": mae, "rmse": rmse, "corr": corr, "kl": kl}
+    result = {"mae": mae, "rmse": rmse, "corr": corr, "kl": kl}
+    if sampled:
+        result["sampled_n"] = _MAX_SIMILARITY_ELEMENTS
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +200,25 @@ def _raps_jobs_to_matrix(jobs_array: np.ndarray) -> np.ndarray:
     rows = []
     for job in jobs:
         row = []
+        # Pre-extract start_time for time_limit normalization below.
+        try:
+            _start = float(job.get("start_time", 0) or 0)
+        except (TypeError, ValueError):
+            _start = 0.0
         for field in _RAPS_SCALAR_FIELDS:
             val = job.get(field, 0)
             try:
-                row.append(float(val) if val is not None else 0.0)
+                fval = float(val) if val is not None else 0.0
             except (TypeError, ValueError):
-                row.append(0.0)
+                fval = 0.0
+            # time_limit: some RAPS snapshots (e.g. Philly run-parts) store the
+            # absolute-epoch end time here instead of a duration.  Detect by
+            # checking whether the value exceeds a plausible job duration
+            # threshold (> 1e8 s ≈ 3 years) and, if so, subtract start_time to
+            # recover the relative duration.
+            if field == "time_limit" and fval > 1e8 and _start > 0:
+                fval = fval - _start
+            row.append(fval)
         # Derived duration fields (reference-frame independent)
         try:
             wait = float(job.get("start_time", 0)) - float(job.get("submit_time", 0))
@@ -314,23 +341,49 @@ _RAPS_SAMPLE_FIELDS = _RAPS_SCALAR_FIELDS + ["submit_time", "start_time", "end_t
 
 
 def _load_raps_jobs_dict(path: Path) -> Optional[Dict[str, dict]]:
-    """Load a RAPS NPZ file and return {job_id: job_dict}, or None if not RAPS format."""
-    if path.suffix.lower() != ".npz":
-        return None
+    """Load a RAPS NPZ file (or directory of NPZ files) and return {job_id: job_dict}.
+
+    When *path* is a directory, all *.npz files in that directory are loaded and
+    merged by job ID (later files override earlier ones for duplicate IDs).  This
+    handles multi-partition ground-truth directories such as Philly (2-gpu.npz /
+    8-gpu.npz) and MIT Supercloud (part-cpu.npz / part-gpu.npz).
+
+    Returns None if no RAPS-format NPZ is found or all files are empty.
+    """
     _install_raps_stub()
-    try:
-        data = np.load(path, allow_pickle=True)
-    except Exception:
-        return None
-    if "jobs" not in data.keys():
-        return None
-    try:
-        jobs = data["jobs"]
-        if jobs.ndim != 1 or len(jobs) == 0 or not isinstance(jobs[0], dict):
+
+    def _load_one(p: Path) -> Optional[Dict[str, dict]]:
+        if p.suffix.lower() != ".npz":
             return None
-        return {str(j.get("id", i)): j for i, j in enumerate(jobs)}
-    except Exception:
-        return None
+        try:
+            data = np.load(p, allow_pickle=True)
+        except Exception:
+            return None
+        if "jobs" not in data.keys():
+            return None
+        try:
+            jobs = data["jobs"]
+            if jobs.ndim != 1 or len(jobs) == 0 or not isinstance(jobs[0], dict):
+                return None
+            return {str(j.get("id", i)): j for i, j in enumerate(jobs)}
+        except Exception:
+            return None
+
+    if path.is_dir():
+        # Load all NPZ files in the directory and merge by job ID.
+        npz_files = sorted(path.glob("*.npz"))
+        if not npz_files:
+            return None
+        merged: Dict[str, dict] = {}
+        found_any = False
+        for npz in npz_files:
+            d = _load_one(npz)
+            if d:
+                merged.update(d)
+                found_any = True
+        return merged if found_any else None
+
+    return _load_one(path)
 
 
 def raps_sample_comparison(
@@ -386,6 +439,51 @@ _RAPS_STAT_FIELDS = [
 ]
 
 
+def _get_job_field_value(job: dict, field: str) -> float:
+    """Extract a single scalar value from a RAPS job dict, with epoch normalization.
+
+    Handles derived fields (wait_time, run_time) and normalizes time_limit when
+    it looks like an absolute epoch timestamp (> 1e8 s ≈ 3 years) by subtracting
+    start_time to recover the relative duration.
+    """
+    if field == "wait_time":
+        try:
+            return float(job.get("start_time", 0) or 0) - float(job.get("submit_time", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    if field == "run_time":
+        try:
+            return float(job.get("end_time", 0) or 0) - float(job.get("start_time", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    v = job.get(field, None)
+    try:
+        fval = float(v) if v is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    # time_limit: some snapshots store absolute end-time epoch; recover duration.
+    if field == "time_limit" and fval > 1e8:
+        try:
+            start = float(job.get("start_time", 0) or 0)
+            if start > 0:
+                fval = fval - start
+        except (TypeError, ValueError):
+            pass
+        # If still > 1e8 after epoch subtraction, it is a sentinel (e.g. SLURM
+        # UINT32_MAX=4294967295 stored in minutes then ×60 by RAPS → 2.58e11).
+        # Treat as "no limit" → 0 so both sides compare the same quantity.
+        if fval > 1e8:
+            fval = 0.0
+    # time_limit=0 means it was not available in the source data (e.g. Philly).
+    # Fall back to expected_run_time so both sides compare the same quantity.
+    if field == "time_limit" and fval == 0.0:
+        try:
+            fval = float(job.get("expected_run_time", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+    return fval
+
+
 def raps_field_stats(
     redi_path: str,
     gt_path: str,
@@ -406,18 +504,10 @@ def raps_field_stats(
     if not shared:
         return None
 
-    def _get(job, field):
-        if field == "wait_time":
-            return float(job.get("start_time", 0)) - float(job.get("submit_time", 0))
-        if field == "run_time":
-            return float(job.get("end_time", 0)) - float(job.get("start_time", 0))
-        v = job.get(field, None)
-        return float(v) if v is not None else 0.0
-
     results = []
     for field in _RAPS_STAT_FIELDS:
-        redi_vals = np.array([_get(redi_jobs[jid], field) for jid in shared], dtype=np.float32)
-        gt_vals   = np.array([_get(gt_jobs[jid],   field) for jid in shared], dtype=np.float32)
+        redi_vals = np.array([_get_job_field_value(redi_jobs[jid], field) for jid in shared], dtype=np.float32)
+        gt_vals   = np.array([_get_job_field_value(gt_jobs[jid],   field) for jid in shared], dtype=np.float32)
         mae = float(np.mean(np.abs(redi_vals - gt_vals)))
         results.append({
             "field":    field,
@@ -435,20 +525,90 @@ def raps_field_stats(
     return results
 
 
+def raps_aligned_similarity(
+    redi_path: str,
+    gt_path: str,
+) -> Optional[dict]:
+    """Compute similarity metrics using ID-aligned job comparison for RAPS NPZ files.
+
+    Aligns jobs by their 'id' field (intersection of job IDs present in both files),
+    then computes MAE, RMSE, and correlation across all aligned field values.
+
+    Returns a dict with keys: method, shared_jobs, mae, rmse, corr, kl, field_mae.
+    Returns None if either file is not RAPS NPZ format or there are no shared job IDs.
+    """
+    redi_jobs = _load_raps_jobs_dict(Path(redi_path))
+    gt_jobs   = _load_raps_jobs_dict(Path(gt_path))
+    if redi_jobs is None or gt_jobs is None:
+        return None
+
+    def _sort_key(x: str):
+        try:
+            return (0, int(x))
+        except (ValueError, TypeError):
+            return (1, x)
+
+    shared = sorted(set(redi_jobs) & set(gt_jobs), key=_sort_key)
+    if not shared:
+        return None
+
+    all_redi: List[float] = []
+    all_gt:   List[float] = []
+    field_mae: dict = {}
+
+    for field in _RAPS_STAT_FIELDS:
+        redi_vals = np.array(
+            [_get_job_field_value(redi_jobs[jid], field) for jid in shared], dtype=np.float32
+        )
+        gt_vals = np.array(
+            [_get_job_field_value(gt_jobs[jid], field) for jid in shared], dtype=np.float32
+        )
+        field_mae[field] = float(np.mean(np.abs(redi_vals - gt_vals)))
+        all_redi.extend(redi_vals.tolist())
+        all_gt.extend(gt_vals.tolist())
+
+    a = np.array(all_redi, dtype=np.float32)
+    b = np.array(all_gt,   dtype=np.float32)
+    diff = a - b
+    mae  = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    corr = float(np.corrcoef(a, b)[0, 1]) if a.size > 1 else float("nan")
+    kl   = compute_kl_divergence(a, b, bins=50)
+
+    return {
+        "method":      "id_aligned",
+        "shared_jobs": len(shared),
+        "mae":         mae,
+        "rmse":        rmse,
+        "corr":        corr,
+        "kl":          kl,
+        "field_mae":   field_mae,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Load ground truth
 # ---------------------------------------------------------------------------
 
-def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
+def load_ground_truth(path: str, fmt: Optional[str] = None, variable: Optional[str] = None) -> np.ndarray:
     """Load ground truth data from a file.
 
-    Supported formats: .pt, .npz, .npy, .csv, .parquet.
+    Supported formats: .pt, .npz, .npy, .csv, .parquet, .nc (NetCDF).
     Auto-detects format from extension if *fmt* is None.
-    Returns a numpy array.
+    *variable*: for NetCDF files, the variable name to extract (default: first data variable).
+    Returns a float32 numpy array.
     """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Ground truth file not found: {path}")
+
+    # Directory: merge all NPZ files (handles multi-partition GT like Philly/MIT)
+    if path.is_dir():
+        npz_files = sorted(path.glob("*.npz"))
+        if not npz_files:
+            raise ValueError(f"No .npz files found in directory: {path}")
+        arrays = [_load_npz_with_raps_fallback(p) for p in npz_files]
+        return np.concatenate(arrays, axis=0).astype(np.float32, copy=False)
 
     if fmt is None:
         fmt = path.suffix.lower().lstrip(".")
@@ -490,6 +650,28 @@ def load_ground_truth(path: str, fmt: Optional[str] = None) -> np.ndarray:
         import pandas as pd
         df = pd.read_parquet(path)
         return df.select_dtypes(include=[np.number]).values.astype(np.float32)
+
+    elif fmt in ("nc", "netcdf", "nc4"):
+        try:
+            import xarray as xr
+        except ImportError as exc:
+            raise ImportError("xarray is required to load NetCDF ground truth files") from exc
+        ds = xr.open_dataset(path)
+        data_vars = [v for v in ds.data_vars]
+        if not data_vars:
+            raise ValueError(f"No data variables found in NetCDF file: {path}")
+        if variable is not None:
+            if variable not in ds:
+                raise ValueError(f"Variable '{variable}' not found in {path}. Available: {data_vars}")
+            arr = ds[variable].values
+        else:
+            if len(data_vars) > 1:
+                logger.warning("Multiple variables in %s: %s. Using first: %s. "
+                               "Pass --gt-variable to select a specific one.",
+                               path.name, data_vars, data_vars[0])
+            arr = ds[data_vars[0]].values
+        ds.close()
+        return arr.astype(np.float32, copy=False)
 
     else:
         raise ValueError(f"Unsupported ground truth format: {fmt}")
@@ -863,7 +1045,8 @@ def run_validation(
     redi_shape = redi_data.shape
 
     logger.info("Loading ground truth from %s", ground_truth_path)
-    gt_data = load_ground_truth(ground_truth_path, fmt=gt_format)
+    gt_variable = config.get("gt_variable")
+    gt_data = load_ground_truth(ground_truth_path, fmt=gt_format, variable=gt_variable)
     gt_shape = gt_data.shape
 
     logger.info("REDI shape: %s, Ground truth shape: %s", redi_shape, gt_shape)
@@ -897,10 +1080,19 @@ def run_validation(
     redi_stats = compute_metrics(redi_data) if metrics_cfg.get("basic_stats", True) else {}
     gt_stats = compute_metrics(gt_data) if metrics_cfg.get("basic_stats", True) else {}
 
-    # Compute similarity
+    # Compute similarity — prefer ID-aligned comparison for RAPS NPZ files
     similarity = {}
     if metrics_cfg.get("similarity", True):
-        similarity = compute_similarity_metrics(redi_data.ravel(), gt_data.ravel())
+        aligned_sim = raps_aligned_similarity(redi_dir, ground_truth_path)
+        if aligned_sim is not None:
+            similarity = aligned_sim
+            logger.info(
+                "ID-aligned similarity over %d shared jobs: MAE=%.4f corr=%.4f",
+                aligned_sim["shared_jobs"], aligned_sim["mae"], aligned_sim["corr"],
+            )
+        else:
+            similarity = compute_similarity_metrics(redi_data.ravel(), gt_data.ravel())
+            similarity["method"] = "matrix"
 
     # Per-feature similarity
     per_feature_results = None

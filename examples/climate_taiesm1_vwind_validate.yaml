@@ -1,0 +1,30 @@
+# REDI config for TaiESM1 v_component_of_wind (va) validation
+# 3D variable: (time, plev=3, lat, lon) → regrid to 1.40625°
+
+domain: climate
+input_path: /opt/drai/CMIP6/TaiESM1/raw/v_component_of_wind/v_component_of_wind_186001010600-187001010000_raw.nc
+output_dir: ./output/taiesm1_vwind_redi
+output_format: npz
+
+regrid:
+  enabled: true
+  target_resolution: 1.40625
+  method: bilinear
+  climax_grid: true
+
+normalize:
+  enabled: false
+
+variables:
+  select: null
+  rename:
+    va: v
+
+anomalies:
+  enabled: false
+
+split:
+  enabled: false
+
+climax_output:
+  enabled: false

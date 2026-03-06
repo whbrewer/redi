@@ -1,5 +1,5 @@
 """
-Data snapshot capture for REDI observability.
+Data snapshot capture for REDI inspect.
 
 Captures statistics and metadata from intermediate data files
 produced by pipelines (Snakemake, Nextflow, etc.).
@@ -71,7 +71,7 @@ class DataSnapshot:
     # Global attributes (from NetCDF, HDF5, etc.)
     attributes: Dict[str, Any] = field(default_factory=dict)
 
-    # Provenance (filled in by observability analysis)
+    # Provenance (filled in by inspect analysis)
     rule_name: Optional[str] = None
     input_files: List[str] = field(default_factory=list)
 

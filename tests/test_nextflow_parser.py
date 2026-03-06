@@ -3,7 +3,7 @@ import pytest
 from pathlib import Path
 import tempfile
 
-from redi.observability.nextflow_parser import (
+from redi.inspect.nextflow_parser import (
     parse_nextflow_file,
     map_processes_to_stages,
     NextflowProcess,
@@ -305,7 +305,7 @@ def test_nfcore_stage_mapping(nfcore_module_file):
 
 def test_multiqc_maps_to_output():
     """Test that MULTIQC maps to output stage, not preprocess."""
-    from redi.observability.nextflow_parser import NextflowProcess
+    from redi.inspect.nextflow_parser import NextflowProcess
 
     processes = [
         NextflowProcess(name="MULTIQC", description="Aggregate QC reports"),

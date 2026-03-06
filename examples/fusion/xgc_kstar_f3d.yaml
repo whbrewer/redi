@@ -1,0 +1,119 @@
+# REDI Fusion Pipeline — XGC KSTAR Full 3D Diagnostics (f3d)
+#
+# Data: XGC full-3D diagnostic output from KSTAR simulation.
+# Format: ADIOS2 BP5 directory (xgc.f3d.NNNNN.bp)
+# Source: /opt/drai/xgc-fusion-data/KSTART/
+#
+# The f3d file contains 163 variables at a single time step (step=90,
+# t=7.4e-6), covering turbulent transport diagnostics broken down by
+# species, drive mechanism, and toroidal mode structure:
+#
+#   Shape (32, 45291)  —  9 vars   — 3D fields (nphi × nnode)
+#   Shape (45291,)     — 137 vars  — poloidally-resolved diagnostics
+#   Shape (45291, 9)   —  8 vars   — energy-binned diagnostics (nnode × n_energy)
+#   Shape ()           —  8 vars   — scalars (step, time, nphi, nnode, n_energy, ...)
+#
+# Variable naming convention:
+#   e_/i_          — electron / ion species
+#   _ExB           — E×B drift mechanism
+#   _3db           — 3D magnetic flutter
+#   _mag           — magnetic
+#   _radial_flux   — radial particle flux
+#   _radial_en_flux — radial energy flux
+#   _rad_mom_flux  — radial momentum flux
+#   _tor_ang_mom   — toroidal angular momentum
+#   _*_flow        — parallel / poloidal / toroidal flow
+#   _turb_df/f0    — turbulent perturbation (df) / equilibrium (f0)
+#   _n0_df/f0      — toroidal n=0 zonal component
+#   _en            — energy-binned (suffix → shape (nnode, 9))
+#
+# Usage:
+#   redi run xgc.f3d.00090.bp -c xgc_kstar_f3d.yaml
+#   redi run -c xgc_kstar_f3d.yaml
+
+domain: fusion
+input_path: "/opt/drai/xgc-fusion-data/KSTART/xgc.f3d.00090.bp"
+output_dir: ./output/xgc_kstar_f3d
+output_format: hdf5
+
+# ── Variable selection ─────────────────────────────────────────────────────────
+#
+# 163 variables are available. Use 'select' to load a subset.
+# null = load all variables (~172 MB).
+#
+# Common subsets (uncomment one):
+
+variables:
+  select: null    # all variables
+
+  # Core 3D fields only (matches xgc.3d output + temperatures + parallel flow):
+  # select:
+  #   - dpot
+  #   - e_den
+  #   - i_den
+  #   - e_T_para
+  #   - e_T_perp
+  #   - i_T_para
+  #   - i_T_perp
+  #   - e_u_para
+  #   - i_u_para
+  #   - phi
+  #   - pot0
+
+  # Turbulent transport diagnostics (poloidal 1-D, all mechanisms):
+  # select:
+  #   - e_radial_flux_ExB_turb_df
+  #   - e_radial_flux_3db_turb_df
+  #   - e_radial_flux_mag_turb_df
+  #   - i_radial_flux_ExB_turb_df
+  #   - i_radial_flux_3db_turb_df
+  #   - i_radial_flux_mag_turb_df
+  #   - e_radial_en_flux_ExB_turb_df
+  #   - e_radial_en_flux_3db_turb_df
+  #   - i_radial_en_flux_ExB_turb_df
+  #   - i_radial_en_flux_3db_turb_df
+
+  # Energy-binned fluxes (shape nnode × 9 energy bins):
+  # select:
+  #   - e_ExB_flux_en
+  #   - e_ExB_enflux_en
+  #   - e_den_en
+  #   - e_energy_en
+  #   - i_ExB_flux_en
+  #   - i_ExB_enflux_en
+  #   - i_den_en
+  #   - i_energy_en
+
+# ── Normalization ──────────────────────────────────────────────────────────────
+normalize:
+  enabled: true
+  method: zscore  # zscore or minmax; applied per variable
+
+# ── Train/val/test split ───────────────────────────────────────────────────────
+#
+# Splits along axis 0 of each array:
+#   (32, 45291) arrays  → split across nphi=32 toroidal planes
+#   (45291,)    arrays  → split across nnode=45291 poloidal nodes
+#   (45291, 9)  arrays  → split across nnode=45291 poloidal nodes
+#
+# Note: arrays with different leading dimensions are split independently.
+# Scalars are broadcast to all splits unchanged.
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  shuffle: true
+  random_seed: 42
+
+# ── Fusion-specific settings ───────────────────────────────────────────────────
+fusion:
+  device: KSTAR
+  code: XGC
+  data_type: 3d_fields
+
+  mesh:
+    nphi: 32        # Toroidal planes
+    nnode: 45291    # Poloidal mesh nodes
+    n_energy: 9     # Energy bins (for *_en variables)

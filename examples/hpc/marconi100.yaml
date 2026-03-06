@@ -19,6 +19,7 @@ output_dir: ./output/marconi100_raps
 raps_jobs:
   enabled: true
   system_name: marconi100
+  trace_quanta: 20
 
   column_overrides:
     # SLURM-style columns

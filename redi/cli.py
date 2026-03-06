@@ -4,7 +4,7 @@ REDI CLI - Readiness Engine for Data Integration
 
 Unified entry point for running REDI in different modes:
   - run (orchestrator): Execute the full pipeline on data
-  - analyze: Observe and report on existing workflows
+  - inspect: Inspect data files or observe existing workflows (alias: analyze)
   - discover: Analyze unknown datasets and propose pipelines
 """
 
@@ -417,6 +417,8 @@ def run_pipeline(
             # Jobprofile path from config
             _jp_path = _raps_cfg.get("jobprofile_path") if isinstance(_raps_cfg, dict) else None
             _priority_policy = _raps_cfg.get("priority_policy") if isinstance(_raps_cfg, dict) else None
+            _id_strip_suffix = bool(_raps_cfg.get("id_strip_suffix")) if isinstance(_raps_cfg, dict) else False
+            _col_scalars = _raps_cfg.get("column_scalars") if isinstance(_raps_cfg, dict) else None
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
@@ -427,6 +429,8 @@ def run_pipeline(
                 jobprofile_path=_jp_path,
                 topology=_topology,
                 priority_policy=_priority_policy,
+                id_strip_suffix=_id_strip_suffix,
+                column_scalars=_col_scalars,
             )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline
@@ -551,9 +555,9 @@ def run_pipeline(
             step_time = time.time() - step_start
             if style == "rich":
                 if verbose:
-                    print(f"     {Colors.DIM}↳ skipped (validation failed){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    print(f"     {Colors.DIM}↳ skipped (not applicable){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                 else:
-                    print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (validation) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (not applicable) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
             elif style == "simple":
                 print(f"  [SKIP] {step.name}")
             step_results.append(("skipped", step.name, "", step_time))
@@ -563,12 +567,11 @@ def run_pipeline(
         try:
             old_metadata = dict(ctx.metadata)
             next_ctx = step.execute(ctx)
-            if (
-                getattr(next_ctx, "with_flowcept", False)
-                and flowcept_ref is not None
-                and getattr(next_ctx, "flowcept", None) is None
-            ):
-                next_ctx.flowcept = flowcept_ref
+            if flowcept_ref is not None and getattr(next_ctx, "flowcept", None) is None:
+                try:
+                    next_ctx.flowcept = flowcept_ref
+                except Exception:
+                    pass
             ctx = next_ctx
             step_time = time.time() - step_start
 
@@ -668,6 +671,22 @@ def run_pipeline(
         ctx.mark_complete(current_stage)
     if flowcept_started_here and flowcept_ref:
         flowcept_ref.stop()
+    provenance_result = {"enabled": False, "generated": False, "error": None}
+    if getattr(ctx, "with_flowcept", False):
+        from redi.provenance_card import finalize_provenance_for_context
+
+        provenance_result = finalize_provenance_for_context(
+            ctx=ctx,
+            flowcept_ref=flowcept_ref,
+            verbose=verbose,
+            logger=logger,
+        )
+        if provenance_result.get("error"):
+            err = provenance_result["error"]
+            if style == "rich":
+                print(f"    {Colors.YELLOW}⚠ Could not generate provenance card: {err}{Colors.END}")
+            elif style == "simple":
+                print(f"  [WARN] Could not generate provenance card: {err}")
 
     total_time = time.time() - total_start
 
@@ -720,6 +739,13 @@ def run_pipeline(
             print_section("Output Files")
             for f in ctx.metadata["saved_files"]:
                 fpath = Path(f)
+                if fpath.name in {
+                    "flowcept_buffer.jsonl",
+                    "PROVENANCE_CARD.md",
+                    "provenance_card.md",
+                    "PROVENANCE_REPORT.pdf",
+                }:
+                    continue
                 if fpath.exists():
                     fsize = fpath.stat().st_size
                     size_str = f"{fsize / 1024:.1f} KB" if fsize < 1024*1024 else f"{fsize / (1024*1024):.2f} MB"
@@ -767,6 +793,18 @@ def run_pipeline(
             ctx.metadata["saved_files"].append(str(metadata_path))
             ctx.output_dir.touch()  # update directory mtime on re-runs
             print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
+
+            if getattr(ctx, "with_flowcept", False):
+                from .provenance_card import render_provenance_summary
+
+                render_provenance_summary(
+                    ctx=ctx,
+                    style="rich",
+                    datacard_path=datacard_path,
+                    print_section=print_section,
+                    printer=print,
+                    colors=Colors,
+                )
 
             # Display recommendations in terminal
             data_card = analyze_dataset(str(primary_path))
@@ -890,8 +928,25 @@ def run_pipeline(
         except Exception:
             pass  # Silent in simple mode
 
+        if getattr(ctx, "with_flowcept", False):
+            from .provenance_card import render_provenance_summary
+
+            render_provenance_summary(
+                ctx=ctx,
+                style="simple",
+                datacard_path=datacard_path if 'datacard_path' in locals() else None,
+                printer=print,
+            )
+
         if ctx.metadata.get("saved_files"):
             for f in ctx.metadata["saved_files"]:
+                if Path(f).name in {
+                    "flowcept_buffer.jsonl",
+                    "PROVENANCE_CARD.md",
+                    "provenance_card.md",
+                    "PROVENANCE_REPORT.pdf",
+                }:
+                    continue
                 print(f"  Output: {f}")
 
     elif style == "json":
@@ -1032,7 +1087,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
 
     # Parse Snakemake logs for execution history
     log_report = None
-    from .observability import find_latest_log, parse_snakemake_log
+    from .inspect import find_latest_log, parse_snakemake_log
 
     latest_log = find_latest_log(workflow_path.parent)
     if latest_log:
@@ -1064,7 +1119,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
         if style == "rich":
             print_section("Scanning Data Files")
 
-        from .observability import capture_snapshot, check_snapshot, detect_transformations
+        from .inspect import capture_snapshot, check_snapshot, detect_transformations
 
         # Find all data files
         data_extensions = {'.nc', '.nc4', '.npz', '.npy', '.parquet', '.h5', '.hdf5', '.zarr'}
@@ -1157,7 +1212,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
     # Check for data quality issues in transformation report
     transform_issues = []
     if transform_report:
-        from .observability import check_transformation_report
+        from .inspect import check_transformation_report
         transform_issues = check_transformation_report(transform_report)
 
         if transform_issues:
@@ -1173,7 +1228,7 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
     # Generate improvement suggestions
-    from .observability import generate_suggestions, format_suggestions_cli
+    from .inspect import generate_suggestions, format_suggestions_cli
     all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
     workflow_info = {'rules': rules, 'stage_mapping': stage_mapping}
     suggestions = generate_suggestions(
@@ -1512,7 +1567,7 @@ def _generate_analyze_datacard(workflow_path: Path, rules: list, stage_mapping: 
 
     # Suggestions section
     if suggestions:
-        from .observability import format_suggestions_markdown
+        from .inspect import format_suggestions_markdown
         lines.append("")
         lines.append(format_suggestions_markdown(suggestions))
 
@@ -1613,7 +1668,7 @@ def _analyze_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
         print_section("Parsing Nextflow Workflow")
 
     # Parse the Nextflow file to extract processes and workflows
-    from .observability import (
+    from .inspect import (
         parse_nextflow_file,
         map_processes_to_stages as nf_map_processes_to_stages,
         find_nextflow_logs,
@@ -1782,7 +1837,7 @@ def _analyze_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
                     print(f"    {icon} {Colors.BOLD}{issue.check_name}:{Colors.END} {issue.message}")
 
     # Generate improvement suggestions
-    from .observability import generate_suggestions, format_suggestions_cli
+    from .inspect import generate_suggestions, format_suggestions_cli
     all_quality_issues = transform_issues + [issue for qr in quality_reports for issue in qr.issues]
     # Convert processes to rules-like format for workflow_info
     rules_like = [{'name': p.name, 'description': p.description} for p in parse_result.processes]
@@ -2068,7 +2123,7 @@ def _generate_nextflow_datacard(workflow_path: Path, parse_result, stage_mapping
 
     # Suggestions section
     if suggestions:
-        from .observability import format_suggestions_markdown
+        from .inspect import format_suggestions_markdown
         lines.append(format_suggestions_markdown(suggestions))
 
     lines.extend([
@@ -2172,456 +2227,8 @@ def _run_nextflow_watch_mode(workflow_path: Path, data_dir: Optional[Path], outp
 # =============================================================================
 # DISCOVER MODE (redi discover)
 # =============================================================================
-
-def run_discover(
-    input_path: str,
-    output_dir: str = "./output",
-    style: str = "rich",
-    interactive: bool = True,
-    config: Optional[dict] = None,
-):
-    """Run REDI in discover mode - analyze unknown datasets.
-
-    Args:
-        input_path: Path to data file or directory
-        output_dir: Output directory for reports
-        style: Output style (rich, simple, json)
-        interactive: If True, prompt for user confirmation before proposing pipeline
-        config: Optional YAML configuration dict
-    """
-    config = config or {}
-    path = Path(input_path)
-
-    if not path.exists():
-        if style == "rich":
-            print(f"{Colors.RED}✗ Path not found: {input_path}{Colors.END}")
-        else:
-            print(f"Error: Path not found: {input_path}")
-        return None
-
-    if style == "rich":
-        print_banner()
-        print_section("Discovery Mode")
-        print_metric("Path", str(path))
-        print_metric("Type", "directory" if path.is_dir() else "file")
-
-    # Phase 1: Inspect
-    if style == "rich":
-        print_section("Phase 1: Inspect")
-
-    inspection = _inspect_data(path, style)
-
-    # Phase 2: Infer
-    if style == "rich":
-        print_section("Phase 2: Infer")
-
-    inference = _infer_characteristics(inspection, style)
-
-    # Phase 3: Propose
-    if style == "rich":
-        print_section("Phase 3: Propose Pipeline")
-
-    proposal = _propose_pipeline(inspection, inference, style)
-
-    # Save discovery report
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
-
-    report = {
-        "input_path": str(path),
-        "mode": "discover",
-        "inspection": inspection,
-        "inference": inference,
-        "proposal": proposal,
-    }
-
-    import json
-    report_path = out_path / "discovery_report.json"
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2, default=str)
-
-    # Generate human-readable report
-    md_report = _generate_discovery_markdown(report)
-    md_path = out_path / "DISCOVERY_REPORT.md"
-    md_path.write_text(md_report)
-
-    if style == "rich":
-        print_section("Output")
-        print(f"    📋 {Colors.BOLD}discovery_report.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
-        print(f"    📋 {Colors.BOLD}DISCOVERY_REPORT.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
-        print()
-
-        if interactive and proposal.get('pipeline_steps'):
-            print(f"{Colors.BOLD}Proposed Pipeline:{Colors.END}")
-            for i, step in enumerate(proposal['pipeline_steps'], 1):
-                print(f"  {i}. {step['name']}: {step['description']}")
-            print()
-            print(f"{Colors.DIM}To execute this pipeline:{Colors.END}")
-            print(f"    redi run {input_path} -o {output_dir}")
-
-        print()
-        print(f"{Colors.GREEN}{Colors.BOLD}✓ Discovery complete{Colors.END}")
-        print()
-
-    return report
-
-
-def _inspect_data(path: Path, style: str) -> dict:
-    """Inspect data files and gather metadata."""
-    inspection = {
-        'files': [],
-        'total_size': 0,
-        'formats': set(),
-        'sample_data': {},
-    }
-
-    if path.is_file():
-        files = [path]
-    else:
-        # Get all files in directory
-        files = list(path.rglob('*'))
-        files = [f for f in files if f.is_file()]
-
-    for f in files[:100]:  # Limit to first 100 files
-        file_info = {
-            'path': str(f),
-            'name': f.name,
-            'suffix': f.suffix.lower(),
-            'size': f.stat().st_size,
-        }
-        inspection['files'].append(file_info)
-        inspection['total_size'] += file_info['size']
-        inspection['formats'].add(f.suffix.lower())
-
-    inspection['formats'] = list(inspection['formats'])
-    inspection['file_count'] = len(files)
-
-    # Sample first file of each format
-    for fmt in inspection['formats']:
-        sample_file = next((f for f in files if f.suffix.lower() == fmt), None)
-        if sample_file:
-            inspection['sample_data'][fmt] = _sample_file(sample_file)
-
-    if style == "rich":
-        size_str = _format_size(inspection['total_size'])
-        print(f"    Files: {Colors.BOLD}{inspection['file_count']}{Colors.END}")
-        print(f"    Total size: {Colors.BOLD}{size_str}{Colors.END}")
-        print(f"    Formats: {Colors.BOLD}{', '.join(inspection['formats'])}{Colors.END}")
-
-    return inspection
-
-
-def _sample_file(path: Path) -> dict:
-    """Sample a file to understand its structure."""
-    sample = {'path': str(path), 'format': path.suffix.lower()}
-
-    try:
-        if path.suffix.lower() in ['.csv', '.tsv']:
-            import pandas as pd
-            df = pd.read_csv(path, nrows=5)
-            sample['columns'] = list(df.columns)
-            sample['dtypes'] = {col: str(dtype) for col, dtype in df.dtypes.items()}
-            sample['shape'] = list(df.shape)
-            sample['preview'] = df.head(3).to_dict()
-
-        elif path.suffix.lower() in ['.npy', '.npz']:
-            import numpy as np
-            if path.suffix.lower() == '.npy':
-                arr = np.load(path, mmap_mode='r')
-                sample['shape'] = list(arr.shape)
-                sample['dtype'] = str(arr.dtype)
-            else:
-                with np.load(path) as npz:
-                    sample['arrays'] = {k: {'shape': list(v.shape), 'dtype': str(v.dtype)}
-                                       for k, v in npz.items()}
-
-        elif path.suffix.lower() in ['.nc', '.nc4']:
-            try:
-                import xarray as xr
-                ds = xr.open_dataset(path)
-                sample['variables'] = list(ds.data_vars)
-                sample['dims'] = dict(ds.dims)
-                sample['coords'] = list(ds.coords)
-                ds.close()
-            except ImportError:
-                sample['error'] = 'xarray not installed'
-
-        elif path.suffix.lower() in ['.h5', '.hdf5']:
-            try:
-                import h5py
-                with h5py.File(path, 'r') as f:
-                    sample['keys'] = list(f.keys())
-                    sample['structure'] = _h5_structure(f)
-            except ImportError:
-                sample['error'] = 'h5py not installed'
-
-        elif path.suffix.lower() == '.json':
-            import json
-            with open(path) as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                sample['type'] = 'array'
-                sample['length'] = len(data)
-                if data:
-                    sample['first_item_keys'] = list(data[0].keys()) if isinstance(data[0], dict) else None
-            elif isinstance(data, dict):
-                sample['type'] = 'object'
-                sample['keys'] = list(data.keys())
-
-        elif path.suffix.lower() == '.parquet':
-            import pandas as pd
-            df = pd.read_parquet(path)
-            sample['columns'] = list(df.columns)
-            sample['shape'] = list(df.shape)
-            sample['dtypes'] = {col: str(dtype) for col, dtype in df.dtypes.items()}
-
-    except Exception as e:
-        sample['error'] = str(e)
-
-    return sample
-
-
-def _h5_structure(group, prefix='') -> dict:
-    """Recursively get HDF5 structure."""
-    structure = {}
-    for key in list(group.keys())[:20]:  # Limit keys
-        item = group[key]
-        full_key = f"{prefix}/{key}" if prefix else key
-        if hasattr(item, 'shape'):
-            structure[full_key] = {'shape': list(item.shape), 'dtype': str(item.dtype)}
-        elif hasattr(item, 'keys'):
-            structure.update(_h5_structure(item, full_key))
-    return structure
-
-
-def _infer_characteristics(inspection: dict, style: str) -> dict:
-    """Infer data characteristics from inspection."""
-    inference = {
-        'modality': 'unknown',
-        'likely_domain': 'general',
-        'has_labels': False,
-        'has_splits': False,
-        'sparsity': None,
-        'suggested_format': 'npz',
-    }
-
-    formats = inspection.get('formats', [])
-    samples = inspection.get('sample_data', {})
-
-    # Infer modality
-    if '.nc' in formats or '.nc4' in formats or '.grib' in formats:
-        inference['modality'] = 'gridded'
-        inference['likely_domain'] = 'climate'
-        inference['suggested_format'] = 'zarr'
-    elif '.cif' in formats or '.poscar' in formats:
-        inference['modality'] = 'structured'
-        inference['likely_domain'] = 'materials'
-        inference['suggested_format'] = 'hdf5'
-    elif '.fasta' in formats or '.pdb' in formats:
-        inference['modality'] = 'sequence'
-        inference['likely_domain'] = 'life_sciences'
-        inference['suggested_format'] = 'hdf5'
-    elif '.npy' in formats or '.npz' in formats:
-        inference['modality'] = 'array'
-        # Check shapes to infer type
-        for fmt, sample in samples.items():
-            if 'shape' in sample:
-                shape = sample['shape']
-                if len(shape) == 4:
-                    inference['modality'] = 'image_batch'
-                elif len(shape) == 3:
-                    inference['modality'] = 'sequence_or_image'
-                elif len(shape) == 2:
-                    inference['modality'] = 'tabular_or_embedding'
-    elif '.csv' in formats or '.tsv' in formats or '.parquet' in formats:
-        inference['modality'] = 'tabular'
-        # Check columns for domain hints
-        for fmt, sample in samples.items():
-            cols = sample.get('columns', [])
-            cols_lower = [c.lower() for c in cols]
-
-            if any(c in cols_lower for c in ['temperature', 'lat', 'lon', 'latitude', 'longitude']):
-                inference['likely_domain'] = 'climate'
-            elif any(c in cols_lower for c in ['formula', 'lattice', 'spacegroup', 'energy']):
-                inference['likely_domain'] = 'materials'
-            elif any(c in cols_lower for c in ['sequence', 'protein', 'gene', 'mutation']):
-                inference['likely_domain'] = 'life_sciences'
-            elif any(c in cols_lower for c in ['plasma', 'tokamak', 'disruption', 'ip']):
-                inference['likely_domain'] = 'fusion'
-            elif any(c in cols_lower for c in ['job', 'queue', 'walltime', 'nodes', 'cores']):
-                inference['likely_domain'] = 'hpc'
-
-            # Check for labels
-            if any(c in cols_lower for c in ['label', 'target', 'y', 'class', 'category']):
-                inference['has_labels'] = True
-
-            # Check for splits
-            if any(c in cols_lower for c in ['split', 'fold', 'train', 'test', 'val']):
-                inference['has_splits'] = True
-
-    if style == "rich":
-        print(f"    Modality: {Colors.BOLD}{inference['modality']}{Colors.END}")
-        print(f"    Likely domain: {Colors.BOLD}{inference['likely_domain']}{Colors.END}")
-        print(f"    Has labels: {Colors.BOLD}{'yes' if inference['has_labels'] else 'no'}{Colors.END}")
-        print(f"    Has splits: {Colors.BOLD}{'yes' if inference['has_splits'] else 'no'}{Colors.END}")
-
-    return inference
-
-
-def _propose_pipeline(inspection: dict, inference: dict, style: str) -> dict:
-    """Propose a pipeline based on inspection and inference."""
-    proposal = {
-        'pipeline_steps': [],
-        'output_format': inference.get('suggested_format', 'npz'),
-        'confidence': 'medium',
-        'notes': [],
-    }
-
-    modality = inference.get('modality', 'unknown')
-    domain = inference.get('likely_domain', 'general')
-
-    # Always start with ingest
-    proposal['pipeline_steps'].append({
-        'name': 'ingest',
-        'description': f"Load {modality} data from {', '.join(inspection.get('formats', ['files']))}",
-        'stage': 'ingest',
-    })
-
-    # Preprocessing based on modality
-    if modality == 'tabular':
-        proposal['pipeline_steps'].append({
-            'name': 'handle_missing',
-            'description': 'Handle missing values (impute or drop)',
-            'stage': 'preprocess',
-        })
-        proposal['pipeline_steps'].append({
-            'name': 'remove_duplicates',
-            'description': 'Remove duplicate rows',
-            'stage': 'preprocess',
-        })
-    elif modality == 'gridded':
-        proposal['pipeline_steps'].append({
-            'name': 'regrid',
-            'description': 'Regrid to uniform resolution',
-            'stage': 'preprocess',
-        })
-    elif modality in ['array', 'image_batch']:
-        proposal['pipeline_steps'].append({
-            'name': 'validate_shapes',
-            'description': 'Validate array shapes are consistent',
-            'stage': 'preprocess',
-        })
-
-    # Transform
-    if modality == 'tabular':
-        proposal['pipeline_steps'].append({
-            'name': 'normalize',
-            'description': 'Normalize numeric features',
-            'stage': 'transform',
-        })
-        proposal['pipeline_steps'].append({
-            'name': 'encode_categoricals',
-            'description': 'Encode categorical variables',
-            'stage': 'transform',
-        })
-    elif modality in ['array', 'gridded', 'image_batch']:
-        proposal['pipeline_steps'].append({
-            'name': 'normalize',
-            'description': 'Normalize to [0,1] or standardize',
-            'stage': 'transform',
-        })
-
-    # Output
-    if not inference.get('has_splits'):
-        proposal['pipeline_steps'].append({
-            'name': 'split',
-            'description': 'Create train/val/test splits',
-            'stage': 'output',
-        })
-
-    proposal['pipeline_steps'].append({
-        'name': 'save',
-        'description': f"Save to {proposal['output_format']} format",
-        'stage': 'output',
-    })
-
-    # Add notes
-    if inference.get('likely_domain') == 'general':
-        proposal['notes'].append("Could not confidently detect domain. Consider specifying with --domain.")
-        proposal['confidence'] = 'low'
-
-    if not inference.get('has_labels'):
-        proposal['notes'].append("No label column detected. This may be unsupervised or labels need to be added.")
-
-    if style == "rich":
-        print(f"    Steps: {Colors.BOLD}{len(proposal['pipeline_steps'])}{Colors.END}")
-        print(f"    Output format: {Colors.BOLD}{proposal['output_format']}{Colors.END}")
-        print(f"    Confidence: {Colors.BOLD}{proposal['confidence']}{Colors.END}")
-        if proposal['notes']:
-            print(f"    Notes:")
-            for note in proposal['notes']:
-                print(f"      {Colors.YELLOW}•{Colors.END} {note}")
-
-    return proposal
-
-
-def _generate_discovery_markdown(report: dict) -> str:
-    """Generate markdown report from discovery results."""
-    lines = [
-        "# REDI Discovery Report",
-        "",
-        f"**Input:** `{report['input_path']}`",
-        "",
-        "## Inspection",
-        "",
-        f"- **Files:** {report['inspection'].get('file_count', 'unknown')}",
-        f"- **Total Size:** {_format_size(report['inspection'].get('total_size', 0))}",
-        f"- **Formats:** {', '.join(report['inspection'].get('formats', []))}",
-        "",
-        "## Inference",
-        "",
-        f"- **Modality:** {report['inference'].get('modality', 'unknown')}",
-        f"- **Likely Domain:** {report['inference'].get('likely_domain', 'general')}",
-        f"- **Has Labels:** {'Yes' if report['inference'].get('has_labels') else 'No'}",
-        f"- **Has Splits:** {'Yes' if report['inference'].get('has_splits') else 'No'}",
-        "",
-        "## Proposed Pipeline",
-        "",
-    ]
-
-    for i, step in enumerate(report['proposal'].get('pipeline_steps', []), 1):
-        lines.append(f"{i}. **{step['name']}** ({step['stage']}): {step['description']}")
-
-    lines.extend([
-        "",
-        f"**Output Format:** {report['proposal'].get('output_format', 'npz')}",
-        f"**Confidence:** {report['proposal'].get('confidence', 'medium')}",
-    ])
-
-    if report['proposal'].get('notes'):
-        lines.extend(["", "### Notes", ""])
-        for note in report['proposal']['notes']:
-            lines.append(f"- {note}")
-
-    lines.extend([
-        "",
-        "---",
-        "*Generated by REDI (Readiness Engine for Data Integration)*",
-    ])
-
-    return "\n".join(lines)
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format bytes as human-readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+# Business logic lives in redi/discover/__init__.py
+from .discover import run_discover
 
 
 # =============================================================================
@@ -2641,7 +2248,7 @@ def create_parser() -> argparse.ArgumentParser:
         epilog="""
 Commands:
   run        Run the pipeline (orchestrator mode) - default
-  analyze    Observe existing workflows
+  inspect    Inspect data files or observe existing workflows
   discover   Analyze unknown datasets and propose pipelines
   validate   Validate REDI output against ground truth
 
@@ -2649,14 +2256,15 @@ Examples::
 
   redi run data.csv                     # Run pipeline on data
   redi data.csv                         # Same as above (run is default)
-  redi analyze --workflow Snakefile     # Observe Snakemake workflow
+  redi inspect data.csv                 # Inspect a data file
+  redi inspect Snakefile                # Observe Snakemake workflow
   redi discover /path/to/data/          # Analyze unknown dataset
   redi validate output/ -c config.yaml  # Validate against ground truth
 
 For command-specific help::
 
   redi run --help
-  redi analyze --help
+  redi inspect --help
   redi discover --help
   redi validate --help
         """
@@ -2742,39 +2350,40 @@ Download examples (climate domain)::
 
 
     # =========================================================================
-    # redi analyze
+    # redi inspect (formerly analyze)
     # =========================================================================
-    analyze_parser = subparsers.add_parser(
-        'analyze',
-        help='Observe existing workflows (analyze mode)',
+    inspect_parser = subparsers.add_parser(
+        'inspect',
+        help='Inspect data files or observe existing workflows',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples::
-
-  redi analyze --workflow Snakefile
-  redi analyze --workflow pipeline.nf --type nextflow
-  redi analyze --workflow Snakefile --watch
-  redi analyze -c analyze_config.yaml
+Examples:
+  redi inspect data.csv                       # Inspect a data file
+  redi inspect /path/to/data.nc               # Inspect a NetCDF file
+  redi inspect Snakefile                      # Auto-detect and observe workflow
+  redi inspect pipeline.nf --type nextflow    # Observe Nextflow workflow
+  redi inspect --workflow Snakefile --watch   # Watch for changes
+  redi inspect -c inspect_config.yaml
         """
     )
-    analyze_parser.add_argument("workflow", nargs="?",
-                                help="Path to workflow file (Snakefile, *.nf, etc.)")
-    analyze_parser.add_argument("-w", "--workflow",
+    inspect_parser.add_argument("input", nargs="?",
+                                help="Path to data file, workflow file, or directory")
+    inspect_parser.add_argument("-w", "--workflow",
                                 dest="workflow_flag",
-                                help="Path to workflow file (Snakefile, *.nf, etc.)")
-    analyze_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
+                                help="Path to workflow file (overrides positional input)")
+    inspect_parser.add_argument("-t", "--type", dest="workflow_type", default="auto",
                                 choices=["auto", "snakemake", "nextflow", "bash"],
-                                help="Workflow type (auto-detected if not specified)")
-    analyze_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
-    analyze_parser.add_argument("--unique", action="store_true",
+                                help="Workflow type override (forces workflow mode)")
+    inspect_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
+    inspect_parser.add_argument("--unique", action="store_true",
                                 help="Append timestamp to output dir for unique runs")
-    analyze_parser.add_argument("--data-dir", dest="data_dir",
+    inspect_parser.add_argument("--data-dir", dest="data_dir",
                                 help="Directory containing data files to scan for statistics")
-    analyze_parser.add_argument("--watch", action="store_true",
+    inspect_parser.add_argument("--watch", action="store_true",
                                 help="Watch for changes and re-run")
-    analyze_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+    inspect_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                                 help="Output style")
-    analyze_parser.add_argument("-c", "--config", help="YAML configuration file")
+    inspect_parser.add_argument("-c", "--config", help="YAML configuration file")
 
     # =========================================================================
     # redi discover
@@ -2821,6 +2430,8 @@ Examples::
     validate_parser.add_argument("input", help="Path to REDI output directory or a direct output file (npz, npy, parquet, csv)")
     validate_parser.add_argument("-g", "--ground-truth", dest="ground_truth",
                                  help="Path to ground truth file (overrides config)")
+    validate_parser.add_argument("--gt-variable", dest="gt_variable",
+                                 help="Variable name to extract from NetCDF ground truth (default: first variable)")
     validate_parser.add_argument("-c", "--config", help="Validation YAML config file")
     validate_parser.add_argument("-o", "--output", help="Output directory for validation report")
     validate_parser.add_argument("--aidrin", action="store_true",
@@ -2864,8 +2475,8 @@ def main():
     # Dispatch to appropriate handler
     if args.command == 'run':
         _handle_run_command(args)
-    elif args.command == 'analyze':
-        _handle_analyze_command(args)
+    elif args.command == 'inspect':
+        _handle_inspect_command(args)
     elif args.command == 'discover':
         _handle_discover_command(args)
     elif args.command == 'validate':
@@ -2912,7 +2523,7 @@ def _handle_run_command(args):
     # CLI arguments override YAML config
     if args.domain:
         config['domain'] = args.domain
-    if args.output != './output':
+    if args.output is not None:
         config['output_dir'] = args.output
     if args.format != 'npz':
         config['output_format'] = args.format
@@ -3036,8 +2647,41 @@ def _handle_run_command(args):
 
 
 
-def _handle_analyze_command(args):
-    """Handle the 'analyze' subcommand."""
+_WORKFLOW_FILENAMES = {'Snakefile', 'Snakefile.smk'}
+_WORKFLOW_EXTENSIONS = {'.smk', '.nf', '.nextflow'}
+
+
+def _is_workflow(path: str, type_hint: str = 'auto') -> bool:
+    """Return True if path should be treated as a workflow file."""
+    if type_hint in ('snakemake', 'nextflow', 'bash'):
+        return True
+    p = Path(path)
+    return p.name in _WORKFLOW_FILENAMES or p.suffix in _WORKFLOW_EXTENSIONS
+
+
+def _run_data_inspect(path: str, output_dir: Optional[str], style: str):
+    """Inspect a data file using DataAnalyzer and print/save the report."""
+    from .assess import generate_report
+
+    try:
+        report = generate_report(path)
+    except Exception as e:
+        print(f"{Colors.RED}Error inspecting {path}: {e}{Colors.END}")
+        sys.exit(1)
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        report_path = out / "inspection_report.md"
+        report_path.write_text(report)
+        print(report)
+        print(f"\n{Colors.GREEN}Report saved to {report_path}{Colors.END}")
+    else:
+        print(report)
+
+
+def _handle_inspect_command(args):
+    """Handle the 'inspect' subcommand."""
     import yaml
 
     config = {}
@@ -3054,48 +2698,50 @@ def _handle_analyze_command(args):
             print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
             sys.exit(1)
 
-    # CLI args override config
-    workflow_file = args.workflow or args.workflow_flag or config.get('workflow')
-    if not workflow_file:
-        print(f"{Colors.RED}Error: workflow file required. Use -w/--workflow or set in config.{Colors.END}")
+    # Resolve path: -w/--workflow wins over positional, config is fallback
+    path = args.workflow_flag or getattr(args, 'input', None) or config.get('workflow') or config.get('input')
+    if not path:
+        print(f"{Colors.RED}Error: input required. Provide a file path or use -w/--workflow.{Colors.END}")
         sys.exit(1)
 
     workflow_type = args.workflow_type if args.workflow_type != 'auto' else config.get('workflow_type', 'auto')
 
-    # Determine output directory
-    # If -o is explicitly set, use it directly (no hash)
-    # Otherwise, generate hash-based output dir
-    if args.output:
-        output_dir = args.output
-    else:
-        base_dir = config.get('output_dir') or './output'
-        output_dir = generate_output_dir(
-            input_paths=[Path(workflow_file)],
-            base_dir=base_dir,
-            unique=getattr(args, 'unique', False),
+    if _is_workflow(path, workflow_type):
+        # Workflow analysis path
+        if args.output:
+            output_dir = args.output
+        else:
+            base_dir = config.get('output_dir') or './output'
+            output_dir = generate_output_dir(
+                input_paths=[Path(path)],
+                base_dir=base_dir,
+                unique=getattr(args, 'unique', False),
+            )
+
+        watch = args.watch or config.get('watch', False)
+        style = args.style if args.style != 'rich' else config.get('style', 'rich')
+        data_dir = args.data_dir or config.get('data_dir')
+
+        from .repro import log_analyze_run
+        log_analyze_run(
+            output_dir=output_dir,
+            workflow_file=path,
+            workflow_type=workflow_type,
         )
 
-    watch = args.watch or config.get('watch', False)
-    style = args.style if args.style != 'rich' else config.get('style', 'rich')
-    data_dir = args.data_dir or config.get('data_dir')
-
-    # Log command for reproducibility
-    from .repro import log_analyze_run
-    log_analyze_run(
-        output_dir=output_dir,
-        workflow_file=workflow_file,
-        workflow_type=workflow_type,
-    )
-
-    run_analyze(
-        workflow_file=workflow_file,
-        workflow_type=workflow_type,
-        output_dir=output_dir,
-        watch=watch,
-        style=style,
-        config=config,
-        data_dir=data_dir,
-    )
+        run_analyze(
+            workflow_file=path,
+            workflow_type=workflow_type,
+            output_dir=output_dir,
+            watch=watch,
+            style=style,
+            config=config,
+            data_dir=data_dir,
+        )
+    else:
+        # Data file / directory inspection
+        style = args.style if args.style != 'rich' else config.get('style', 'rich')
+        _run_data_inspect(path, args.output, style)
 
 
 def _handle_discover_command(args):
@@ -3172,9 +2818,11 @@ def _handle_validate_command(args):
             print(f"{Colors.RED}Error loading config: {e}{Colors.END}")
             sys.exit(1)
 
-    # CLI --ground-truth overrides config
+    # CLI --ground-truth and --gt-variable override config
     if args.ground_truth:
         config["ground_truth"] = args.ground_truth
+    if args.gt_variable:
+        config["gt_variable"] = args.gt_variable
 
     # Must have ground truth from config or CLI
     if not config.get("ground_truth"):

@@ -377,22 +377,57 @@ class FieldDeriver:
         conf = dict(mapping.confidence)
 
         # expected_run_time ← end_time - start_time
-        if "expected_run_time" not in mapped and "start_time" in mapped and "end_time" in mapped:
+        # Also override if an existing mapping has epoch-like values (> 1e8 s ≈ 3 years),
+        # which indicates a fuzzy match landed on a raw timestamp column (e.g. ctime in PBS).
+        _should_derive_ert = "expected_run_time" not in mapped
+        if not _should_derive_ert and "expected_run_time" in mapped:
+            _ert_col = mapped["expected_run_time"]
+            if _ert_col in df.columns:
+                _ert_vals = pd.to_numeric(df[_ert_col], errors="coerce").dropna()
+                if not _ert_vals.empty and _ert_vals.median() > 1e8:
+                    _should_derive_ert = True
+                    logger.info(
+                        f"expected_run_time mapping '{_ert_col}' has epoch-like values "
+                        f"(median={_ert_vals.median():.2e}); re-deriving from end_time - start_time"
+                    )
+        if _should_derive_ert and "start_time" in mapped and "end_time" in mapped:
             start_col = mapped["start_time"]
             end_col = mapped["end_time"]
             derived_col = "_derived_expected_run_time"
-            start_num = pd.to_numeric(df[start_col], errors="coerce")
-            end_num = pd.to_numeric(df[end_col], errors="coerce")
-            if start_num.notna().any() and end_num.notna().any():
-                # Epoch-like numeric timestamps (common in scheduler logs).
-                df[derived_col] = end_num - start_num
+            if pd.api.types.is_datetime64_any_dtype(df[start_col]) and pd.api.types.is_datetime64_any_dtype(df[end_col]):
+                # Already datetime — subtract directly in seconds.
+                df[derived_col] = (df[end_col] - df[start_col]).dt.total_seconds()
             else:
-                start = pd.to_datetime(df[start_col], errors="coerce")
-                end = pd.to_datetime(df[end_col], errors="coerce")
-                df[derived_col] = (end - start).dt.total_seconds()
+                start_num = pd.to_numeric(df[start_col], errors="coerce")
+                end_num = pd.to_numeric(df[end_col], errors="coerce")
+                if start_num.notna().any() and end_num.notna().any():
+                    # Epoch-like numeric timestamps (common in scheduler logs).
+                    df[derived_col] = end_num - start_num
+                else:
+                    start = pd.to_datetime(df[start_col], errors="coerce")
+                    end = pd.to_datetime(df[end_col], errors="coerce")
+                    df[derived_col] = (end - start).dt.total_seconds()
             mapped["expected_run_time"] = derived_col
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
+
+        # time_limit ← clean up SLURM UINT32_MAX sentinel (4294967295 = unlimited).
+        # sacct stores "no limit" as 2^32-1; treat those as 0 (RAPS default for unlimited).
+        _UINT32_MAX = 4294967295
+        if "time_limit" in mapped:
+            _tl_col = mapped["time_limit"]
+            if _tl_col in df.columns:
+                _tl_vals = pd.to_numeric(df[_tl_col], errors="coerce")
+                _n_sentinel = (_tl_vals == _UINT32_MAX).sum()
+                if _n_sentinel > 0:
+                    derived_col = "_derived_time_limit"
+                    df[derived_col] = _tl_vals.where(_tl_vals != _UINT32_MAX, other=0.0)
+                    mapped["time_limit"] = derived_col
+                    conf["time_limit"] = 0.9
+                    logger.info(
+                        f"time_limit column '{_tl_col}' has {_n_sentinel} UINT32_MAX sentinel "
+                        f"values (SLURM 'unlimited'); replaced with 0"
+                    )
 
         # name ← uuid4[:6] (matches RAPS convention)
         if "name" not in mapped:
@@ -685,7 +720,8 @@ class JobDictBuilder:
                  jobprofile_df: Optional[pd.DataFrame] = None,
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
-                 priority_policy: Optional[str] = None):
+                 priority_policy: Optional[str] = None,
+                 id_strip_suffix: bool = False):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
@@ -694,6 +730,7 @@ class JobDictBuilder:
         self.system_name = system_name
         self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
         self._priority_fn = _PRIORITY_POLICIES.get(priority_policy) if priority_policy else None
+        self.id_strip_suffix = id_strip_suffix
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -895,6 +932,9 @@ class JobDictBuilder:
                 if isinstance(value, list):
                     value = list(value)
 
+            # Strip dot-suffix from id field when requested (e.g. "1242841.aurora" → "1242841")
+            if canon == "id" and self.id_strip_suffix and isinstance(value, str) and "." in value:
+                value = value.rsplit(".", 1)[0]
             job[canon] = value
 
         # Apply priority policy when the source data has no priority column
@@ -1444,6 +1484,40 @@ def _local_job_dict(**kwargs) -> Dict[str, Any]:
 # 7. Pipeline Steps
 # ---------------------------------------------------------------------------
 
+class ApplyColumnScalars(PipelineStep):
+    """Multiply specific source columns by a constant scalar (for unit conversion).
+
+    ``scalars`` is a dict mapping *original column name* → multiplier float.
+    Applied after AutoMapColumns so the mapping is already stored in metadata,
+    but the source columns haven't been renamed yet.
+
+    Example YAML::
+
+        column_scalars:
+          timelimit: 60   # SLURM timelimit is in minutes → convert to seconds
+    """
+
+    name = "apply_column_scalars"
+    stage = PipelineStage.INGEST
+    description = "Apply unit-conversion scalars to columns"
+
+    def __init__(self, scalars: Optional[Dict[str, float]] = None):
+        super().__init__()
+        self.scalars = scalars or {}
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        if not self.scalars or not isinstance(ctx.data, pd.DataFrame):
+            return ctx
+        df = ctx.data
+        for col, factor in self.scalars.items():
+            if col in df.columns:
+                df = df.copy() if df is ctx.data else df  # avoid in-place on original
+                df[col] = pd.to_numeric(df[col], errors="coerce") * factor
+                logger.info(f"Applied scalar ×{factor} to column '{col}'")
+        ctx.data = df
+        return ctx
+
+
 class AutoMapColumns(PipelineStep):
     """Map arbitrary HPC telemetry columns to canonical RAPS Job field names."""
 
@@ -1521,13 +1595,15 @@ class BuildJobDicts(PipelineStep):
                  trace_quanta: Optional[int] = None,
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
-                 priority_policy: Optional[str] = None):
+                 priority_policy: Optional[str] = None,
+                 id_strip_suffix: bool = False):
         super().__init__()
         self.power_config = power_config
         self.trace_quanta = trace_quanta
         self.topology = topology
         self.system_name = system_name
         self.priority_policy = priority_policy
+        self.id_strip_suffix = id_strip_suffix
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1549,6 +1625,7 @@ class BuildJobDicts(PipelineStep):
             topology=self.topology,
             system_name=self.system_name,
             priority_policy=self.priority_policy,
+            id_strip_suffix=self.id_strip_suffix,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 

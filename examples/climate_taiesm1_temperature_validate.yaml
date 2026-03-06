@@ -1,0 +1,31 @@
+# REDI config for TaiESM1 temperature (ta) validation
+# 3D variable: (time, plev=3, lat, lon) → regrid to 1.40625°
+# ClimaX pressure levels: [850, 500, 250] hPa (85000, 50000, 25000 Pa)
+
+domain: climate
+input_path: /opt/drai/CMIP6/TaiESM1/raw/temperature/temperature_186001010600-187001010000_raw.nc
+output_dir: ./output/taiesm1_temperature_redi
+output_format: npz
+
+regrid:
+  enabled: true
+  target_resolution: 1.40625
+  method: bilinear
+  climax_grid: true
+
+normalize:
+  enabled: false
+
+variables:
+  select: null
+  rename:
+    ta: t
+
+anomalies:
+  enabled: false
+
+split:
+  enabled: false
+
+climax_output:
+  enabled: false

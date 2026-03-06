@@ -30,6 +30,10 @@ class NormalizeNumeric(PipelineStep):
         self.method = method  # "zscore", "minmax", "robust"
         self.columns = columns  # None = all numeric columns
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
@@ -105,6 +109,10 @@ class EncodeCategorical(PipelineStep):
         self.columns = columns
         self.max_categories = max_categories
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
@@ -169,6 +177,10 @@ class EngineerFeatures(PipelineStep):
         # Features format: [{"name": "col1_col2_ratio", "expr": "col1 / col2"}, ...]
         self.features = features or []
 
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
             import pandas as pd
@@ -209,6 +221,10 @@ class AutoFeatureEngineering(PipelineStep):
         super().__init__()
         self.create_interactions = create_interactions
         self.create_datetime_features = create_datetime_features
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
@@ -285,6 +301,10 @@ class SelectFeatures(PipelineStep):
         self.method = method  # "variance", "correlation", "mutual_info"
         self.threshold = threshold
         self.target_column = target_column
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:

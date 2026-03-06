@@ -1,5 +1,5 @@
 """
-Nextflow workflow parser for REDI observability.
+Nextflow workflow parser for REDI inspect.
 
 Parses Nextflow DSL2 workflows to extract:
 - Process definitions (inputs, outputs, scripts)

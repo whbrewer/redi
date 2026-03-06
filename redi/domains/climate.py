@@ -277,6 +277,14 @@ def get_preprocess_steps():
                 if not hasattr(ctx.data, 'dims'):
                     return ctx
 
+                # Read config overrides (YAML regrid section takes precedence)
+                regrid_cfg = ctx.config.get("regrid", {})
+                if regrid_cfg.get("enabled", True) is False:
+                    return ctx
+                target_resolution = float(regrid_cfg.get("target_resolution", self.target_resolution))
+                method = regrid_cfg.get("method", self.method)
+                climax_grid = regrid_cfg.get("climax_grid", False)
+
                 ds = ctx.data
 
                 # Determine current coordinate names
@@ -287,35 +295,49 @@ def get_preprocess_steps():
                     logger.warning("Cannot regrid: missing lat/lon coordinates")
                     return ctx
 
-                # Create target grid
-                lat_out = np.arange(-90, 90 + self.target_resolution, self.target_resolution)
-                lon_out = np.arange(0, 360, self.target_resolution)
+                # Create target grid.
+                # climax_grid=True: lat starts at -90+ddeg/2 (cell-centred, matches ClimaX)
+                # default: lat from -90 to +90 inclusive
+                if climax_grid:
+                    half = target_resolution / 2
+                    lat_out = np.arange(-90 + half, 90, target_resolution)
+                else:
+                    lat_out = np.arange(-90, 90 + target_resolution, target_resolution)
+                lon_out = np.arange(0, 360, target_resolution)
 
                 ds_out = xr.Dataset({
                     'lat': (['lat'], lat_out),
                     'lon': (['lon'], lon_out),
                 })
 
+                # Drop CMIP bounds variables — xesmf cannot regrid them and
+                # ClimaX regrid.py also drops these (--cmip flag).
+                bounds_vars = [v for v in list(ds.data_vars) + list(ds.coords)
+                               if v.endswith('_bnds') or v.endswith('_bounds')]
+                if bounds_vars:
+                    ds = ds.drop_vars(bounds_vars, errors='ignore')
+
                 # Rename coordinates if needed
                 if lat_name != 'lat' or lon_name != 'lon':
                     ds = ds.rename({lat_name: 'lat', lon_name: 'lon'})
 
                 # Build regridder and apply
-                regridder = xe.Regridder(ds, ds_out, self.method, periodic=True)
+                regridder = xe.Regridder(ds, ds_out, method, periodic=True)
                 regridded = regridder(ds)
 
                 # Force computation to avoid lazy evaluation deferring work
                 ctx.data = regridded.compute()
 
                 ctx.metadata["regridded"] = {
-                    "method": self.method,
-                    "target_resolution": self.target_resolution,
+                    "method": method,
+                    "target_resolution": target_resolution,
+                    "climax_grid": climax_grid,
                     "output_shape": {
                         "lat": len(lat_out),
                         "lon": len(lon_out)
                     }
                 }
-                logger.info(f"Regridded to {self.target_resolution}° resolution")
+                logger.info(f"Regridded to {target_resolution}° resolution ({len(lat_out)}×{len(lon_out)})")
 
             except ImportError:
                 ctx.add_error(missing_dependency_error("xesmf", "climate"))
@@ -412,6 +434,11 @@ def get_preprocess_steps():
                 if not hasattr(ctx.data, 'data_vars'):
                     return ctx
 
+                normalize_cfg = ctx.config.get("normalize", {})
+                if normalize_cfg.get("enabled", True) is False:
+                    return ctx
+                method = normalize_cfg.get("method", self.method)
+
                 ds = ctx.data
                 stats = {}
 
@@ -420,9 +447,9 @@ def get_preprocess_steps():
                     mean = float(da.mean())
                     std = float(da.std())
 
-                    if self.method == "zscore" and std > 0:
+                    if method == "zscore" and std > 0:
                         ds[var] = (da - mean) / std
-                    elif self.method == "minmax":
+                    elif method == "minmax":
                         min_val = float(da.min())
                         max_val = float(da.max())
                         if max_val > min_val:
@@ -465,10 +492,21 @@ def get_transform_steps():
             if not hasattr(ctx.data, 'data_vars'):
                 return ctx
 
-            if self.variables:
-                available = [v for v in self.variables if v in ctx.data.data_vars]
+            variables_cfg = ctx.config.get("variables", {})
+            select = variables_cfg.get("select") or self.variables
+            rename = variables_cfg.get("rename") or {}
+
+            if select:
+                available = [v for v in select if v in ctx.data.data_vars]
                 ctx.data = ctx.data[available]
                 ctx.metadata["selected_variables"] = available
+
+            if rename:
+                # Only rename variables that exist in the dataset
+                rename_map = {k: v for k, v in rename.items() if k in ctx.data.data_vars}
+                if rename_map:
+                    ctx.data = ctx.data.rename(rename_map)
+                    ctx.metadata["renamed_variables"] = rename_map
 
             return ctx
 
@@ -482,6 +520,11 @@ def get_transform_steps():
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
                 if not hasattr(ctx.data, 'data_vars') or 'time' not in ctx.data.dims:
+                    return ctx
+
+                # Only compute anomalies if explicitly enabled in config (default: off)
+                anomalies_cfg = ctx.config.get("anomalies", {})
+                if not anomalies_cfg.get("enabled", False):
                     return ctx
 
                 ds = ctx.data
@@ -708,7 +751,8 @@ def get_output_steps():
 
             return ctx
 
-    return [TrainValTestSplit(), SaveClimateOutput()]
+    from ..pipeline.output import WriteChecksums
+    return [TrainValTestSplit(), SaveClimateOutput(), WriteChecksums()]
 
 
 def get_full_pipeline():

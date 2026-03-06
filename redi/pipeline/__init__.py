@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Callable, Union
 from enum import Enum
 from pathlib import Path
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,68 @@ def _safe_json_value(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_safe_json_value(v) for v in value]
     return value
+
+
+def _snapshot_dataset_state(ctx: "PipelineContext") -> Dict[str, Any]:
+    """Capture a lightweight, JSON-safe snapshot of current dataset context."""
+    state: Dict[str, Any] = {}
+    data = ctx.data
+    if data is None:
+        return state
+
+    cls_name = data.__class__.__name__
+    state["data_kind"] = cls_name
+
+    # pandas.DataFrame-like
+    if hasattr(data, "shape") and hasattr(data, "columns") and hasattr(data, "dtypes"):
+        try:
+            rows, cols = data.shape
+            state["shape"] = [int(rows), int(cols)]
+            state["columns"] = [str(c) for c in list(data.columns)]
+            state["dtypes"] = {str(k): str(v) for k, v in data.dtypes.to_dict().items()}
+            return _safe_json_value(state)
+        except Exception:
+            pass
+
+    # numpy/xarray/torch-like objects
+    if hasattr(data, "shape"):
+        try:
+            shape = getattr(data, "shape")
+            if shape is not None:
+                state["shape"] = [int(v) for v in shape]
+        except Exception:
+            pass
+
+    # Split dictionary (e.g., {"train": ..., "val": ..., "test": ...})
+    if isinstance(data, dict):
+        split_sizes: Dict[str, Any] = {}
+        for split_key in ("train", "val", "test"):
+            split_val = data.get(split_key)
+            if split_val is None:
+                continue
+            if isinstance(split_val, dict) and "X" in split_val and hasattr(split_val["X"], "__len__"):
+                try:
+                    split_sizes[split_key] = len(split_val["X"])
+                    continue
+                except Exception:
+                    pass
+            if hasattr(split_val, "__len__"):
+                try:
+                    split_sizes[split_key] = len(split_val)
+                except Exception:
+                    pass
+        if split_sizes:
+            state["split_sizes"] = split_sizes
+
+    return _safe_json_value(state)
+
+
+def _clean_metadata_for_provenance(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove redundant input path/name fields from custom metadata."""
+    cleaned = dict(metadata)
+    for key in ("input_path", "input_paths", "input_files", "file_name"):
+        cleaned.pop(key, None)
+    return cleaned
 
 
 def missing_dependency_error(package: str, extra: Optional[str] = None) -> str:
@@ -147,38 +210,79 @@ class PipelineStep:
         @wraps(execute)
         def wrapped_execute(self, ctx: PipelineContext) -> PipelineContext:
             flowcept_task = None
+            flowcept_task_ended = False
             try:
                 if (
-                    ctx.with_flowcept
-                    and ctx.flowcept is not None
-                    and getattr(ctx.flowcept, "is_started", False)
+                        ctx.with_flowcept
+                        and ctx.flowcept is not None
+                        and getattr(ctx.flowcept, "is_started", False)
                 ):
                     from flowcept.instrumentation.task_capture import FlowceptTask
 
-                    input_path_str = str(ctx.input_path)
-                    input_paths_str = [str(p) for p in ctx.input_paths]
-                    unique_input_paths = list(dict.fromkeys(input_paths_str))
-                    used_dict = {
-                        "input_path": input_path_str,
-                        "output_dir": str(ctx.output_dir),
-                    }
-                    if not (len(unique_input_paths) == 1 and unique_input_paths[0] == input_path_str):
-                        used_dict["input_paths"] = unique_input_paths
-                    custom_metadata = {
-                        "current_stage": ctx.current_stage.value,
-                        "completed_stages": [s.value for s in ctx.completed_stages],
-                        "metadata": _safe_json_value(ctx.metadata),
-                    }
+                    metadata_before = ctx.metadata
+                    state_before = _snapshot_dataset_state(ctx)
+
+                    # Input-related fields move under "used".
+                    used_dict = {}
+                    metadata_before.copy()
+
+                    # Keep columns/dtypes in custom metadata, not in used/generated state.
+                    for key in ("columns", "dtypes", "file_size_bytes"):
+                        value = state_before.pop(key, None)
+                        if value is not None:
+                            metadata_before[key] = value
+
+                    used_dict.update(state_before)
 
                     flowcept_task = FlowceptTask(
+                        tags=[ctx.current_stage.value],
                         activity_id=self.__class__.__name__,
                         used=used_dict,
-                        custom_metadata=custom_metadata,
                     )
 
-                return execute(self, ctx)
-            finally:
+                next_ctx = execute(self, ctx)
+
                 if flowcept_task:
+
+                    metadata_after = next_ctx.metadata
+                    state_after = _snapshot_dataset_state(next_ctx)
+
+                    for key in ("columns", "dtypes"):
+                        value = state_after.pop(key, None)
+                        if value is not None:
+                            metadata_after[key] = value
+
+                    custom_metadata = {
+                        "before": metadata_before,
+                        "after": metadata_after,
+                        "completed_stages": [s.value for s in next_ctx.completed_stages],
+                    }
+                    flowcept_task.end(
+                        generated=state_after,
+                        custom_metadata=custom_metadata,
+                    )
+                    flowcept_task_ended = True
+
+                return next_ctx
+            except Exception:
+                if flowcept_task:
+                    try:
+                        from flowcept.commons.vocabulary import Status
+
+                        error_state = _snapshot_dataset_state(ctx)
+                        flowcept_task.end(
+                            generated=error_state,
+                            custom_metadata=metadata_before,
+                            status=Status.ERROR,
+                            stderr=traceback.format_exc(),
+                        )
+                    except Exception:
+                        # Keep pipeline semantics: instrumentation failures must not hide root cause.
+                        pass
+                    flowcept_task_ended = True
+                raise
+            finally:
+                if flowcept_task and not flowcept_task_ended:
                     flowcept_task.end()
 
         wrapped_execute._redi_wrapped = True
@@ -231,6 +335,14 @@ class Pipeline:
         """Start Flowcept once for this execution path. Returns True if started here."""
         if not ctx.with_flowcept:
             return False
+        # Flowcept already configures its own handlers/formatters. Prevent duplicate
+        # plain-text lines via root logger propagation.
+        try:
+            from flowcept.configs import PROJECT_NAME as FLOWCEPT_LOGGER_NAME
+
+            logging.getLogger(FLOWCEPT_LOGGER_NAME).propagate = False
+        except Exception:
+            logging.getLogger("flowcept").propagate = False
         if ctx.flowcept is None:
             from flowcept import Flowcept
 
@@ -395,7 +507,7 @@ def __getattr__(name):
         return getattr(ingest, name)
     elif name in ('NormalizeArray', 'ComputeArrayStats', 'HandleMissingValues',
                   'RemoveDuplicates', 'ValidateDataTypes', 'HandleOutliers',
-                  'AnonymizePII', 'RegridClimate', 'get_preprocess_steps'):
+                  'AnonymizePII', 'get_preprocess_steps'):
         from . import preprocess
         return getattr(preprocess, name)
     elif name in ('TrainValTestSplit', 'ShardData', 'SaveNPZ', 'SaveHDF5',
