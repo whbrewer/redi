@@ -1,0 +1,61 @@
+{
+  "domain": "life_sciences",
+  "protein": "6KWC",
+  "seq_length": 191,
+  "raw": {
+    "completeness": {
+      "completeness": {
+        "Completeness scores": {
+          "position": 1.0,
+          "aa_index": 1.0,
+          "aa_type": 1.0
+        },
+        "Overall Completeness": 1.0
+      }
+    },
+    "duplicity": {
+      "duplicity": {
+        "Duplicity scores": {
+          "Overall duplicity of the dataset": 0.0
+        }
+      }
+    },
+    "outliers": {
+      "outliers": {
+        "Outlier scores": {
+          "position": 0.0,
+          "aa_index": 0.0,
+          "aa_type": 0.03664921465968586,
+          "Overall outlier score": 0.012216404886561954
+        }
+      }
+    }
+  },
+  "ai_ready": {
+    "completeness": {
+      "completeness": {
+        "Completeness scores": {
+          "position": 1.0,
+          "encoded": 1.0
+        },
+        "Overall Completeness": 1.0
+      }
+    },
+    "duplicity": {
+      "duplicity": {
+        "Duplicity scores": {
+          "Overall duplicity of the dataset": 0.0
+        }
+      }
+    },
+    "outliers": {
+      "outliers": {
+        "Outlier scores": {
+          "position": 0.0,
+          "encoded": 0.0,
+          "Overall outlier score": 0.0
+        }
+      }
+    }
+  }
+}

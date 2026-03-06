@@ -1,0 +1,18 @@
+{
+  "case": "hydragnn_aflow",
+  "domain": "materials",
+  "n_structures": 9,
+  "n_features": 135,
+  "runs": 3,
+  "stages_ms": {
+    "ingest": 293,
+    "preprocess": 296,
+    "transform": 705,
+    "structure": 5,
+    "output": 3
+  },
+  "total_ms": 1758,
+  "total_s": 1.758,
+  "throughput_structs_per_s": 5.12,
+  "throughput_label": "structs/s"
+}

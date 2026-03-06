@@ -1,0 +1,25 @@
+{
+  "case": "openfold_6kwc",
+  "domain": "life_sciences",
+  "n_sequences": 1,
+  "redi_shape": [
+    1,
+    191
+  ],
+  "elapsed_ms": 668,
+  "similarity": {
+    "corr": 1.0,
+    "mae": 0.0,
+    "identity": 1.0
+  },
+  "sequences": [
+    {
+      "corr": 1.0,
+      "mae": 0.0,
+      "identity": 1.0,
+      "redi_length": 191,
+      "gt_length": 191
+    }
+  ],
+  "note": "Validation via lossless decode: integer encoding -> amino acid string. identity=1.0 confirms exact sequence preservation."
+}

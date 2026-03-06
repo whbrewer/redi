@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering
+\caption{Multi-domain validation and AIDRIN data quality assessment.
+Corr and MAE measure fidelity between REDI output and ground-truth reference data.
+$\Delta$ columns show the change (AI-ready $-$ raw) for each AIDRIN metric;
+bold indicates improvement.
+$\dagger$ XGC1 deferred pending GT from colleague.
+*HPC row is Frontier; full 10-system breakdown in Table~IV.}
+\label{tab:multidomain}
+\begin{tabular}{llrrrrrr}
+\toprule
+\textbf{Use Case} & \textbf{Domain} & \textbf{Corr} & \textbf{MAE}
+  & \textbf{$\Delta$Complete} & \textbf{$\Delta$Dup} & \textbf{$\Delta$Outlier} & \textbf{$\Delta$Imbalance} \\
+\midrule
+  ClimaX & Climate & 1.000 & 0.0000 & +0.000 & +0.000 & +0.000 & \textbf{-1.006} \\
+  HydraGNN & Materials & 1.000 & 0.0000 & +0.000 & +0.000 & +0.040 & N/A \\
+  OpenFold & Life Sci. & 1.000 & 0.0000 & +0.000 & +0.000 & \textbf{-0.012} & N/A \\
+  sPHENIX & Nuc. Phys. & 1.000 & 0.0000 & +0.000 & +0.000 & \textbf{-0.003} & N/A \\
+  ExaDigiT* & HPC & 1.000 & 0.0000 & \textbf{+0.193} & +0.000 & -0.000 & \textbf{-0.186} \\
+  XGC1† & Fusion & — & — & — & — & — & — \\
+\bottomrule
+\end{tabular}
+\end{table}

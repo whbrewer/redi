@@ -1,0 +1,71 @@
+{
+  "domain": "nuclear_physics",
+  "dataset": "sPHENIX outer TPC 12-2_0-0",
+  "n_events": 200,
+  "raw": {
+    "completeness": {
+      "completeness": {
+        "Completeness scores": {
+          "sum_hits": 1.0,
+          "max_adc": 1.0,
+          "mean_adc": 1.0,
+          "nonzero_fraction": 1.0,
+          "mean_nonzero_adc": 1.0
+        },
+        "Overall Completeness": 1.0
+      }
+    },
+    "duplicity": {
+      "duplicity": {
+        "Duplicity scores": {
+          "Overall duplicity of the dataset": 0.0
+        }
+      }
+    },
+    "outliers": {
+      "outliers": {
+        "Outlier scores": {
+          "sum_hits": 0.005,
+          "max_adc": 0.0,
+          "mean_adc": 0.005,
+          "nonzero_fraction": 0.005,
+          "mean_nonzero_adc": 0.04,
+          "Overall outlier score": 0.011
+        }
+      }
+    }
+  },
+  "ai_ready": {
+    "completeness": {
+      "completeness": {
+        "Completeness scores": {
+          "sum_hits": 1.0,
+          "max_adc": 1.0,
+          "mean_adc": 1.0,
+          "nonzero_fraction": 1.0,
+          "mean_nonzero_adc": 1.0
+        },
+        "Overall Completeness": 1.0
+      }
+    },
+    "duplicity": {
+      "duplicity": {
+        "Duplicity scores": {
+          "Overall duplicity of the dataset": 0.0
+        }
+      }
+    },
+    "outliers": {
+      "outliers": {
+        "Outlier scores": {
+          "sum_hits": 0.005,
+          "max_adc": 0.0,
+          "mean_adc": 0.005,
+          "nonzero_fraction": 0.005,
+          "mean_nonzero_adc": 0.025,
+          "Overall outlier score": 0.008
+        }
+      }
+    }
+  }
+}
