@@ -392,7 +392,8 @@ def run_pipeline(
         elif domain == "materials":
             from .domains.materials import get_full_pipeline
         elif domain == "life_sciences":
-            from .domains.life_sciences import get_full_pipeline
+            from .domains.life_sciences import get_full_pipeline as _get_ls_pipeline
+            get_full_pipeline = lambda: _get_ls_pipeline(input_path=primary_path)
         elif domain == "fusion":
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":

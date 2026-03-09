@@ -366,8 +366,20 @@ def get_output_steps():
     return get_output_steps(output_format="hdf5")
 
 
-def get_full_pipeline():
-    """Get the complete life sciences preprocessing pipeline"""
+def get_full_pipeline(input_path=None):
+    """Get the complete life sciences preprocessing pipeline.
+
+    If *input_path* is an OpenFold data root (has fasta/ and pdb/ subdirs),
+    returns the OpenFold-specific pipeline instead of the generic one.
+    """
+    from pathlib import Path
+    if input_path is not None:
+        p = Path(input_path)
+        if p.is_dir() and (p / "fasta").is_dir() and (p / "pdb").is_dir():
+            from .openfold import get_openfold_pipeline
+            logger.info("Detected OpenFold dataset layout — using OpenFold pipeline")
+            return get_openfold_pipeline()
+
     return (
         get_ingest_steps() +
         get_preprocess_steps() +
