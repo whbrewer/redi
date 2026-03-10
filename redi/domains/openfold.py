@@ -512,84 +512,171 @@ def get_openfold_pipeline():
     # ------------------------------------------------------------------
     # OUTPUT
     # ------------------------------------------------------------------
-    class SavePerProteinNPZ(PipelineStep):
-        """Save one NPZ file per protein; split proteins into train/val/test."""
+    class OrganizeOpenFoldLayout(PipelineStep):
+        """
+        Produce a directory layout that can be passed directly to
+        OpenFold's OpenFoldDataModule — no pre-computed feature tensors needed.
 
-        name = "save_per_protein_npz"
+        Output layout:
+            <output_dir>/
+                train_data/          .cif files for training proteins
+                val_data/            .cif files for validation proteins
+                train_alignments/    alignment subdirs for training proteins
+                val_alignments/      alignment subdirs for validation proteins
+                chain_data_cache_train.json
+                chain_data_cache_val.json
+
+        Usage with OpenFold:
+            OpenFoldDataModule(
+                train_data_dir       = '<output_dir>/train_data',
+                train_alignment_dir  = '<output_dir>/train_alignments',
+                val_data_dir         = '<output_dir>/val_data',
+                val_alignment_dir    = '<output_dir>/val_alignments',
+                chain_data_cache_path= '<output_dir>/chain_data_cache_train.json',
+                ...
+            )
+        """
+
+        name = "organize_openfold_layout"
         stage = PipelineStage.OUTPUT
-        description = "Save per-protein OpenFold feature NPZ files"
+        description = "Organize files into OpenFoldDataModule-compatible directory layout"
 
-        def __init__(
-            self,
-            train_ratio: float = 0.8,
-            val_ratio: float = 0.1,
-            random_seed: int = 42,
-        ):
+        def __init__(self, train_ratio: float = 0.9, random_seed: int = 42):
             super().__init__()
             self.train_ratio = train_ratio
-            self.val_ratio = val_ratio
             self.random_seed = random_seed
 
         def validate(self, ctx: PipelineContext) -> bool:
             return ctx.metadata.get("is_openfold", False)
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
+            import json
+            import shutil
+
             proteins = ctx.data["proteins"]
             if not proteins:
-                ctx.add_error("No proteins to save")
+                ctx.add_error("No proteins to organize")
                 return ctx
 
             output_dir = ctx.output_dir
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Split at the protein level
+            # 90/10 train/val split (OpenFold has no test split in its DataModule)
             rng = np.random.default_rng(self.random_seed)
             n = len(proteins)
             idx = rng.permutation(n)
             train_end = int(n * self.train_ratio)
-            val_end = train_end + int(n * self.val_ratio)
 
             split_map: Dict[int, str] = {}
             for i in idx[:train_end]:
                 split_map[i] = "train"
-            for i in idx[train_end:val_end]:
+            for i in idx[train_end:]:
                 split_map[i] = "val"
-            for i in idx[val_end:]:
-                split_map[i] = "test"
 
-            # Create split subdirectories
-            for split in ("train", "val", "test"):
-                (output_dir / split).mkdir(exist_ok=True)
+            # Create output subdirectories
+            for split in ("train", "val"):
+                (output_dir / f"{split}_data").mkdir(exist_ok=True)
+                (output_dir / f"{split}_alignments").mkdir(exist_ok=True)
+
+            # Try to use OpenFold's own mmcif_parsing for the cache
+            try:
+                import sys
+                sys.path.insert(0, "/opt/drai/openfold")
+                from openfold.data.mmcif_parsing import parse as _of_parse
+                _has_openfold = True
+            except ImportError:
+                _has_openfold = False
+                logger.warning(
+                    "OpenFold not found at /opt/drai/openfold — "
+                    "chain_data_cache.json will omit release_date"
+                )
 
             saved_files: List[str] = []
-            split_counts: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
+            caches: Dict[str, Dict] = {"train": {}, "val": {}}
 
             for i, prot in enumerate(proteins):
-                split = split_map[i]
                 pdb_id = prot["pdb_id"]
-                out_path = output_dir / split / f"{pdb_id}.npz"
-                np.savez_compressed(out_path, **prot["features"])
-                saved_files.append(str(out_path))
-                split_counts[split] += 1
+                split = split_map[i]
+                cif_src: Path = prot["cif_path"]
+                aln_src: Optional[Path] = prot["alignment_dir"]
 
+                # Copy .cif into <split>_data/
+                cif_dst = output_dir / f"{split}_data" / cif_src.name
+                shutil.copy2(cif_src, cif_dst)
+                saved_files.append(str(cif_dst))
+
+                # Copy alignment subdir into <split>_alignments/<pdb_id>/
+                if aln_src is not None and aln_src.is_dir():
+                    aln_dst = output_dir / f"{split}_alignments" / pdb_id
+                    if aln_dst.exists():
+                        shutil.rmtree(aln_dst)
+                    shutil.copytree(aln_src, aln_dst)
+                    saved_files.append(str(aln_dst))
+
+                # Build chain_data_cache entries
+                if _has_openfold:
+                    try:
+                        mmcif_str = cif_src.read_text()
+                        result = _of_parse(file_id=pdb_id, mmcif_string=mmcif_str)
+                        if result.mmcif_object is not None:
+                            mmcif = result.mmcif_object
+                            for chain_id, seq in mmcif.chain_to_seqres.items():
+                                key = f"{pdb_id}_{chain_id}"
+                                caches[split][key] = {
+                                    "release_date": mmcif.header.get("release_date", ""),
+                                    "seq": seq,
+                                    "resolution": mmcif.header.get("resolution", 0.0),
+                                    "cluster_size": -1,  # unknown without PDB40 cluster file
+                                }
+                    except Exception as e:
+                        logger.warning(f"Cache generation failed for {pdb_id}: {e}")
+                else:
+                    # Fallback: use already-parsed sequence if available
+                    seq = prot.get("sequence", "")
+                    if seq:
+                        key = f"{pdb_id}_A"
+                        caches[split][key] = {
+                            "seq": seq,
+                            "resolution": prot.get("resolution", 0.0),
+                            "cluster_size": -1,
+                        }
+
+            # Write chain_data_cache JSON files
+            for split in ("train", "val"):
+                cache_path = output_dir / f"chain_data_cache_{split}.json"
+                cache_path.write_text(json.dumps(caches[split], indent=2))
+                saved_files.append(str(cache_path))
+                logger.info(
+                    f"Wrote {cache_path.name} "
+                    f"({len(caches[split])} chains, {split_map_count(split_map, split)} proteins)"
+                )
+
+            split_counts = {
+                "train": sum(1 for s in split_map.values() if s == "train"),
+                "val":   sum(1 for s in split_map.values() if s == "val"),
+            }
             logger.info(
-                f"Saved {len(saved_files)} NPZ files — "
-                f"train={split_counts['train']}, "
-                f"val={split_counts['val']}, "
-                f"test={split_counts['test']}"
+                f"Organized {n} proteins — "
+                f"train={split_counts['train']}, val={split_counts['val']}"
             )
             ctx.metadata["saved_files"] = saved_files
-            ctx.metadata["output_format"] = "npz"
+            ctx.metadata["output_format"] = "openfold_native"
             ctx.metadata["split"] = split_counts
+            ctx.metadata["openfold_usage"] = {
+                "train_data_dir":        str(output_dir / "train_data"),
+                "train_alignment_dir":   str(output_dir / "train_alignments"),
+                "val_data_dir":          str(output_dir / "val_data"),
+                "val_alignment_dir":     str(output_dir / "val_alignments"),
+                "chain_data_cache_path": str(output_dir / "chain_data_cache_train.json"),
+            }
             return ctx
+
+    def split_map_count(split_map: Dict[int, str], split: str) -> int:
+        return sum(1 for s in split_map.values() if s == split)
 
     return [
         LoadOpenFoldDataset(),
-        ParseMMCIFStructures(),
-        ParseMSAAlignments(),
-        EncodeOpenFoldFeatures(),
-        AssembleOpenFoldFeatures(),
-        SavePerProteinNPZ(),
+        OrganizeOpenFoldLayout(),
         WriteChecksums(),
         SaveMetadata(),
     ]
