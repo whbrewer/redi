@@ -108,12 +108,18 @@ python scripts/run_aidrin_materials.py
 
 ## 4. sPHENIX — Nuclear Physics (TPC detector hits)
 
-**Data:** `/opt/drai/sphenix/outer/12-2_0-0/*.npy`
+**Data:** `/opt/drai/sphenix/outer/`
+(31,440 wedge files in 24 subdirs; canonical `train.txt` / `test.txt` manifests included)
 
 ### Run pipeline
 ```bash
-redi run "/opt/drai/sphenix/outer/12-2_0-0/*.npy" -o ./output/sphenix_ready
+redi run /opt/drai/sphenix/outer/ --domain nuclear_physics -o ./output/sphenix_ready
+# or using the config file:
+redi run /opt/drai/sphenix/outer/ -c examples/sphenix_config.yaml
 ```
+
+Output is directly compatible with NeuralCompression_v3's `DatasetTPC` loader.
+Set `log: false` in the model YAML — REDI already applies log2(ADC+1).
 
 ### Validate
 ```bash
