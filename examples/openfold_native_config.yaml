@@ -1,0 +1,41 @@
+# REDI Configuration for OpenFold Dataset — OpenFold-native mode
+#
+# Skips feature pre-computation and organizes raw .cif + alignment files
+# into the directory layout expected by OpenFold's OpenFoldDataModule.
+# Drop-in compatible with OpenFold training — no REDI dependencies needed
+# at train time.
+#
+# Usage:
+#   redi run /opt/drai/openfold_data/ -c examples/openfold_native_config.yaml
+
+domain: life_sciences
+output_dir: ./openfold_ready
+output_format: openfold_native
+
+# Train/val split (90/10 — OpenFold's DataModule has no test split)
+split:
+  train: 0.9
+  val: 0.1
+  random_seed: 42
+
+# Output layout:
+#
+#   openfold_ready/
+#       train_data/                 .cif files for training proteins
+#       val_data/                   .cif files for validation proteins
+#       train_alignments/<PDB_ID>/  A3M + pdb70.m8 files for training
+#       val_alignments/<PDB_ID>/    A3M + pdb70.m8 files for validation
+#       chain_data_cache_train.json per-chain metadata (seq, resolution, release_date)
+#       chain_data_cache_val.json
+#
+# Pass directly to OpenFoldDataModule:
+#
+#   from openfold.data.data_modules import OpenFoldDataModule
+#   data_module = OpenFoldDataModule(
+#       train_data_dir        = 'openfold_ready/train_data',
+#       train_alignment_dir   = 'openfold_ready/train_alignments',
+#       val_data_dir          = 'openfold_ready/val_data',
+#       val_alignment_dir     = 'openfold_ready/val_alignments',
+#       chain_data_cache_path = 'openfold_ready/chain_data_cache_train.json',
+#       config                = ...,
+#   )

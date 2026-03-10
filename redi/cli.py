@@ -393,7 +393,8 @@ def run_pipeline(
             from .domains.materials import get_full_pipeline
         elif domain == "life_sciences":
             from .domains.life_sciences import get_full_pipeline as _get_ls_pipeline
-            get_full_pipeline = lambda: _get_ls_pipeline(input_path=primary_path)
+            _ls_fmt = config.get("output_format", "npz") if config else "npz"
+            get_full_pipeline = lambda: _get_ls_pipeline(input_path=primary_path, output_format=_ls_fmt)
         elif domain == "fusion":
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":

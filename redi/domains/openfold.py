@@ -243,8 +243,19 @@ def _sequence_to_aatype(seq: str) -> np.ndarray:
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def get_openfold_pipeline():
-    """Return the full list of OpenFold pipeline steps."""
+def get_openfold_pipeline(output_format: str = "npz"):
+    """Return the full list of OpenFold pipeline steps.
+
+    Args:
+        output_format: "npz" (default) — run the full IPTSO pipeline and save
+            per-protein NPZ feature files; useful for studying the preprocessing
+            steps or using REDI output without an OpenFold installation.
+
+            "openfold_native" — skip feature pre-computation and instead
+            organize raw .cif + alignment files into the directory layout
+            expected by OpenFoldDataModule; drop-in compatible with OpenFold
+            training without any REDI-specific dependencies at train time.
+    """
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
     from ..pipeline.output import WriteChecksums, SaveMetadata
 
@@ -671,12 +682,102 @@ def get_openfold_pipeline():
             }
             return ctx
 
+    # ------------------------------------------------------------------
+    # OUTPUT (npz mode)
+    # ------------------------------------------------------------------
+    class SavePerProteinNPZ(PipelineStep):
+        """Save one NPZ file per protein with all pre-computed feature tensors.
+
+        Useful for studying the full preprocessing pipeline within REDI or for
+        loading features without an OpenFold installation at inference/train time.
+        """
+
+        name = "save_per_protein_npz"
+        stage = PipelineStage.OUTPUT
+        description = "Save per-protein OpenFold feature NPZ files"
+
+        def __init__(
+            self,
+            train_ratio: float = 0.8,
+            val_ratio: float = 0.1,
+            random_seed: int = 42,
+        ):
+            super().__init__()
+            self.train_ratio = train_ratio
+            self.val_ratio = val_ratio
+            self.random_seed = random_seed
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("is_openfold", False)
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            proteins = ctx.data["proteins"]
+            if not proteins:
+                ctx.add_error("No proteins to save")
+                return ctx
+
+            output_dir = ctx.output_dir
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            rng = np.random.default_rng(self.random_seed)
+            n = len(proteins)
+            idx = rng.permutation(n)
+            train_end = int(n * self.train_ratio)
+            val_end = train_end + int(n * self.val_ratio)
+
+            split_map: Dict[int, str] = {}
+            for i in idx[:train_end]:
+                split_map[i] = "train"
+            for i in idx[train_end:val_end]:
+                split_map[i] = "val"
+            for i in idx[val_end:]:
+                split_map[i] = "test"
+
+            for split in ("train", "val", "test"):
+                (output_dir / split).mkdir(exist_ok=True)
+
+            saved_files: List[str] = []
+            split_counts: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
+
+            for i, prot in enumerate(proteins):
+                split = split_map[i]
+                pdb_id = prot["pdb_id"]
+                out_path = output_dir / split / f"{pdb_id}.npz"
+                np.savez_compressed(out_path, **prot["features"])
+                saved_files.append(str(out_path))
+                split_counts[split] += 1
+
+            logger.info(
+                f"Saved {len(saved_files)} NPZ files — "
+                f"train={split_counts['train']}, "
+                f"val={split_counts['val']}, "
+                f"test={split_counts['test']}"
+            )
+            ctx.metadata["saved_files"] = saved_files
+            ctx.metadata["output_format"] = "npz"
+            ctx.metadata["split"] = split_counts
+            return ctx
+
+    # ------------------------------------------------------------------
+
     def split_map_count(split_map: Dict[int, str], split: str) -> int:
         return sum(1 for s in split_map.values() if s == split)
 
-    return [
-        LoadOpenFoldDataset(),
-        OrganizeOpenFoldLayout(),
-        WriteChecksums(),
-        SaveMetadata(),
-    ]
+    if output_format == "openfold_native":
+        return [
+            LoadOpenFoldDataset(),
+            OrganizeOpenFoldLayout(),
+            WriteChecksums(),
+            SaveMetadata(),
+        ]
+    else:  # "npz" — full IPTSO pipeline
+        return [
+            LoadOpenFoldDataset(),
+            ParseMMCIFStructures(),
+            ParseMSAAlignments(),
+            EncodeOpenFoldFeatures(),
+            AssembleOpenFoldFeatures(),
+            SavePerProteinNPZ(),
+            WriteChecksums(),
+            SaveMetadata(),
+        ]

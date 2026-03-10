@@ -1,10 +1,8 @@
-# REDI Configuration for OpenFold Dataset
+# REDI Configuration for OpenFold Dataset — NPZ mode (default)
 #
-# Input: OpenFold data directory containing:
-#   fasta/        <PDB_ID>.fasta  — amino acid sequences
-#   pdb/          <PDB_ID>.cif   — mmCIF structure files
-#   alignments/   <PDB_ID>/      — A3M MSA files (optional)
-#   protein_list.txt              — ordered list of PDB IDs (optional)
+# Runs the full IPTSO preprocessing pipeline within REDI and saves
+# per-protein NPZ feature files. Useful for studying the preprocessing
+# steps or loading features without an OpenFold installation.
 #
 # Usage:
 #   redi run /opt/drai/openfold_data/ -c examples/openfold_config.yaml
@@ -12,29 +10,31 @@
 
 domain: life_sciences
 output_dir: ./openfold_ready
+output_format: npz          # "npz" | "openfold_native"
 
-# Train/val split (90/10 — matches OpenFold's DataModule convention)
+# Train/val/test split (protein-level, 80/10/10)
 split:
-  train: 0.9
+  train: 0.8
   val: 0.1
+  test: 0.1
   random_seed: 42
 
-# Output layout (drop-in compatible with OpenFold's OpenFoldDataModule):
+# Output: per-protein NPZ files in train/ val/ test/ subdirs
 #
 #   openfold_ready/
-#       train_data/                 .cif files for training proteins
-#       val_data/                   .cif files for validation proteins
-#       train_alignments/<PDB_ID>/  A3M + pdb70.m8 files for training
-#       val_alignments/<PDB_ID>/    A3M + pdb70.m8 files for validation
-#       chain_data_cache_train.json per-chain metadata (seq, resolution, release_date)
-#       chain_data_cache_val.json
+#       train/<PDB_ID>.npz
+#       val/<PDB_ID>.npz
+#       test/<PDB_ID>.npz
 #
-# Pass to OpenFoldDataModule:
-#   OpenFoldDataModule(
-#       train_data_dir        = 'openfold_ready/train_data',
-#       train_alignment_dir   = 'openfold_ready/train_alignments',
-#       val_data_dir          = 'openfold_ready/val_data',
-#       val_alignment_dir     = 'openfold_ready/val_alignments',
-#       chain_data_cache_path = 'openfold_ready/chain_data_cache_train.json',
-#       ...
-#   )
+# Each NPZ contains:
+#   aatype                  int32  [N_res, 21]       one-hot amino acid identity
+#   residue_index           int32  [N_res]            0-based position in chain
+#   seq_length              int32  [N_res]            residue count (repeated)
+#   between_segment_residues int32 [N_res]            zeros for single-chain
+#   msa                     int32  [N_seq, N_res]     HHBLITS integer-encoded MSA
+#   deletion_matrix_int     int32  [N_seq, N_res]     insertion counts per position
+#   num_alignments          int32  [N_res]            MSA depth (repeated)
+#   all_atom_positions      float32 [N_res, 37, 3]   ground-truth atom coordinates
+#   all_atom_mask           float32 [N_res, 37]       atom presence mask
+#   resolution              float32 [1]               crystallographic resolution
+#   is_distillation         float32 scalar            0.0 for PDB structures
