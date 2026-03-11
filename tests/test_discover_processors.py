@@ -134,11 +134,14 @@ class TestCsvProcessor:
 
     def test_error_on_bad_file(self, tmp_path):
         from redi.discover.processors.csv_processor import CsvProcessor
+        from redi.discover.processors import FileParseError
         bad = tmp_path / "bad.csv"
-        bad.write_bytes(b"\x00\x01\x02\x03" * 100)
-        d = CsvProcessor().analyze(bad)
-        # Should not raise; may return error metadata or a parsed result
-        assert d.file_type == "CSV"
+        bad.write_bytes(b"\x1f\x8b\x08\x00" + b"\xff" * 96)  # gzip magic → pandas raises
+        with pytest.raises(FileParseError) as exc_info:
+            CsvProcessor().analyze(bad)
+        assert exc_info.value.file_type == "CSV"
+        assert exc_info.value.path == bad
+        assert exc_info.value.cause is not None
 
 
 # ---------------------------------------------------------------------------
@@ -191,19 +194,77 @@ class TestMarkdownProcessor:
 # ProcessorRegistry tests
 # ---------------------------------------------------------------------------
 
+class TestProcessorErrors:
+    def test_file_parse_error_attributes(self, tmp_path):
+        from redi.discover.processors.csv_processor import CsvProcessor
+        from redi.discover.processors import FileParseError
+        bad = tmp_path / "bad.csv"
+        bad.write_bytes(b"\x1f\x8b\x08\x00" + b"\xff" * 96)  # gzip magic → pandas raises
+        with pytest.raises(FileParseError) as exc_info:
+            CsvProcessor().analyze(bad)
+        err = exc_info.value
+        assert err.path == bad
+        assert err.file_type == "CSV"
+        assert err.cause is not None
+        assert "bad.csv" in err.user_message
+        assert err.hint in err.user_message
+
+    def test_file_read_error_on_unreadable_markdown(self, tmp_path):
+        from redi.discover.processors.markdown_processor import MarkdownProcessor
+        from redi.discover.processors import FileReadError
+        missing = tmp_path / "ghost.md"
+        # File does not exist — read_text will raise FileNotFoundError
+        with pytest.raises(FileReadError) as exc_info:
+            MarkdownProcessor().analyze(missing)
+        err = exc_info.value
+        assert err.file_type == "Markdown"
+        assert err.cause is not None
+        assert "ghost.md" in err.user_message
+
+    def test_registry_wraps_unexpected_exception(self, tmp_path):
+        from redi.discover.processors import ProcessorError, BaseProcessor, FileDiscovery, registry
+        # Register a processor that raises a plain RuntimeError
+        class BrokenProcessor(BaseProcessor):
+            extension = ".brk"
+            def analyze(self, path):
+                raise RuntimeError("internal boom")
+        registry.register(BrokenProcessor())
+        f = tmp_path / "data.brk"
+        f.write_text("x")
+        with pytest.raises(ProcessorError) as exc_info:
+            registry.analyze_file(f)
+        err = exc_info.value
+        assert "internal boom" in err.reason
+        assert err.cause is not None
+
+    def test_registry_propagates_processor_error(self, tmp_path):
+        from redi.discover.processors import FileParseError, registry
+        bad = tmp_path / "bad.csv"
+        bad.write_bytes(b"\x1f\x8b\x08\x00" + b"\xff" * 96)  # gzip magic → pandas raises
+        with pytest.raises(FileParseError):
+            registry.analyze_file(bad)
+
+    def test_error_hierarchy(self):
+        from redi.discover.processors import ProcessorError, FileReadError, FileParseError
+        from pathlib import Path
+        p = Path("dummy.csv")
+        assert isinstance(FileReadError(p, "CSV", "oops"), ProcessorError)
+        assert isinstance(FileParseError(p, "CSV", "oops"), ProcessorError)
+
+
 class TestProcessorRegistry:
     def test_csv_dispatched(self, csv_file):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         d = ProcessorRegistry.analyze_file(csv_file)
         assert d.file_type == "CSV"
 
     def test_md_dispatched(self, markdown_file):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         d = ProcessorRegistry.analyze_file(markdown_file)
         assert d.file_type == "Markdown"
 
     def test_unknown_extension_uses_generic(self, tmp_path):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         f = tmp_path / "data.xyz123"
         f.write_text("hello")
         d = ProcessorRegistry.analyze_file(f)
@@ -217,7 +278,7 @@ class TestProcessorRegistry:
 
 class TestRenderProcessingPlan:
     def test_creates_file(self, tmp_path, csv_file, markdown_file):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         from redi.discover.report import render_processing_plan
 
         discoveries = [
@@ -230,7 +291,7 @@ class TestRenderProcessingPlan:
         assert out.stat().st_size > 0
 
     def test_contains_expected_sections(self, tmp_path, csv_file, markdown_file):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         from redi.discover.report import render_processing_plan
 
         discoveries = [
@@ -247,7 +308,7 @@ class TestRenderProcessingPlan:
         assert "README.md" in text
 
     def test_csv_section_has_columns(self, tmp_path, csv_file):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         from redi.discover.report import render_processing_plan
 
         discoveries = [ProcessorRegistry.analyze_file(csv_file)]
@@ -260,7 +321,7 @@ class TestRenderProcessingPlan:
         assert "city" in text
 
     def test_markdown_section_has_toc(self, tmp_path, markdown_file):
-        from redi.discover.processors import ProcessorRegistry
+        from redi.discover.processors import registry as ProcessorRegistry
         from redi.discover.report import render_processing_plan
 
         discoveries = [ProcessorRegistry.analyze_file(markdown_file)]

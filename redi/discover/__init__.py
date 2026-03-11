@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from redi.discover.processors import ProcessorRegistry, FileDiscovery
+from redi.discover.processors import registry, FileDiscovery, ProcessorError
 from redi.discover.report import render_processing_plan
 
 
@@ -184,9 +184,26 @@ def _inspect_data(path: Path, style: str) -> dict:
     inspection['file_count'] = len(files)
 
     # Run per-file processor for every file (up to the cap)
+    processor_errors: list[ProcessorError] = []
     for f in files[:100]:
-        discovery = ProcessorRegistry.analyze_file(f)
-        inspection['discoveries'].append(discovery)
+        try:
+            discovery = registry.analyze_file(f)
+            inspection['discoveries'].append(discovery)
+        except ProcessorError as err:
+            processor_errors.append(err)
+
+    inspection['processor_errors'] = [
+        {"file": str(e.path), "file_type": e.file_type, "reason": e.reason, "hint": e.hint}
+        for e in processor_errors
+    ]
+
+    if processor_errors and style == "rich":
+        print(f"\n    {Colors.YELLOW}⚠  {len(processor_errors)} file(s) could not be analysed:{Colors.END}")
+        for err in processor_errors:
+            print(f"      {Colors.DIM}•{Colors.END} {err.user_message}")
+    elif processor_errors and style == "simple":
+        for err in processor_errors:
+            print(f"Warning: {err.user_message}")
 
     # Also sample first file of each format for the existing inference logic
     for fmt in inspection['formats']:

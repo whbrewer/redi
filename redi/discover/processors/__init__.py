@@ -15,6 +15,57 @@ from typing import Any
 
 
 # ---------------------------------------------------------------------------
+# Processor exceptions
+# ---------------------------------------------------------------------------
+
+class ProcessorError(Exception):
+    """Raised by a processor when it cannot analyse a file.
+
+    Attributes:
+        path: The file that was being analysed.
+        file_type: Human-readable label for the processor (e.g. ``"CSV"``).
+        reason: Short description of what went wrong.
+        hint: Suggestion for the user on how to resolve the issue.
+        cause: The original exception, if any.
+    """
+
+    hint: str = "Check that the file is valid and not corrupted."
+
+    def __init__(
+        self,
+        path: Path,
+        file_type: str,
+        reason: str,
+        cause: Exception | None = None,
+    ) -> None:
+        self.path = path
+        self.file_type = file_type
+        self.reason = reason
+        self.cause = cause
+        super().__init__(str(self))
+
+    def __str__(self) -> str:
+        return f"[{self.file_type}] {self.path.name}: {self.reason}"
+
+    @property
+    def user_message(self) -> str:
+        """One-line message suitable for display to the user."""
+        return f"{self.path.name} ({self.file_type}): {self.reason}. {self.hint}"
+
+
+class FileReadError(ProcessorError):
+    """Raised when a file cannot be opened or read from disk."""
+
+    hint: str = "Check that the file exists, is readable, and is not locked by another process."
+
+
+class FileParseError(ProcessorError):
+    """Raised when a file can be read but its content cannot be parsed."""
+
+    hint: str = "Check that the file content matches its extension and is not truncated or binary."
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -72,30 +123,44 @@ class GenericProcessor(BaseProcessor):
 # ---------------------------------------------------------------------------
 
 class ProcessorRegistry:
-    _registry: dict[str, BaseProcessor] = {}
-    _generic = GenericProcessor()
+    def __init__(self) -> None:
+        self._registry: dict[str, BaseProcessor] = {}
+        self._generic = GenericProcessor()
 
-    @classmethod
-    def register(cls, processor: BaseProcessor) -> None:
+    def register(self, processor: BaseProcessor) -> None:
         """Register a processor instance for its declared extension."""
         ext = processor.extension.lower()
         if not ext.startswith("."):
             ext = f".{ext}"
-        cls._registry[ext] = processor
+        self._registry[ext] = processor
 
-    @classmethod
-    def get(cls, extension: str) -> BaseProcessor:
+    def get(self, extension: str) -> BaseProcessor:
         """Return the processor for *extension*, or the generic fallback."""
         ext = extension.lower()
         if not ext.startswith("."):
             ext = f".{ext}"
-        return cls._registry.get(ext, cls._generic)
+        return self._registry.get(ext, self._generic)
 
-    @classmethod
-    def analyze_file(cls, path: Path) -> FileDiscovery:
-        """Dispatch *path* to the appropriate processor and return results."""
-        processor = cls.get(path.suffix)
-        return processor.analyze(path)
+    def analyze_file(self, path: Path) -> FileDiscovery:
+        """Dispatch *path* to the appropriate processor and return results.
+
+        Raises:
+            ProcessorError: If the processor raises one directly.
+            ProcessorError: Wraps any unexpected exception so callers always
+                receive a :class:`ProcessorError` on failure.
+        """
+        processor = self.get(path.suffix)
+        try:
+            return processor.analyze(path)
+        except ProcessorError:
+            raise
+        except Exception as exc:
+            raise ProcessorError(
+                path=path,
+                file_type=path.suffix.lstrip(".").upper() or "UNKNOWN",
+                reason=str(exc),
+                cause=exc,
+            ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -106,12 +171,13 @@ def _register_builtins() -> None:
     from redi.discover.processors.csv_processor import CsvProcessor
     from redi.discover.processors.markdown_processor import MarkdownProcessor
 
-    ProcessorRegistry.register(CsvProcessor())
-    ProcessorRegistry.register(MarkdownProcessor())
+    registry.register(CsvProcessor())
+    registry.register(MarkdownProcessor())
     # TSV reuses the CSV processor
     tsv = CsvProcessor()
     tsv.extension = ".tsv"
-    ProcessorRegistry.register(tsv)
+    registry.register(tsv)
 
 
+registry = ProcessorRegistry()
 _register_builtins()
