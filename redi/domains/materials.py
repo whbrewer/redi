@@ -272,7 +272,7 @@ def get_transform_steps():
                 df = df.drop(columns=["composition_obj"], errors='ignore')
                 ctx.data = df
 
-                ctx.metadata["features_added"] = len(feature_labels)
+                ctx.metadata["features_added"] = feature_labels
                 logger.info(f"Added {len(feature_labels)} composition features")
 
             except ImportError as e:

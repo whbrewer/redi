@@ -1,0 +1,20 @@
+{
+  "case": "climax_taiesm1_2m_temp",
+  "domain": "climate",
+  "chunk": "185001010000-186001010000",
+  "input_size_gib": 1.721,
+  "input_shape": "14601\u00d7192\u00d7288",
+  "output_shape": "14601\u00d7128\u00d7256",
+  "runs": 1,
+  "stages_ms": {
+    "ingest": 828,
+    "preprocess": 21718,
+    "transform": 0,
+    "structure": 1607,
+    "output": 117754
+  },
+  "total_ms": 146875,
+  "total_s": 146.875,
+  "throughput_grid_pts_per_s": 3257501,
+  "throughput_label": "grid-pts/s"
+}

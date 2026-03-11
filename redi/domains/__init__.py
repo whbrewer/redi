@@ -22,6 +22,7 @@ class Domain(Enum):
     FUSION = "fusion"
     HPC = "hpc"
     GEOSPATIAL = "geospatial"
+    NUCLEAR_PHYSICS = "nuclear_physics"
     GENERAL = "general"
 
 
@@ -69,6 +70,7 @@ DOMAIN_EXTENSIONS: Dict[Domain, List[str]] = {
     Domain.FUSION: [".hdf5", ".h5", ".adios", ".bp"],
     Domain.HPC: [],  # Generic formats, detected by content
     Domain.GEOSPATIAL: [".shp", ".geojson", ".gpkg", ".kml"],
+    Domain.NUCLEAR_PHYSICS: [],  # Detected by directory layout (train.txt + test.txt + .npy)
     Domain.GENERAL: []
 }
 

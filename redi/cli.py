@@ -392,7 +392,9 @@ def run_pipeline(
         elif domain == "materials":
             from .domains.materials import get_full_pipeline
         elif domain == "life_sciences":
-            from .domains.life_sciences import get_full_pipeline
+            from .domains.life_sciences import get_full_pipeline as _get_ls_pipeline
+            _ls_fmt = config.get("output_format", "npz") if config else "npz"
+            get_full_pipeline = lambda: _get_ls_pipeline(input_path=primary_path, output_format=_ls_fmt)
         elif domain == "fusion":
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
@@ -437,6 +439,9 @@ def run_pipeline(
             _split_cfg = config.get("split", {})
             _split = _split_cfg.get("enabled", True) if isinstance(_split_cfg, dict) else bool(_split_cfg)
             get_full_pipeline = lambda: _get_geo_pipeline(split=_split)
+        elif domain == "nuclear_physics":
+            from .domains.sphenix import get_sphenix_pipeline
+            get_full_pipeline = get_sphenix_pipeline
         else:
             get_full_pipeline = None
 
@@ -2297,7 +2302,7 @@ Download examples (climate domain)::
     )
     run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
     run_parser.add_argument("-d", "--domain",
-                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "general"],
+                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "general"],
                            help="Scientific domain (auto-detected if not specified)")
     run_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     run_parser.add_argument("--unique", action="store_true",

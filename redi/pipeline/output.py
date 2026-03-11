@@ -459,7 +459,7 @@ class WriteChecksums(PipelineStep):
             lines = []
             for file_str in saved_files:
                 file_path = Path(file_str)
-                if not file_path.exists():
+                if not file_path.is_file():
                     continue
                 digest = _sha256(file_path)
                 # Relative path so the file is portable within the output dir

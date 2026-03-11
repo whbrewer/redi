@@ -1,0 +1,22 @@
+{
+  "case": "sphenix_outer_12-2_0-0",
+  "domain": "nuclear_physics",
+  "n_events": 1310,
+  "array_shape": [
+    192,
+    249,
+    16
+  ],
+  "runs": 1,
+  "stages_ms": {
+    "ingest": 2178,
+    "preprocess": 7984,
+    "transform": 0,
+    "structure": 0,
+    "output": 48032
+  },
+  "total_ms": 58611,
+  "total_s": 58.611,
+  "throughput_events_per_s": 22.4,
+  "throughput_label": "events/s"
+}

@@ -1,21 +1,40 @@
-# Example REDI Configuration for OpenFold FASTA Input
+# REDI Configuration for OpenFold Dataset — NPZ mode (default)
+#
+# Runs the full IPTSO preprocessing pipeline within REDI and saves
+# per-protein NPZ feature files. Useful for studying the preprocessing
+# steps or loading features without an OpenFold installation.
+#
+# Usage:
+#   redi run /opt/drai/openfold_data/ -c examples/openfold_config.yaml
+#   redi run /opt/drai/openfold_data/ --domain life_sciences -o ./openfold_ready
 
 domain: life_sciences
-input_path: /opt/drai/openfold/examples/monomer/fasta_dir/6kwc.fasta
-output_dir: ./output
-output_format: hdf5
+output_dir: ./openfold_ready
+output_format: npz          # "npz" | "openfold_native"
 
-# Normalization settings
-normalize:
-  enabled: true
-  method: zscore
-
-# Train/val/test split
+# Train/val/test split (protein-level, 80/10/10)
 split:
-  method: random
-  ratios:
-    train: 0.8
-    val: 0.1
-    test: 0.1
-  shuffle: true
+  train: 0.8
+  val: 0.1
+  test: 0.1
   random_seed: 42
+
+# Output: per-protein NPZ files in train/ val/ test/ subdirs
+#
+#   openfold_ready/
+#       train/<PDB_ID>.npz
+#       val/<PDB_ID>.npz
+#       test/<PDB_ID>.npz
+#
+# Each NPZ contains:
+#   aatype                  int32  [N_res, 21]       one-hot amino acid identity
+#   residue_index           int32  [N_res]            0-based position in chain
+#   seq_length              int32  [N_res]            residue count (repeated)
+#   between_segment_residues int32 [N_res]            zeros for single-chain
+#   msa                     int32  [N_seq, N_res]     HHBLITS integer-encoded MSA
+#   deletion_matrix_int     int32  [N_seq, N_res]     insertion counts per position
+#   num_alignments          int32  [N_res]            MSA depth (repeated)
+#   all_atom_positions      float32 [N_res, 37, 3]   ground-truth atom coordinates
+#   all_atom_mask           float32 [N_res, 37]       atom presence mask
+#   resolution              float32 [1]               crystallographic resolution
+#   is_distillation         float32 scalar            0.0 for PDB structures
