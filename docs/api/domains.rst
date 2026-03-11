@@ -64,3 +64,19 @@ redi.domains.geospatial
    :members:
    :undoc-members:
    :show-inheritance:
+
+redi.domains.openfold
+---------------------
+
+.. automodule:: redi.domains.openfold
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+redi.domains.sphenix
+--------------------
+
+.. automodule:: redi.domains.sphenix
+   :members:
+   :undoc-members:
+   :show-inheritance:

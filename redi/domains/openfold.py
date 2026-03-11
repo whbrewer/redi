@@ -4,7 +4,8 @@ REDI - OpenFold Dataset Processor
 Transforms an OpenFold-style dataset (fasta/ + pdb/ + alignments/) into
 per-protein NPZ feature files ready to train AlphaFold/OpenFold models.
 
-Expected input layout:
+Expected input layout::
+
     <root>/
         fasta/          <PDB_ID>.fasta
         pdb/            <PDB_ID>.cif
@@ -14,7 +15,8 @@ Expected input layout:
                             pdb70.m8     (template hits — not yet used)
         protein_list.txt  (optional; one PDB ID per line)
 
-Output (one NPZ per protein):
+Output (one NPZ per protein)::
+
     aatype                   [N_res, 21]      one-hot amino acid identity
     residue_index            [N_res]          0-based position in chain
     msa                      [N_seq, N_res]   integer-encoded MSA rows

@@ -92,6 +92,35 @@ ERA5 via Copernicus CDS::
    CDS access requires an API key. Register at https://cds.climate.copernicus.eu/
    and configure ``~/.cdsapirc``.
 
+OpenFold protein structure datasets
+-------------------------------------
+
+The ``life_sciences`` domain recognises OpenFold dataset layouts and runs the
+full IPTSO feature-engineering pipeline.  Two output modes are available:
+
+NPZ mode (default) — per-protein feature tensors::
+
+    redi run /path/to/openfold_data/ --domain life_sciences -o ./openfold_ready
+    redi run /path/to/openfold_data/ -c examples/openfold_config.yaml
+
+OpenFoldDataModule-compatible layout (drop-in replacement)::
+
+    redi run /path/to/openfold_data/ --domain life_sciences \
+        --format openfold_native -o ./openfold_native
+
+sPHENIX TPC (nuclear physics)
+-------------------------------
+
+Process sPHENIX outer TPC data for NeuralCompression_v3::
+
+    redi run /path/to/sphenix/outer/ --domain nuclear_physics -o ./sphenix_ready
+    redi run /path/to/sphenix/outer/ -c examples/sphenix_config.yaml
+
+.. note::
+
+   The sPHENIX pipeline applies zero-suppression and ``log2`` normalization.
+   When loading with ``DatasetTPC``, set ``log: false`` in the model config.
+
 Observing an existing workflow
 -------------------------------
 

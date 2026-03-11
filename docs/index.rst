@@ -34,6 +34,7 @@ domains and operates in four primary modes:
    :caption: Reference
 
    glossary
+   scripts
    contributing
 
 Indices and tables

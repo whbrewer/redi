@@ -493,6 +493,7 @@ def raps_field_stats(
     Returns a list of dicts (one per field) with keys:
       field, redi_mean, redi_std, redi_min, redi_max,
               gt_mean,   gt_std,   gt_min,   gt_max, mae, match
+
     Returns None if either file is not RAPS NPZ format.
     """
     redi_jobs = _load_raps_jobs_dict(Path(redi_path))

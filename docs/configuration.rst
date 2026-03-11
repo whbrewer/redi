@@ -23,8 +23,8 @@ Top-level keys
      - ``null``
      - Scientific domain. One of ``climate``, ``materials``,
        ``life_sciences``, ``fusion``, ``hpc``, ``geospatial``,
-       ``general``. Auto-detected from file extension + column names if
-       omitted.
+       ``nuclear_physics``, ``general``. Auto-detected from file
+       extension + column names if omitted.
    * - ``input_path``
      - ``null``
      - Input file path. Can also be provided via ``input_paths`` (list)
@@ -36,7 +36,7 @@ Top-level keys
    * - ``output_format``
      - ``npz``
      - Output format.  One of ``npz``, ``parquet``, ``hdf5``, ``csv``,
-       ``zarr``, ``pt``.
+       ``zarr``.
    * - ``stages``
      - ``null``
      - List of stages to run, e.g. ``[ingest, preprocess]``.  ``null``
@@ -179,6 +179,40 @@ Trigger remote data acquisition before processing.  Equivalent to the
      experiment: historical
      frequency: 6hr
      year: null              # used by CDS/ERA5 only
+
+openfold
+--------
+
+Applies to the **life_sciences** domain when an OpenFold dataset layout is
+detected (``fasta/``, ``pdb/``, ``alignments/`` subdirectories present).
+
+.. code-block:: yaml
+
+   domain: life_sciences
+   output_format: npz          # "npz" | "openfold_native"
+
+   split:
+     train: 0.8
+     val:   0.1
+     test:  0.1
+     random_seed: 42
+
+Set ``output_format: openfold_native`` to produce a directory layout compatible
+with ``OpenFoldDataModule`` instead of per-protein NPZ files.
+
+sphenix
+-------
+
+Applies to the **nuclear_physics** domain (sPHENIX TPC outer detector).
+
+.. code-block:: yaml
+
+   domain: nuclear_physics
+   output_dir: ./sphenix_ready
+
+No additional keys are required.  The pipeline always applies zero-suppression
+(ADC < 64 → 0) and ``log2(ADC + 1)`` normalization.  The ``train.txt`` /
+``test.txt`` manifests in the input directory determine the split.
 
 Full example
 ------------

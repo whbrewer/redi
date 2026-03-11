@@ -1640,6 +1640,7 @@ class SaveJobDicts(PipelineStep):
     """Save RAPS job dicts in the requested format.
 
     Supported formats:
+
     - **npz** (default): RAPS-compatible snapshot that ``raps run -f <file>``
       can load directly via ``Telemetry.load_snapshot()``.
     - **json**: Human-readable JSON array of job dicts.

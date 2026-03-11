@@ -24,10 +24,10 @@ Glossary
       See :class:`redi.pipeline.PipelineStage`.
 
    Domain
-      One of the seven supported scientific areas: ``climate``,
+      One of the eight supported scientific areas: ``climate``,
       ``materials``, ``life_sciences``, ``fusion``, ``hpc``,
-      ``geospatial``, ``general``.  Determines which specialised
-      ``PipelineStep`` implementations are loaded.
+      ``geospatial``, ``nuclear_physics``, ``general``.  Determines
+      which specialised ``PipelineStep`` implementations are loaded.
       See :class:`redi.datacard.ScientificDomain`.
 
    MaturityLevel
@@ -83,6 +83,32 @@ Glossary
       REDI can download from CDS via ``--download --source cds``.
       Requires an API key in ``~/.cdsapirc``.
       See :mod:`redi.downloaders.cds`.
+
+   OpenFold
+      A specialisation of the ``life_sciences`` domain for protein structure
+      datasets.  Activated automatically when the input directory contains
+      ``fasta/``, ``pdb/``, and ``alignments/`` subdirectories.  Runs the
+      full IPTSO feature-engineering pipeline and writes either per-protein
+      NPZ files (``output_format: npz``) or a directory layout compatible
+      with ``OpenFoldDataModule`` (``output_format: openfold_native``).
+      See :mod:`redi.domains.openfold`.
+
+   sPHENIX
+      The sPHENIX Time Projection Chamber (TPC) outer detector dataset,
+      processed under the ``nuclear_physics`` domain.  Input is a directory
+      of ``uint16`` wedge ``.npy`` files (shape 192 × 249 × 16) with
+      ``train.txt`` / ``test.txt`` manifests.  REDI applies zero-suppression
+      and ``log2(ADC + 1)`` normalization, writing float32 ``.npy`` output
+      compatible with NeuralCompression_v3's ``DatasetTPC`` loader.
+      See :mod:`redi.domains.sphenix`.
+
+   NeuralCompression_v3
+      An AI compression framework developed for high-energy physics detector
+      data.  REDI's ``nuclear_physics`` (sPHENIX) pipeline produces output
+      that can be loaded directly via
+      ``DatasetTPC(data_root=..., split='train', dimension=2)``.  Set
+      ``log: false`` in the model config since REDI has already applied
+      ``log2`` normalization.
 
    repro.sh
       Shell script written to every output directory by :mod:`redi.repro`.
