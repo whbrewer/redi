@@ -32,7 +32,7 @@ Each domain module (`redi/domains/<name>.py`) provides specialized step implemen
 - `assess.py` — `DataAnalyzer` (dataset → Data Card) and `PipelineRecommender` (domain-aware pipeline suggestions).
 - `config.py` — YAML config loading with deep merge against defaults and validation.
 - `repro.py` — Logs every command to `repro.sh` with full environment metadata for reproducibility.
-- `observability/` — Snapshot capture, quality checks (NaN/outlier/distribution shift), transformation parameter detection, data leakage detection, Snakemake/Nextflow log parsing.
+- `inspect/` — Snapshot capture, quality checks (NaN/outlier/distribution shift), transformation parameter detection, data leakage detection, Snakemake/Nextflow log parsing.
 - `downloaders/` — ESGF (CMIP6) and CDS (ERA5) data acquisition with `BaseDownloader` ABC.
 - `dataloaders/` — GESTS, SST-Binary, and Zarr loaders with `BaseDataLoader` ABC.
 - `domains/hpc_job_mapper.py` — RAPS-compatible job extraction from HPC telemetry with 4-phase fuzzy column matching.
@@ -72,9 +72,9 @@ Each domain module (`redi/domains/<name>.py`) provides specialized step implemen
 
 ## Current Development Status
 
-The codebase is **production-ready**. All three CLI modes, all 5 pipeline stages, all 6 domain modules, downloaders, observability, and the HPC job mapper are fully implemented — no stubs or placeholder code.
+The codebase is **production-ready**. All three CLI modes, all 5 pipeline stages, all 6 domain modules, downloaders, inspect subsystem, and the HPC job mapper are fully implemented — no stubs or placeholder code.
 
-**Test coverage exists for:** pipeline mechanics, YAML config, data analysis, array loaders, Nextflow parser, HPC job mapper, and domain smoke tests for climate, materials, life sciences, and HPC. **Missing test coverage:** fusion domain, geospatial domain, downloaders, repro module, observability subsystem.
+**Test coverage exists for:** pipeline mechanics, YAML config, data analysis, array loaders, Nextflow parser, HPC job mapper, and domain smoke tests for climate, materials, life sciences, and HPC. **Missing test coverage:** fusion domain, geospatial domain, downloaders, repro module, inspect subsystem.
 
 **Planned but unstarted:** Intelligent sampling (`pipeline/sampling.py`) — a new stage between PREPROCESS and TRANSFORM with 5 sampling strategies for large datasets. Design is documented in `IMPLEMENTATION_PLAN_INTELLIGENT_SAMPLING.md`.
 
