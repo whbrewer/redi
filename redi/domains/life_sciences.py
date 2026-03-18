@@ -366,7 +366,7 @@ def get_output_steps():
     return get_output_steps(output_format="hdf5")
 
 
-def get_full_pipeline(input_path=None):
+def get_full_pipeline(input_path=None, output_format=None):
     """Get the complete life sciences preprocessing pipeline.
 
     If *input_path* is an OpenFold data root (has fasta/ and pdb/ subdirs),
