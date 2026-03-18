@@ -2240,19 +2240,26 @@ from .discover import run_discover
 # MAIN CLI
 # =============================================================================
 
-def main():
+def create_parser() -> argparse.ArgumentParser:
+    """Create and return the REDI argument parser.
+
+    Returns:
+        Configured ArgumentParser with all subcommands (run, analyze, discover, validate).
+    """
     parser = argparse.ArgumentParser(
         prog='redi',
         description="REDI - Readiness Engine for Data Integration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
-  run        Run the pipeline (orchestrator mode) - default
-  inspect    Inspect data files or observe existing workflows
-  discover   Analyze unknown datasets and propose pipelines
-  validate   Validate REDI output against ground truth
 
-Examples:
+* ``run`` — Run the pipeline (orchestrator mode) - default
+* ``inspect`` — Inspect data files or observe existing workflows
+* ``discover`` — Analyze unknown datasets and propose pipelines
+* ``validate`` — Validate REDI output against ground truth
+
+Examples::
+
   redi run data.csv                     # Run pipeline on data
   redi data.csv                         # Same as above (run is default)
   redi inspect data.csv                 # Inspect a data file
@@ -2260,7 +2267,8 @@ Examples:
   redi discover /path/to/data/          # Analyze unknown dataset
   redi validate output/ -c config.yaml  # Validate against ground truth
 
-For command-specific help:
+For command-specific help::
+
   redi run --help
   redi inspect --help
   redi discover --help
@@ -2278,14 +2286,16 @@ For command-specific help:
         help='Run the REDI pipeline (orchestrator mode)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples::
+
   redi run data.csv                      # Auto-detect and run full pipeline
   redi run data.csv --domain hpc         # Specify domain
   redi run data.csv -o ./processed       # Custom output directory
   redi run data.csv --stages ingest,preprocess  # Run specific stages
   redi run "data_*.nc"                   # Process multiple files (glob)
 
-Download examples (climate domain):
+Download examples (climate domain)::
+
   redi run --download --source esgf --variable tas --model TaiESM1
   redi run --download --source cds --variable 2m_temperature --year 2020
         """
@@ -2389,7 +2399,14 @@ Examples:
         help='Analyze unknown datasets and propose pipelines',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Output files written to the output directory:
+
+- ``discovery_report.json`` -- full inspection/inference/proposal data
+- ``DISCOVERY_REPORT.md`` -- human-readable domain-level summary
+- ``processing_plan.md`` -- per-file discoveries and preprocessing suggestions
+
+Examples::
+
   redi discover /path/to/data/
   redi discover dataset.csv -o ./analysis
   redi discover /data --no-interactive
@@ -2414,7 +2431,8 @@ Examples:
         help='Validate REDI output against ground truth',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Examples::
+
   redi validate output/usa_0_data_5c79b84 -c examples/nasa_power_validate.yaml
   redi validate output/usa_0_data_5c79b84 --ground-truth /path/to/truth.pt
   redi validate output/usa_0_data_5c79b84 -c config.yaml --aidrin
@@ -2439,6 +2457,12 @@ Examples:
                                  help="Output style")
     validate_parser.add_argument("-v", "--verbose", action="store_true",
                                  help="Verbose output")
+
+    return parser
+
+
+def main():
+    parser = create_parser()
 
     # Parse arguments
     args = parser.parse_args()

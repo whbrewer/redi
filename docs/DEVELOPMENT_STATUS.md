@@ -17,12 +17,13 @@ The core framework is **production-ready**. All three operating modes and all si
 
 **All 6 domain modules:** Climate, materials, life sciences, fusion, HPC, geospatial — each exports full step factories for all 5 stages. No stubs, no empty `get_*_steps()` returns.
 
-**CLI** (`cli.py`, 3080 lines) — All three modes work:
+**CLI** (`cli.py`) — All four modes work:
 - `redi run` — full pipeline with domain auto-detection, multi-file globs, rich/simple/json output
-- `redi analyze` — Snakemake and Nextflow workflow parsing, Data Card generation, watch mode
+- `redi inspect` — Snakemake and Nextflow workflow parsing, Data Card generation, watch mode
 - `redi discover` — three-phase discovery (inspect → infer → propose)
+- `redi validate` — compare REDI output against ground-truth data with statistical similarity metrics
 
-**Supporting modules:** `datacard.py`, `assess.py`, `config.py`, `repro.py` — all complete. The observability subsystem (snapshot, quality, suggestions, transforms, snakemake_log, nextflow_parser) is fully working.
+**Supporting modules:** `datacard.py`, `assess.py`, `config.py`, `repro.py`, `provenance_card.py` — all complete. The inspect subsystem (`redi/inspect/`: snapshot, quality, suggestions, transforms, snakemake_log, nextflow_parser) is fully working.
 
 **Downloaders:** ESGF (CMIP6) and CDS (ERA5) — both production-ready with search, download, checksum verification.
 
@@ -38,7 +39,7 @@ The core framework is **production-ready**. All three operating modes and all si
 - NASA POWER validation (integration test, skips if data absent)
 - Climate tests skip gracefully when xarray isn't installed
 
-**Missing test coverage:** No smoke tests for fusion or geospatial domains. No tests for downloaders (ESGF/CDS), the `repro.py` module, or the observability subsystem.
+**Missing test coverage:** No smoke tests for fusion or geospatial domains. No tests for downloaders (ESGF/CDS), the `repro.py` module, or the inspect subsystem.
 
 ## Planned But Not Started
 
@@ -46,7 +47,7 @@ Three plan documents in the repo describe unimplemented features:
 
 1. **`IMPLEMENTATION_PLAN_INTELLIGENT_SAMPLING.md`** — A new `pipeline/sampling.py` stage between PREPROCESS and TRANSFORM. Five sampling strategies (random, stratified, gradient-based, importance-weighted, systematic) for reducing large datasets. Includes full pseudocode but **no code exists yet** — `redi/pipeline/sampling.py` does not exist.
 
-2. **`SIDECAR_IMPROVEMENT_PLAN.md`** — Documents the evolution of `redi analyze` (formerly "sidecar"). The plan itself shows most items as **DONE** (snapshot, quality, transforms, Snakemake/Nextflow parsing, data leakage detection, watch mode). The remaining items mentioned in the plan (if any) would need closer reading of the full document to identify.
+2. **`SIDECAR_IMPROVEMENT_PLAN.md`** — Documents the evolution of `redi inspect` (formerly "sidecar", previously "analyze"). The plan itself shows most items as **DONE** (snapshot, quality, transforms, Snakemake/Nextflow parsing, data leakage detection, watch mode). The remaining items mentioned in the plan (if any) would need closer reading of the full document to identify.
 
 3. **`HPC_TELEMETRY_PLAN.md`** — Describes the RAPS Job auto-extraction system. **Fully delivered** in `hpc_job_mapper.py`.
 

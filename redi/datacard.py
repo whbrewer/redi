@@ -43,6 +43,7 @@ class ScientificDomain(Enum):
     FUSION = "fusion"
     HPC = "hpc"
     GEOSPATIAL = "geospatial"
+    NUCLEAR_PHYSICS = "nuclear_physics"
     GENERAL = "general"
 
 

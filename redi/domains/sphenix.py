@@ -3,15 +3,17 @@ REDI sPHENIX Nuclear Physics Domain Module
 
 Preprocesses sPHENIX TPC detector wedge data for AI-based compression training.
 
-Input layout (the canonical Zenodo dataset):
+Input layout (the canonical Zenodo dataset)::
+
     outer/
         train.txt          # relative .npy paths (25,152 wedge files)
         test.txt           # relative .npy paths  (6,288 wedge files)
         <wedge_dir>/       # e.g. 12-2_0-0/
             *.npy          # uint16 arrays, shape (192, 249, 16)
-                           # axes: azimuth × beam × layer
+                           # axes: azimuth x beam x layer
 
-Output layout (compatible with NeuralCompression_v3 DatasetTPC):
+Output layout (compatible with NeuralCompression_v3 DatasetTPC)::
+
     <output_dir>/
         train/
             <wedge>.npy    # float32, log2(x+1)-transformed
@@ -19,16 +21,17 @@ Output layout (compatible with NeuralCompression_v3 DatasetTPC):
         test/
             <wedge>.npy
             ...
-        train.txt          # relative paths — ready for DatasetTPC
+        train.txt          # relative paths -- ready for DatasetTPC
         test.txt
         checksums.sha256
         metadata.json
 
-NeuralCompression_v3 usage:
+NeuralCompression_v3 usage::
+
     from neuralcompress_v3.datasets.dataset_tpc import DatasetTPC
     ds = DatasetTPC(data_root='<output_dir>', split='train', dimension=2)
 
-    Set `log: false` in the model YAML config — REDI already applies log2(ADC+1).
+Set ``log: false`` in the model YAML config — REDI already applies log2(ADC+1).
 """
 
 import logging
