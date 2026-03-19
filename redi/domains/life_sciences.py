@@ -366,24 +366,37 @@ def get_output_steps():
     return get_output_steps(output_format="hdf5")
 
 
-def get_full_pipeline(input_path=None, output_format=None):
+def get_full_pipeline(input_path=None, output_format=None, max_proteins=None):
     """Get the complete life sciences preprocessing pipeline.
 
     If *input_path* is an OpenFold data root (has fasta/ and pdb/ subdirs),
     returns the OpenFold-specific pipeline instead of the generic one.
 
+    If *input_path* is an OpenProteinSet root (has open_protein_set/pdb/ and
+    pdb_mmcif/mmcif_files/), returns the OPS-native pipeline.
+
     Args:
-        output_format: Passed through to get_openfold_pipeline().
+        output_format: Passed through to the OpenFold pipeline factories.
             "npz" (default) — full IPTSO pipeline, per-protein NPZ output.
             "openfold_native" — organize raw files for OpenFoldDataModule.
+        max_proteins: Cap on proteins to process (OPS pipeline only).
     """
     from pathlib import Path
     if input_path is not None:
         p = Path(input_path)
-        if p.is_dir() and (p / "fasta").is_dir() and (p / "pdb").is_dir():
-            from .openfold import get_openfold_pipeline
-            logger.info("Detected OpenFold dataset layout — using OpenFold pipeline")
-            return get_openfold_pipeline(output_format=output_format)
+        if p.is_dir():
+            from .openfold import (
+                _is_openfold_root, _is_openfold_ops_root,
+                get_openfold_pipeline, get_openfold_ops_pipeline,
+            )
+            if _is_openfold_ops_root(p):
+                logger.info("Detected OpenProteinSet layout — using OPS pipeline")
+                return get_openfold_ops_pipeline(
+                    output_format=output_format, max_proteins=max_proteins
+                )
+            if _is_openfold_root(p):
+                logger.info("Detected OpenFold dataset layout — using OpenFold pipeline")
+                return get_openfold_pipeline(output_format=output_format)
 
     return (
         get_ingest_steps() +

@@ -97,6 +97,24 @@ def _is_openfold_root(path: Path) -> bool:
     )
 
 
+def _is_openfold_ops_root(path: Path) -> bool:
+    """Return True if *path* looks like an OpenProteinSet data root.
+
+    Expected layout::
+
+        <path>/
+            open_protein_set/pdb/          <PDB_ID>_<CHAIN>/ a3m/ hhr/
+            open_protein_set/uniclust30/   <UNIPROT_ID>/ a3m/ hhr/ pdb/
+            pdb_mmcif/mmcif_files/         <PDB_ID>.cif
+            pdb_seqres/pdb_seqres.txt      (optional)
+    """
+    return (
+        path.is_dir()
+        and (path / "open_protein_set" / "pdb").is_dir()
+        and (path / "pdb_mmcif" / "mmcif_files").is_dir()
+    )
+
+
 def _parse_a3m(a3m_path: Path) -> Tuple[List[str], List[List[int]]]:
     """
     Parse an A3M file into MSA sequences and deletion matrices.
@@ -393,13 +411,10 @@ def get_openfold_pipeline(output_format: str = "npz"):
 
                 if prot["has_msa"]:
                     aln_dir: Path = prot["alignment_dir"]
-                    for a3m_name in [
-                        "uniref.a3m",
-                        "bfd.mgnify30.metaeuk30.smag30.a3m",
-                    ]:
-                        a3m_path = aln_dir / a3m_name
-                        if not a3m_path.exists():
-                            continue
+                    # Support both the legacy layout (uniref.a3m, bfd.*.a3m)
+                    # and the OpenProteinSet layout (uniref90_hits.a3m, etc.)
+                    # by globbing all *.a3m files in the alignment directory.
+                    for a3m_path in sorted(aln_dir.glob("*.a3m")):
                         try:
                             seqs, dels = _parse_a3m(a3m_path)
                             for s, d in zip(seqs, dels):
@@ -409,7 +424,7 @@ def get_openfold_pipeline(output_format: str = "npz"):
                                 raw_seqs.append(s)
                                 raw_dels.append(d)
                         except Exception as e:
-                            logger.warning(f"{prot['pdb_id']}/{a3m_name}: {e}")
+                            logger.warning(f"{prot['pdb_id']}/{a3m_path.name}: {e}")
 
                 prot["raw_msa_seqs"] = raw_seqs    # list of str, length varies
                 prot["raw_msa_dels"] = raw_dels    # list of list[int]
@@ -783,3 +798,120 @@ def get_openfold_pipeline(output_format: str = "npz"):
             WriteChecksums(),
             SaveMetadata(),
         ]
+
+
+def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional[int] = None):
+    """Return a pipeline that ingests directly from an OpenProteinSet data root.
+
+    The root is expected to contain::
+
+        open_protein_set/pdb/<PDB_ID>_<CHAIN>/
+            a3m/  uniref90_hits.a3m  bfd_uniclust_hits.a3m  mgnify_hits.a3m
+            hhr/  pdb70_hits.hhr
+        pdb_mmcif/mmcif_files/<PDB_ID>.cif
+
+    Args:
+        output_format: "npz" — full IPTSO pipeline, per-protein NPZ output.
+                        "openfold_native" — organize raw files for OpenFoldDataModule.
+        max_proteins:  Cap on number of proteins to process (useful for demos/tests).
+    """
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline.output import WriteChecksums, SaveMetadata
+
+    class LoadOpenProteinSet(PipelineStep):
+        """Enumerate proteins from an OpenProteinSet data root.
+
+        Reads:
+          - open_protein_set/pdb/ for chain entries and their A3M alignments
+          - pdb_mmcif/mmcif_files/ for ground-truth structures
+        """
+
+        name = "load_open_protein_set"
+        stage = PipelineStage.INGEST
+        description = "Enumerate proteins from OpenProteinSet layout"
+
+        def __init__(self, max_proteins: Optional[int] = None):
+            super().__init__()
+            self.max_proteins = max_proteins
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return _is_openfold_ops_root(ctx.input_path)
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            import sys
+            import time
+
+            root = ctx.input_path
+            ops_pdb_dir = root / "open_protein_set" / "pdb"
+            mmcif_dir = root / "pdb_mmcif" / "mmcif_files"
+
+            # Listing 131k directories can itself take a few seconds
+            print("  ⏳ Scanning OpenProteinSet directory ...", end="", flush=True, file=sys.stderr)
+            entries = sorted(p for p in ops_pdb_dir.iterdir() if p.is_dir())
+            total = len(entries)
+            if self.max_proteins is not None:
+                entries = entries[: self.max_proteins]
+                total = len(entries)
+            print(f"\r  ✔ Found {total:,} chain entries{' (capped)' if self.max_proteins else ''}    ", flush=True, file=sys.stderr)
+
+            proteins: List[Dict[str, Any]] = []
+            missing_cif = 0
+            progress_every = max(1, total // 20)  # report ~every 5%
+            started_at = time.perf_counter()
+
+            for i, entry in enumerate(entries, start=1):
+                chain_id = entry.name           # e.g. "101m_A"
+                # PDB ID is everything before the last underscore
+                pdb_id = chain_id.rsplit("_", 1)[0].lower()  # e.g. "101m"
+                cif_path = mmcif_dir / f"{pdb_id}.cif"
+
+                if not cif_path.exists():
+                    missing_cif += 1
+                    logger.debug(f"No mmCIF for {chain_id} (expected {cif_path.name})")
+                else:
+                    a3m_dir = entry / "a3m"
+                    has_msa = a3m_dir.is_dir() and any(a3m_dir.glob("*.a3m"))
+                    proteins.append({
+                        "pdb_id":        chain_id,
+                        "fasta_path":    None,        # sequence extracted from mmCIF
+                        "cif_path":      cif_path,
+                        "alignment_dir": a3m_dir if has_msa else None,
+                        "has_msa":       has_msa,
+                    })
+
+                if i % progress_every == 0 or i == total:
+                    elapsed = time.perf_counter() - started_at
+                    rate = i / elapsed if elapsed > 0 else 0.0
+                    pct = 100 * i / total
+                    print(
+                        f"\r  ⏳ Indexing chains ... {i:,}/{total:,} ({pct:.0f}%)"
+                        f"  {rate:.0f} chains/s  {len(proteins):,} ok  {missing_cif} missing cif",
+                        end="",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+                    logger.info(f"load_open_protein_set: {i}/{total} ({pct:.0f}%) — {rate:.0f} chains/s")
+
+            print(file=sys.stderr)  # newline after final \r
+
+            logger.info(
+                f"Found {len(proteins)} chains from OpenProteinSet "
+                f"({sum(p['has_msa'] for p in proteins)} with MSA, "
+                f"{missing_cif} missing mmCIF)"
+            )
+            ctx.data = {"proteins": proteins}
+            ctx.metadata["is_openfold"] = True
+            ctx.metadata["is_ops"] = True
+            ctx.metadata["num_proteins"] = len(proteins)
+            ctx.metadata["num_with_msa"] = sum(p["has_msa"] for p in proteins)
+            return ctx
+
+    # Reuse all steps from get_openfold_pipeline — they operate on the same
+    # protein-dict structure so no changes needed.
+    from ..pipeline.output import WriteChecksums, SaveMetadata
+
+    # Build the shared downstream steps by calling the existing pipeline
+    # factory and slicing off the ingest step (index 0).
+    downstream = get_openfold_pipeline(output_format=output_format)
+    # downstream[0] is LoadOpenFoldDataset; replace it with LoadOpenProteinSet
+    return [LoadOpenProteinSet(max_proteins=max_proteins)] + downstream[1:]
