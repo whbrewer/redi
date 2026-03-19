@@ -45,26 +45,47 @@ parallel --version
 
 ```bash
 # Process all NetCDF files in parallel (auto-detect CPU cores)
-redi data/*.nc --parallel
+redi run data/*.nc --parallel
 
 # Specify number of workers
-redi data/*.nc --parallel --workers 8
+redi run data/*.nc --parallel --workers 4
 
 # Use balanced distribution (by file size)
-redi data/*.nc --parallel --distribution balanced
+redi run data/*.nc --parallel --distribution balanced
+```
+
+#### Example: CMIP6 TaiESM1 2m temperature (17 files, 4 workers)
+
+```bash
+redi run /path/to/CMIP6/TaiESM1/raw/2m_temperature/*.nc \
+  --parallel --domain climate --workers 4 \
+  -o ./output/taiesm1_2m_temperature
+```
+
+Output — one directory per file:
+```
+output/taiesm1_2m_temperature/
+├── 2m_temperature_185001010000-186001010000_raw.out/
+│   ├── train.npz
+│   ├── val.npz
+│   ├── test.npz
+│   └── DATA_CARD.md
+├── 2m_temperature_186001010600-187001010000_raw.out/
+│   └── ...
+└── ... (17 directories total)
 ```
 
 ### SLURM Cluster Processing
 
 ```bash
 # Generate SLURM scripts without submitting
-redi data/*.nc --parallel --backend slurm --slurm-account myacct --generate-only
+redi run data/*.nc --parallel --backend slurm --slurm-account myacct --generate-only
 
 # Generate and submit job
-redi data/*.nc --parallel --backend slurm --slurm-account myacct
+redi run data/*.nc --parallel --backend slurm --slurm-account myacct
 
 # Full SLURM configuration
-redi data/*.nc --parallel --backend slurm \
+redi run data/*.nc --parallel --backend slurm \
     --slurm-account myacct \
     --slurm-nodes 4 \
     --slurm-cores 56 \
