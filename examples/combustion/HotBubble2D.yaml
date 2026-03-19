@@ -16,10 +16,10 @@
 #   divu, gradpx, gradpy, avg_pressure, mag_vort, Y(O2), Y(N2)
 #
 # Usage:
-#   redi run /opt/drai/combustion/plt00000 -c examples/combustion/plt00000.yaml
+#   redi run /opt/drai/combustion/plt00000 -c examples/combustion/HotBubble2D.yaml
 #
 # To process a time series of snapshots use a glob pattern:
-#   redi run "/opt/drai/combustion/plt*" -c examples/combustion/plt00000.yaml
+#   redi run "/opt/drai/combustion/plt*" -c examples/combustion/HotBubble2D.yaml
 
 domain: combustion
 input_path: /opt/drai/combustion/plt00000
