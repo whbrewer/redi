@@ -1,0 +1,48 @@
+# REDI – OpenFold / OpenProteinSet configuration
+#
+# Processes the OpenProteinSet data on Orion into per-protein NPZ feature files
+# ready to train OpenFold.
+#
+# Usage:
+#   redi run /lustre/orion/gen053/world-shared/openfold/data \
+#       --domain life_sciences -c configs/openfold.yaml
+#
+# Expected input layout:
+#   <input>/
+#     open_protein_set/pdb/<PDB_ID>_<CHAIN>/a3m/  *.a3m
+#     pdb_mmcif/mmcif_files/<PDB_ID>.cif
+#
+# Output (per-protein NPZ, one file per chain):
+#   aatype                [N_res, 21]       one-hot amino acid identity
+#   residue_index         [N_res]           0-based position
+#   msa                   [N_seq, N_res]    integer-encoded MSA rows
+#   msa_mask              [N_seq, N_res]    1 where MSA position is valid
+#   deletion_matrix_int   [N_seq, N_res]    insertion counts
+#   all_atom_positions    [N_res, 37, 3]    ground-truth atom coordinates
+#   all_atom_mask         [N_res, 37]       1 where atom is present
+#   resolution            [1]               crystallographic resolution (Å)
+
+domain: life_sciences
+
+input_path: /lustre/orion/gen053/world-shared/openfold/data
+
+output_dir: /lustre/orion/gen053/world-shared/openfold/out
+
+# "npz"            – full IPTSO pipeline; saves per-protein .npz feature files
+# "openfold_native"– copies raw .cif + alignments into the OpenFoldDataModule
+#                    directory layout (no pre-computed tensors)
+output_format: npz
+
+# Cap the number of proteins processed.
+# Set to null (or remove) to process all 131,487 PDB chains.
+# For a quick demo, 100–500 is a good range.
+#max_proteins: 100
+
+# Train / val / test split (applied by SavePerProteinNPZ)
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  random_seed: 42

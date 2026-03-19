@@ -407,7 +407,8 @@ def run_pipeline(
         elif domain == "life_sciences":
             from .domains.life_sciences import get_full_pipeline as _get_ls_pipeline
             _ls_fmt = config.get("output_format", "npz") if config else "npz"
-            get_full_pipeline = lambda: _get_ls_pipeline(input_path=primary_path, output_format=_ls_fmt)
+            _ls_max = config.get("max_proteins") if config else None
+            get_full_pipeline = lambda: _get_ls_pipeline(input_path=primary_path, output_format=_ls_fmt, max_proteins=_ls_max)
         elif domain == "fusion":
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
