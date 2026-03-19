@@ -1,1 +1,0 @@
-/home/w1b/.claude-work/projects/-home-w1b-drai-apps-redi/memory/sc26_validation_plan.md
