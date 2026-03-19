@@ -88,16 +88,14 @@ class LocalBackend(ParallelBackend):
 
         try:
             # Build redi command arguments
-            redi_base_args = ["redi", "--style", config.style]
+            redi_base_args = ["redi", "run", "--style", config.style]
             redi_base_args.extend(config.redi_args)
 
             # Build parallel command
             # Each file gets its own output directory based on filename
-            # Format: parallel -j{workers} redi --style=simple {} -o {output_dir}/{/.}.out :::: {file_list}
             parallel_cmd = [
                 "parallel",
                 f"-j{config.workers}",
-                "--bar",  # Show progress bar
                 "--halt", "soon,fail=10%",  # Stop if 10% fail
                 " ".join(redi_base_args),
                 "{}",
@@ -167,7 +165,7 @@ class LocalBackend(ParallelBackend):
                 f.write(f"{path}\n")
 
         # Build redi args
-        redi_args = ["--style", config.style] + config.redi_args
+        redi_args = ["run", "--style", config.style] + config.redi_args
         redi_args_str = " ".join(redi_args)
 
         # Generate run script
