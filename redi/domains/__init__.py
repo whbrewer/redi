@@ -8,6 +8,7 @@ Domain-specific preprocessing handlers for:
 - Fusion Energy (MDSplus, ADIOS, h5py)
 - HPC/Operational (pandas, sklearn)
 - Geospatial (h3, geopandas, shapely)
+- Combustion (AMReX block-structured AMR plotfiles)
 """
 
 from typing import Dict, List, Type, Optional
@@ -23,6 +24,7 @@ class Domain(Enum):
     HPC = "hpc"
     GEOSPATIAL = "geospatial"
     NUCLEAR_PHYSICS = "nuclear_physics"
+    COMBUSTION = "combustion"
     GENERAL = "general"
 
 
@@ -59,6 +61,12 @@ DOMAIN_KEYWORDS: Dict[Domain, List[str]] = {
         "shapefile", "polygon", "geojson", "wgs84", "epsg",
         "smoke", "pm25", "pm2.5", "aqi", "exposure",
         "spatial", "geospatial"
+    ],
+    Domain.COMBUSTION: [
+        "flame", "combustion", "amrex", "amr", "plotfile",
+        "x_velocity", "y_velocity", "z_velocity", "rhoh",
+        "divu", "gradpx", "gradpy", "mag_vort", "rhoRT",
+        "fuel", "oxidizer", "reaction", "detonation", "deflagration",
     ]
 }
 
@@ -71,6 +79,7 @@ DOMAIN_EXTENSIONS: Dict[Domain, List[str]] = {
     Domain.HPC: [],  # Generic formats, detected by content
     Domain.GEOSPATIAL: [".shp", ".geojson", ".gpkg", ".kml"],
     Domain.NUCLEAR_PHYSICS: [],  # Detected by directory layout (train.txt + test.txt + .npy)
+    Domain.COMBUSTION: [],  # Detected by AMReX Header file content
     Domain.GENERAL: []
 }
 
@@ -109,7 +118,7 @@ def detect_domain(
 
 def get_domain_pipeline(domain: Domain):
     """Get the domain-specific pipeline configuration"""
-    from . import climate, materials, life_sciences, fusion, hpc, geospatial
+    from . import climate, materials, life_sciences, fusion, hpc, geospatial, combustion
 
     domain_modules = {
         Domain.CLIMATE: climate,
@@ -118,6 +127,7 @@ def get_domain_pipeline(domain: Domain):
         Domain.FUSION: fusion,
         Domain.HPC: hpc,
         Domain.GEOSPATIAL: geospatial,
+        Domain.COMBUSTION: combustion,
     }
 
     return domain_modules.get(domain)

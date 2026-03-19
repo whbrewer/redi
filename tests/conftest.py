@@ -81,6 +81,98 @@ MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVK
 
 
 @pytest.fixture
+def sample_amrex_plotfile(temp_dir):
+    """
+    Create a minimal synthetic AMReX HyperCLaw-V1.1 plotfile directory.
+
+    Layout:
+      plt_test/
+        Header          — 2 levels (Level_0: 8×16, Level_1: 16×32), 4 variables
+        Level_0/
+          Cell_H        — 1 FAB entry
+          Cell_D_00000  — binary FAB (4 vars × 8×16 cells)
+        Level_1/
+          Cell_H        — 1 FAB entry
+          Cell_D_00000  — binary FAB (4 vars × 16×32 cells)
+    """
+    import struct, numpy as np
+
+    plt_dir = temp_dir / "plt_test"
+    plt_dir.mkdir()
+
+    var_names = ["x_velocity", "y_velocity", "temp", "Y(O2)", "Y(N2)"]
+    ncomp = len(var_names)
+    spacedim = 2
+    finest_level = 1
+    prob_lo = [0.0, 0.0]
+    prob_hi = [0.008, 0.016]
+    ref_ratio = 2
+
+    # Level grids: Level_0 = 8×16, Level_1 = 16×32
+    level_grids = [
+        {"lo": [0, 0], "hi": [7, 15],  "dx": [0.001, 0.001]},
+        {"lo": [0, 0], "hi": [15, 31], "dx": [0.0005, 0.0005]},
+    ]
+
+    # --- Header ---
+    header_lines = [
+        "HyperCLaw-V1.1",
+        str(ncomp),
+        *var_names,
+        str(spacedim),
+        "0.0",                          # time
+        str(finest_level),
+        " ".join(str(v) for v in prob_lo),
+        " ".join(str(v) for v in prob_hi),
+        str(ref_ratio),                 # ref_ratios (1 value for 1 refinement)
+        # All domain boxes on one line
+        " ".join(
+            f"(({g['lo'][0]},{g['lo'][1]}) ({g['hi'][0]},{g['hi'][1]}) (0,0))"
+            for g in level_grids
+        ),
+        " ".join("0" for _ in level_grids),   # steps
+        *[" ".join(str(v) for v in g["dx"]) for g in level_grids],
+        "0",    # coordinate system
+        "0",    # padding
+    ]
+    (plt_dir / "Header").write_text("\n".join(header_lines) + "\n")
+
+    # --- Levels ---
+    for lev, grid in enumerate(level_grids):
+        level_dir = plt_dir / f"Level_{lev}"
+        level_dir.mkdir()
+
+        lo = grid["lo"]
+        hi = grid["hi"]
+        nx = hi[0] - lo[0] + 1
+        ny = hi[1] - lo[1] + 1
+
+        # Build binary FAB
+        # ASCII header line
+        fab_header = (
+            f"FAB ((8, (64 11 52 0 1 12 0 1023)),(8, (64 11 52 0 1 12 0 1023)))"
+            f"((({lo[0]},{lo[1]}) ({hi[0]},{hi[1]}) (0,0))) {ncomp}\n"
+        )
+        # Data: shape (nx, ny, ncomp) in Fortran order = (ncomp, nx, ny) C after transpose
+        # Fill with physically plausible values per variable
+        data_f = np.zeros((nx, ny, ncomp), dtype=np.float64)
+        data_f[:, :, 0] = 0.5                  # x_velocity  (m/s)
+        data_f[:, :, 1] = 0.1                  # y_velocity  (m/s)
+        data_f[:, :, 2] = 300.0 + lev * 50.0  # temp (K) — warmer at finer level
+        data_f[:, :, 3] = 0.23                 # Y(O2) mass fraction
+        data_f[:, :, 4] = 0.71                 # Y(N2) mass fraction
+
+        fab_bytes = fab_header.encode("ascii") + data_f.tobytes(order="F")
+        (level_dir / "Cell_D_00000").write_bytes(fab_bytes)
+
+        # Cell_H with one FabOnDisk entry
+        cell_h = f"1\n1\nFabOnDisk: Cell_D_00000 0\n"
+        (level_dir / "Cell_H").write_text(cell_h)
+
+    return plt_dir
+
+
+@pytest.fixture
 def sample_json(temp_dir):
     """Create a sample JSON file."""
     json_path = temp_dir / "sample.json"

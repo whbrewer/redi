@@ -184,7 +184,7 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
         )
 
     # Validate domain
-    valid_domains = ['climate', 'materials', 'life_sciences', 'fusion', 'hpc', 'geospatial', 'general', None]
+    valid_domains = ['climate', 'materials', 'life_sciences', 'fusion', 'hpc', 'geospatial', 'nuclear_physics', 'combustion', 'general', None]
     if config.get('domain') not in valid_domains:
         issues.append(
             f"Unknown domain: {config.get('domain')}. "

@@ -135,6 +135,18 @@ def detect_domain(input_path: Path, columns: Optional[List[str]] = None) -> str:
         detected = _detect_domain(columns=columns, file_extension=ext)
         return detected.value
 
+    # Check for AMReX plotfile directories (HyperCLaw-V1.1)
+    if input_path.is_dir():
+        header_path = input_path / "Header"
+        if header_path.exists():
+            try:
+                with open(header_path) as _f:
+                    _first = _f.readline().strip()
+                if _first.startswith("HyperCLaw") or _first.startswith("AMReX"):
+                    return "combustion"
+            except Exception:
+                pass
+
     return "general"
 
 
@@ -349,6 +361,7 @@ def run_pipeline(
         "fusion": "☀️ ",
         "hpc": "🖥️ ",
         "geospatial": "🌐",
+        "combustion": "🔥",
         "general": "📊",
     }
     icon = domain_icons.get(domain, "📊")
@@ -357,7 +370,7 @@ def run_pipeline(
         print_section("Domain Detection")
         if domain == "general" and domain_was_auto:
             print(f"    {Colors.YELLOW}⚠ Could not auto-detect domain{Colors.END}")
-            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc, geospatial{Colors.END}")
+            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc, geospatial, combustion{Colors.END}")
         else:
             print(f"    {icon} Detected: {Colors.BOLD}{Colors.CYAN}{domain.upper()}{Colors.END}")
     elif style == "simple":
@@ -442,6 +455,8 @@ def run_pipeline(
         elif domain == "nuclear_physics":
             from .domains.sphenix import get_sphenix_pipeline
             get_full_pipeline = get_sphenix_pipeline
+        elif domain == "combustion":
+            from .domains.combustion import get_full_pipeline
         else:
             get_full_pipeline = None
 
@@ -851,6 +866,17 @@ def run_pipeline(
                         completed_steps.add("aggregate")
                     if "clean" in step_lower:
                         completed_steps.add("clean")
+                    # Combustion (AMReX) step mappings
+                    if "amrex" in step_lower or "plotfile" in step_lower:
+                        completed_steps.add("ingest")
+                    if "clip_species" in step_lower or "validate_physics" in step_lower:
+                        completed_steps.add("preprocess")
+                    if "derive_combustion" in step_lower or "normalize_combustion" in step_lower:
+                        completed_steps.add("transform")
+                    if "composite_amr" in step_lower:
+                        completed_steps.add("composite")
+                    if "combustion_npz" in step_lower or "save_combustion" in step_lower:
+                        completed_steps.add("shard")
 
             print_section("Pipeline Recommendations")
             print(f"    {Colors.BOLD}Current Level:{Colors.END} {rec['current_level']}")
@@ -2302,7 +2328,7 @@ Download examples (climate domain)::
     )
     run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
     run_parser.add_argument("-d", "--domain",
-                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "general"],
+                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "combustion", "general"],
                            help="Scientific domain (auto-detected if not specified)")
     run_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     run_parser.add_argument("--unique", action="store_true",

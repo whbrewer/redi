@@ -57,6 +57,12 @@ DOMAIN_FILE_PATTERNS = {
                      "shapefile", "polygon", "geojson", "wgs84", "epsg",
                      "smoke", "pm25", "pm2.5", "aqi", "exposure",
                      "spatial", "geospatial"]
+    },
+    ScientificDomain.COMBUSTION: {
+        "extensions": [],
+        "keywords": ["flame", "combustion", "amrex", "x_velocity", "y_velocity",
+                     "rhoh", "divu", "mag_vort", "rhoRT", "fuel", "oxidizer",
+                     "detonation", "deflagration"]
     }
 }
 
@@ -134,6 +140,18 @@ DOMAIN_PIPELINES = {
         ],
         "tools": ["h3", "geopandas", "shapely", "pandas"],
         "output_formats": ["Parquet", "NPZ", "CSV"]
+    },
+    ScientificDomain.COMBUSTION: {
+        "name": "AMReX Combustion AMR Pipeline",
+        "steps": [
+            ("ingest", "Parse AMReX plotfile Header and binary FAB files per level"),
+            ("preprocess", "Clip species fractions to [0,1], validate physics"),
+            ("transform", "Derive vorticity/fuel proxy; normalize by reference scales"),
+            ("composite", "Composite AMR levels to uniform finest-level grid"),
+            ("shard", "Save snapshot as NPZ with coordinates and metadata")
+        ],
+        "tools": ["numpy"],
+        "output_formats": ["NPZ", "HDF5"]
     },
     ScientificDomain.GENERAL: {
         "name": "General Data Pipeline",

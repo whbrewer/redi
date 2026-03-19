@@ -158,6 +158,22 @@ class DetectFormat(PipelineStep):
             return "adios"
         return None
 
+    def _detect_amrex_format(self, path: Path) -> Optional[str]:
+        """Detect AMReX plotfile directory (HyperCLaw-V1.1 format)."""
+        if not path.is_dir():
+            return None
+        header_path = path / "Header"
+        if not header_path.exists():
+            return None
+        try:
+            with open(header_path) as f:
+                first_line = f.readline().strip()
+            if first_line.startswith("HyperCLaw") or first_line.startswith("AMReX"):
+                return "amrex-plotfile"
+        except Exception:
+            pass
+        return None
+
     def _detect_sickle_format(self, path: Path) -> Optional[str]:
         """Detect SICKLE turbulence data formats (GESTS or SST-binary)."""
         if not path.is_dir():
@@ -230,11 +246,17 @@ class DetectFormat(PipelineStep):
                             detected_format = adios_format
                             logger.debug(f"     Detected ADIOS2 BP5 format")
                         else:
-                            # Check for SICKLE formats
-                            sickle_format = self._detect_sickle_format(path)
-                            if sickle_format:
-                                detected_format = sickle_format
-                                logger.debug(f"     Detected SICKLE format: {sickle_format}")
+                            # Check for AMReX plotfile directories
+                            amrex_format = self._detect_amrex_format(path)
+                            if amrex_format:
+                                detected_format = amrex_format
+                                logger.debug(f"     Detected AMReX plotfile format")
+                            else:
+                                # Check for SICKLE formats
+                                sickle_format = self._detect_sickle_format(path)
+                                if sickle_format:
+                                    detected_format = sickle_format
+                                    logger.debug(f"     Detected SICKLE format: {sickle_format}")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():

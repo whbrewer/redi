@@ -1,0 +1,87 @@
+# REDI Configuration — AMReX Combustion Plotfile
+#
+# Dataset: 2D low-Mach combustion simulation (HyperCLaw-V1.1 format)
+# Source:  /opt/drai/combustion/plt00000
+# Format:  AMReX block-structured AMR plotfile directory
+#
+#   plt00000/
+#     Header          — ASCII metadata (variables, levels, grid layout)
+#     Level_0/        — 64×128 cells,   dx=0.250 mm  (1 box)
+#     Level_1/        — 128×256 cells,  dx=0.125 mm  (2 boxes)
+#     Level_2/        — 256×512 cells,  dx=0.0625 mm (3 boxes)
+#     Level_3/        — 512×1024 cells, dx=0.03125 mm (24 boxes, finest)
+#
+# 13 stored variables:
+#   x_velocity, y_velocity, density, rhoh, temp, RhoRT
+#   divu, gradpx, gradpy, avg_pressure, mag_vort, Y(O2), Y(N2)
+#
+# Usage:
+#   redi run /opt/drai/combustion/plt00000 -c examples/combustion/plt00000.yaml
+#
+# To process a time series of snapshots use a glob pattern:
+#   redi run "/opt/drai/combustion/plt*" -c examples/combustion/plt00000.yaml
+
+domain: combustion
+input_path: /opt/drai/combustion/plt00000
+output_dir: ./output/combustion
+output_format: npz    # npz or hdf5
+
+# ── AMR structure ─────────────────────────────────────────────────────────────
+combustion:
+
+  # How to present the multi-level AMR data for ML:
+  #
+  #   composite  (default) — all levels up-sampled and merged into one uniform
+  #              grid at the finest resolution. Output X shape: (C, Nx, Ny).
+  #              Best for CNNs, FNOs, and models expecting a regular grid.
+  #
+  #   per_level  — each refinement level kept as separate box arrays.
+  #              Best for multi-resolution models (U-Net, graph networks)
+  #              that can exploit the AMR hierarchy directly.
+  structure_mode: composite   # composite | per_level
+
+  # Which AMR level to use as the target resolution for compositing.
+  # null = finest level (Level_3, 512×1024). Set to 0, 1, or 2 to
+  # composite to a coarser uniform grid (faster, less memory).
+  #
+  #   target_level: null   →  512×1024  (finest, ~2M cells)
+  #   target_level: 2      →  256×512   (¼ cells)
+  #   target_level: 1      →  128×256   (1/16 cells)
+  #   target_level: 0      →   64×128   (1/64 cells)
+  target_level: null
+
+  # ── Derived fields ──────────────────────────────────────────────────────────
+  #
+  # Fields computed from the stored variables and appended to X.
+  derive:
+    # vorticity: ∂v/∂x − ∂u/∂y  (units: 1/s, before normalization)
+    vorticity: true
+
+    # fuel_proxy: Y_fuel ≈ 1 − Y(O2) − Y(N2), clipped to [0, 1]
+    # Approximates fuel mass fraction when fuel species are not stored.
+    fuel_proxy: true
+
+  # ── Normalization ────────────────────────────────────────────────────────────
+  #
+  # Fields are divided by their reference scale so values are O(1).
+  # Set enabled: false to skip normalization entirely (raw physical units).
+  # Override individual scales under 'scales:' — leave others at default.
+  normalize:
+    enabled: true
+
+    # Reference scales (divisors). Defaults shown below.
+    # Uncomment and edit any entry to override.
+    scales:
+      x_velocity:    10.0       # m/s  — typical peak velocity
+      y_velocity:    10.0       # m/s
+      density:        1.2       # kg/m³ — air at STP
+      temp:        2000.0       # K    — adiabatic flame temperature
+      avg_pressure: 101325.0    # Pa   — 1 atm
+      mag_vort:     1000.0      # 1/s
+      divu:         1000.0      # 1/s
+      # rhoh, RhoRT, gradpx, gradpy are not normalized by default;
+      # add entries here to normalize them:
+      # rhoh:     2.5e5         # J/m³
+      # RhoRT:    101325.0      # Pa
+      # gradpx:   1000.0        # Pa/m
+      # gradpy:   1000.0        # Pa/m
