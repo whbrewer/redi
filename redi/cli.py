@@ -2263,6 +2263,178 @@ def _run_nextflow_watch_mode(workflow_path: Path, data_dir: Optional[Path], outp
 from .discover import run_discover
 
 
+def run_parallel_pipeline(
+    input_paths: List[str],
+    output_dir: str = "./output",
+    domain: Optional[str] = None,
+    stages: Optional[List[str]] = None,
+    config: Optional[dict] = None,
+    style: str = "rich",
+    backend: str = "local",
+    workers: Optional[int] = None,
+    batch_size: int = 4,
+    distribution: str = "round_robin",
+    generate_only: bool = False,
+    slurm_nodes: int = 4,
+    slurm_cores_per_node: int = 56,
+    slurm_time: str = "0:30:00",
+    slurm_account: Optional[str] = None,
+    slurm_partition: str = "batch",
+    slurm_final_output: Optional[str] = None,
+):
+    """Run REDI pipeline in parallel mode."""
+    from pathlib import Path
+
+    try:
+        from .parallel import ParallelExecutor, ParallelConfig
+    except ImportError as e:
+        if style == "rich":
+            print(f"{Colors.RED}Error: Parallel module not available: {e}{Colors.END}")
+        else:
+            print(f"Error: Parallel module not available: {e}")
+        return
+
+    paths = [Path(p) for p in input_paths]
+
+    if style == "rich":
+        print_banner()
+        print_section("Parallel Execution")
+        print_metric("Files", f"{len(paths)}")
+        print_metric("Backend", backend)
+        print_metric("Workers", str(workers) if workers else "auto")
+        print_metric("Batch Size", str(batch_size))
+        print_metric("Distribution", distribution)
+        if backend == "slurm":
+            print_metric("SLURM Nodes", str(slurm_nodes))
+            print_metric("Cores/Node", str(slurm_cores_per_node))
+            print_metric("Time Limit", slurm_time)
+            if slurm_account:
+                print_metric("Account", slurm_account)
+    elif style == "simple":
+        print(f"Parallel: {len(paths)} files, backend={backend}, workers={workers or 'auto'}")
+
+    # Build redi arguments to pass to each worker
+    redi_args = []
+    if domain:
+        redi_args.extend(["-d", domain])
+    if stages:
+        redi_args.extend(["-s", ",".join(stages)])
+
+    # Add config values that affect pipeline execution
+    safe_config = dict(config or {})
+    if safe_config.get('output_format'):
+        redi_args.extend(["-f", safe_config['output_format']])
+
+    # Create executor
+    executor = ParallelExecutor(
+        backend=backend,
+        workers=workers,
+        batch_size=batch_size,
+        output_dir=output_dir,
+        redi_args=redi_args,
+        slurm_nodes=slurm_nodes,
+        slurm_cores_per_node=slurm_cores_per_node,
+        slurm_time=slurm_time,
+        slurm_account=slurm_account,
+        slurm_partition=slurm_partition,
+        slurm_final_output=slurm_final_output,
+    )
+
+    # Update config distribution
+    executor.config.distribution = distribution
+
+    if generate_only:
+        # Generate scripts without executing
+        script_dir = Path(output_dir) / "parallel_scripts"
+
+        if style == "rich":
+            print_section("Generating Scripts")
+
+        scripts = executor.generate_scripts(paths, script_dir)
+
+        if style == "rich":
+            print(f"    {Colors.GREEN}✓{Colors.END} Generated scripts in {script_dir}")
+            for name, path in scripts.items():
+                print(f"      📄 {Colors.BOLD}{name}{Colors.END}")
+
+            if backend == "slurm":
+                print()
+                print(f"    {Colors.CYAN}To submit:{Colors.END} cd {script_dir} && sbatch multinodejob.sh")
+        elif style == "simple":
+            print(f"Scripts generated in: {script_dir}")
+            for name, path in scripts.items():
+                print(f"  {name}: {path}")
+        elif style == "json":
+            import json
+            print(json.dumps({
+                "scripts_dir": str(script_dir),
+                "scripts": {k: str(v) for k, v in scripts.items()}
+            }, indent=2))
+        return
+
+    # Execute
+    if style == "rich":
+        print_section("Executing")
+        print(f"    {Colors.YELLOW}⏳ Running parallel jobs...{Colors.END}")
+
+    result = executor.execute(paths)
+
+    # Display results
+    if style == "rich":
+        print_section("Results")
+        if result.success:
+            print(f"    {Colors.GREEN}✓{Colors.END} Parallel execution completed")
+        else:
+            print(f"    {Colors.RED}✗{Colors.END} Parallel execution failed")
+
+        print_metric("Total Files", str(result.total_files))
+        print_metric("Completed", str(result.completed))
+        print_metric("Failed", str(result.failed))
+
+        if result.errors:
+            print()
+            print(f"    {Colors.BOLD}Messages:{Colors.END}")
+            for err in result.errors[:5]:
+                print(f"      {Colors.DIM}{err}{Colors.END}")
+
+        if result.scripts_dir:
+            print()
+            print(f"    {Colors.DIM}Scripts: {result.scripts_dir}{Colors.END}")
+
+        if result.output_dirs:
+            print_section("Output Directories")
+            for d in result.output_dirs[:10]:
+                print(f"    📁 {d}")
+            if len(result.output_dirs) > 10:
+                print(f"    {Colors.DIM}... and {len(result.output_dirs) - 10} more{Colors.END}")
+
+        print()
+        if result.success:
+            print(f"{Colors.GREEN}{Colors.BOLD}✓ Parallel pipeline completed!{Colors.END}")
+        else:
+            print(f"{Colors.YELLOW}{Colors.BOLD}⚠ Parallel pipeline completed with errors{Colors.END}")
+        print()
+
+    elif style == "simple":
+        status = "OK" if result.success else "FAILED"
+        print(f"Parallel: {status}, {result.completed}/{result.total_files} completed")
+        if result.errors:
+            for err in result.errors:
+                print(f"  {err}")
+
+    elif style == "json":
+        import json
+        print(json.dumps({
+            "success": result.success,
+            "total_files": result.total_files,
+            "completed": result.completed,
+            "failed": result.failed,
+            "errors": result.errors,
+            "output_dirs": [str(d) for d in result.output_dirs],
+            "scripts_dir": str(result.scripts_dir) if result.scripts_dir else None,
+        }, indent=2))
+
+
 # =============================================================================
 # MAIN CLI
 # =============================================================================
@@ -2380,6 +2552,37 @@ Download examples (climate domain)::
                                help="Time frequency (e.g., 6hr, day, mon)")
     download_group.add_argument("--year", type=int,
                                help="Year to download (for CDS/ERA5)")
+
+    # Parallel execution group
+    parallel_group = run_parser.add_argument_group("parallel execution")
+    parallel_group.add_argument("-p", "--parallel", action="store_true",
+                                help="Enable parallel execution across input files")
+    parallel_group.add_argument("-w", "--workers", type=int, default=None,
+                                help="Number of parallel workers (default: auto-detect CPU count)")
+    parallel_group.add_argument("--backend", choices=["local", "slurm"], default="local",
+                                help="Parallel backend: local (GNU parallel) or slurm")
+    parallel_group.add_argument("--batch-size", type=int, default=4,
+                                help="Files per worker batch (default: 4)")
+    parallel_group.add_argument("--generate-only", action="store_true",
+                                help="Generate parallel scripts without executing (for SLURM)")
+    parallel_group.add_argument("--distribution", choices=["round_robin", "balanced"],
+                                default="round_robin",
+                                help="File distribution strategy (default: round_robin)")
+
+    # SLURM-specific options
+    slurm_group = run_parser.add_argument_group("SLURM options (for --backend slurm)")
+    slurm_group.add_argument("--slurm-nodes", type=int, default=4,
+                             help="Number of compute nodes (default: 4)")
+    slurm_group.add_argument("--slurm-cores", type=int, default=56,
+                             help="CPU cores per node (default: 56)")
+    slurm_group.add_argument("--slurm-time", type=str, default="0:30:00",
+                             help="Time limit HH:MM:SS (default: 0:30:00)")
+    slurm_group.add_argument("--slurm-account", type=str,
+                             help="SLURM account/allocation")
+    slurm_group.add_argument("--slurm-partition", type=str, default="batch",
+                             help="SLURM partition (default: batch)")
+    slurm_group.add_argument("--slurm-output", type=str,
+                             help="Final output directory (for copying from burst buffer)")
 
 
     # =========================================================================
@@ -2650,6 +2853,31 @@ def _handle_run_command(args):
         normalize_method=args.normalize if hasattr(args, 'normalize') else config.get('normalize_method'),
         config_file=config_path,
     )
+
+    # Check for parallel execution mode
+    parallel_enabled = getattr(args, 'parallel', False) or config.get('parallel', {}).get('enabled', False)
+
+    if parallel_enabled:
+        run_parallel_pipeline(
+            input_paths=[str(p) for p in input_paths],
+            output_dir=config.get('output_dir', args.output),
+            domain=config.get('domain', args.domain),
+            stages=args.stages.split(",") if args.stages else config.get('stages'),
+            config=config,
+            style=args.style,
+            backend=getattr(args, 'backend', None) or config.get('parallel', {}).get('backend', 'local'),
+            workers=getattr(args, 'workers', None) or config.get('parallel', {}).get('workers'),
+            batch_size=getattr(args, 'batch_size', None) or config.get('parallel', {}).get('batch_size', 4),
+            distribution=getattr(args, 'distribution', None) or config.get('parallel', {}).get('distribution', 'round_robin'),
+            generate_only=getattr(args, 'generate_only', False),
+            slurm_nodes=getattr(args, 'slurm_nodes', None) or config.get('parallel', {}).get('slurm', {}).get('nodes', 4),
+            slurm_cores_per_node=getattr(args, 'slurm_cores', None) or config.get('parallel', {}).get('slurm', {}).get('cores_per_node', 56),
+            slurm_time=getattr(args, 'slurm_time', None) or config.get('parallel', {}).get('slurm', {}).get('time_limit', '0:30:00'),
+            slurm_account=getattr(args, 'slurm_account', None) or config.get('parallel', {}).get('slurm', {}).get('account'),
+            slurm_partition=getattr(args, 'slurm_partition', None) or config.get('parallel', {}).get('slurm', {}).get('partition', 'batch'),
+            slurm_final_output=getattr(args, 'slurm_output', None) or config.get('parallel', {}).get('slurm', {}).get('final_output'),
+        )
+        return  # Exit after parallel execution
 
     # Run pipeline
     stages = config.get('stages')

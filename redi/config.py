@@ -66,6 +66,25 @@ DEFAULTS: Dict[str, Any] = {
         'save_normalization': True,
     },
 
+    'parallel': {
+        'enabled': False,
+        'backend': 'local',  # local (GNU parallel) or slurm
+        'workers': None,  # None = auto-detect CPU count
+        'batch_size': 4,  # Files per worker batch
+        'distribution': 'round_robin',  # round_robin or balanced
+        'slurm': {
+            'nodes': 4,
+            'cores_per_node': 56,
+            'time_limit': '0:30:00',
+            'account': None,
+            'partition': 'batch',
+            'burst_buffer': '/mnt/bb/$USER',
+            'final_output': None,  # Where to copy results from burst buffer
+            'constraint': 'nvme',
+            'modules': ['miniforge3/23.11.0-0', 'parallel'],
+            'conda_env': 'conda-redi',
+        },
+    },
 }
 
 
@@ -200,6 +219,47 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
                 f"Split ratios must sum to 1.0, got {total}"
             )
 
+    # Validate parallel configuration
+    parallel = config.get('parallel', {})
+    if parallel.get('enabled'):
+        # Validate backend
+        valid_backends = ['local', 'slurm']
+        if parallel.get('backend') not in valid_backends:
+            issues.append(
+                f"Unknown parallel backend: {parallel.get('backend')}. "
+                f"Valid options: {valid_backends}"
+            )
+
+        # Validate distribution
+        valid_distributions = ['round_robin', 'balanced']
+        if parallel.get('distribution') not in valid_distributions:
+            issues.append(
+                f"Unknown distribution strategy: {parallel.get('distribution')}. "
+                f"Valid options: {valid_distributions}"
+            )
+
+        # Validate workers
+        workers = parallel.get('workers')
+        if workers is not None and (not isinstance(workers, int) or workers < 1):
+            issues.append(
+                f"Invalid workers count: {workers}. Must be a positive integer."
+            )
+
+        # Validate batch_size
+        batch_size = parallel.get('batch_size')
+        if batch_size is not None and (not isinstance(batch_size, int) or batch_size < 1):
+            issues.append(
+                f"Invalid batch_size: {batch_size}. Must be a positive integer."
+            )
+
+        # Validate SLURM config if using slurm backend
+        if parallel.get('backend') == 'slurm':
+            slurm = parallel.get('slurm', {})
+            if slurm.get('nodes') and (not isinstance(slurm['nodes'], int) or slurm['nodes'] < 1):
+                issues.append(f"Invalid slurm.nodes: {slurm['nodes']}. Must be positive integer.")
+            if slurm.get('cores_per_node') and (not isinstance(slurm['cores_per_node'], int) or slurm['cores_per_node'] < 1):
+                issues.append(f"Invalid slurm.cores_per_node: {slurm['cores_per_node']}. Must be positive integer.")
+
     return issues
 
 
@@ -289,5 +349,25 @@ climax_output:
   save_normalization: true   # normalize_mean.npz, normalize_std.npz
   variable_naming: name_level  # e.g., temperature_500
 
+# Parallel execution settings
+parallel:
+  enabled: false             # Enable parallel processing across files
+  backend: local             # local (GNU parallel) or slurm (HPC cluster)
+  workers: null              # null = auto-detect cores, or integer
+  batch_size: 4              # Files per worker batch
+  distribution: round_robin  # round_robin or balanced (by file size)
+  # SLURM settings (if backend: slurm):
+  slurm:
+    nodes: 4                 # Number of compute nodes
+    cores_per_node: 56       # CPU cores per node
+    time_limit: "0:30:00"    # Time limit HH:MM:SS
+    account: null            # SLURM account/allocation
+    partition: batch         # SLURM partition
+    burst_buffer: "/mnt/bb/$USER"  # Fast local storage
+    final_output: null       # Where to copy results from burst buffer
+    modules:                 # Modules to load
+      - miniforge3/23.11.0-0
+      - parallel
+    conda_env: conda-redi    # Conda environment to activate
 """
     return example
