@@ -1,0 +1,25 @@
+# REDI Configuration for sPHENIX TPC Dataset
+#
+# Input: sPHENIX outer TPC directory containing:
+#   train.txt        relative paths to training wedge .npy files (25,152)
+#   test.txt         relative paths to test wedge .npy files     ( 6,288)
+#   <wedge_dir>/     per-wedge subdirectories (12-2_0-0/, 12-2_0-1/, ...)
+#       *.npy        uint16 arrays shape (192, 249, 16) = azimuth × beam × layer
+#
+# Usage:
+#   redi run /opt/drai/sphenix/outer/ -c examples/sphenix_config.yaml
+#   redi run /opt/drai/sphenix/outer/ --domain nuclear_physics -o ./output/sphenix_ready
+
+domain: nuclear_physics
+output_dir: ./output/sphenix_ready
+
+# Output: one .npy per wedge in train/ and test/ subdirs
+# format: float32, shape (192, 249, 16) = azimuth × beam × layer
+#
+# Transform applied:
+#   1. Zero-suppress: ADC < 64 → 0.0   (noise floor in simulation)
+#   2. log2(ADC + 1)                    (compresses [0, 1023] → [0, ~10])
+#
+# NeuralCompression_v3 compatibility:
+#   DatasetTPC(data_root='./output/sphenix_ready', split='train', dimension=2)
+#   Set log: false in the model config — REDI already applied log2.
