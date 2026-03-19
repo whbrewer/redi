@@ -363,10 +363,16 @@ def get_openfold_pipeline(output_format: str = "npz"):
             return ctx.metadata.get("is_openfold", False)
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
-            proteins = ctx.data["proteins"]
-            failed = 0
+            import sys
+            import time
 
-            for prot in proteins:
+            proteins = ctx.data["proteins"]
+            total = len(proteins)
+            failed = 0
+            progress_every = max(1, total // 20)  # report ~every 5%
+            started_at = time.perf_counter()
+
+            for i, prot in enumerate(proteins, start=1):
                 try:
                     seq, positions, mask, resolution = _parse_mmcif(prot["cif_path"])
                     prot["sequence"] = seq
@@ -379,8 +385,21 @@ def get_openfold_pipeline(output_format: str = "npz"):
                     prot["parse_error"] = str(e)
                     failed += 1
 
-            ok = len(proteins) - failed
-            logger.info(f"Parsed {ok}/{len(proteins)} mmCIF structures")
+                if i % progress_every == 0 or i == total:
+                    elapsed = time.perf_counter() - started_at
+                    rate = i / elapsed if elapsed > 0 else 0.0
+                    pct = 100 * i / total
+                    print(
+                        f"\r  ⏳ Parsing mmCIF ... {i:,}/{total:,} ({pct:.0f}%)"
+                        f"  {rate:.0f} structures/s  {failed} failed",
+                        end="",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+
+            print(file=sys.stderr)
+            ok = total - failed
+            logger.info(f"Parsed {ok}/{total} mmCIF structures")
             ctx.metadata["mmcif_parse_failures"] = failed
             return ctx
 
@@ -395,10 +414,16 @@ def get_openfold_pipeline(output_format: str = "npz"):
             return ctx.metadata.get("is_openfold", False)
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
-            proteins = ctx.data["proteins"]
-            total_records = 0
+            import sys
+            import time
 
-            for prot in proteins:
+            proteins = ctx.data["proteins"]
+            total = len(proteins)
+            total_records = 0
+            progress_every = max(1, total // 20)
+            started_at = time.perf_counter()
+
+            for i, prot in enumerate(proteins, start=1):
                 if "parse_error" in prot:
                     continue
 
@@ -430,9 +455,23 @@ def get_openfold_pipeline(output_format: str = "npz"):
                 prot["raw_msa_dels"] = raw_dels    # list of list[int]
                 total_records += len(raw_seqs)
 
+                if i % progress_every == 0 or i == total:
+                    elapsed = time.perf_counter() - started_at
+                    rate = i / elapsed if elapsed > 0 else 0.0
+                    avg_rows = total_records // max(i, 1)
+                    pct = 100 * i / total
+                    print(
+                        f"\r  ⏳ Parsing MSAs ... {i:,}/{total:,} ({pct:.0f}%)"
+                        f"  {rate:.1f} proteins/s  avg {avg_rows:,} rows/protein",
+                        end="",
+                        flush=True,
+                        file=sys.stderr,
+                    )
+
+            print(file=sys.stderr)
             logger.info(
-                f"Parsed MSAs for {len(proteins)} proteins "
-                f"(avg {total_records // max(len(proteins), 1)} rows/protein)"
+                f"Parsed MSAs for {total} proteins "
+                f"(avg {total_records // max(total, 1)} rows/protein)"
             )
             return ctx
 
