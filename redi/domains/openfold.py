@@ -260,10 +260,61 @@ def _sequence_to_aatype(seq: str) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Module-level worker functions (must be at module level to be picklable)
+# ---------------------------------------------------------------------------
+
+def _parse_mmcif_worker(args: Tuple) -> Tuple[str, Dict]:
+    """ProcessPoolExecutor worker: parse one mmCIF file."""
+    pdb_id, cif_path_str = args
+    try:
+        seq, positions, mask, resolution = _parse_mmcif(Path(cif_path_str))
+        return pdb_id, {
+            "sequence": seq,
+            "all_atom_positions": positions,
+            "all_atom_mask": mask,
+            "resolution": resolution,
+            "n_res": len(seq),
+        }
+    except Exception as e:
+        return pdb_id, {"parse_error": str(e)}
+
+
+def _parse_msa_worker(args: Tuple) -> Tuple[str, Dict]:
+    """ThreadPoolExecutor worker: parse A3M alignment files for one protein."""
+    pdb_id, sequence, n_res, alignment_dir_str, has_msa = args
+    raw_seqs: List[str] = [sequence]
+    raw_dels: List[List[int]] = [[0] * n_res]
+    seen: set = {sequence}
+
+    if has_msa and alignment_dir_str:
+        aln_dir = Path(alignment_dir_str)
+        for a3m_path in sorted(aln_dir.glob("*.a3m")):
+            try:
+                seqs, dels = _parse_a3m(a3m_path)
+                for s, d in zip(seqs, dels):
+                    if s in seen:
+                        continue
+                    seen.add(s)
+                    raw_seqs.append(s)
+                    raw_dels.append(d)
+            except Exception:
+                pass
+
+    return pdb_id, {"raw_msa_seqs": raw_seqs, "raw_msa_dels": raw_dels}
+
+
+def _save_npz_worker(args: Tuple) -> str:
+    """ThreadPoolExecutor worker: save one compressed NPZ file."""
+    out_path_str, features = args
+    np.savez_compressed(out_path_str, **features)
+    return out_path_str
+
+
+# ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def get_openfold_pipeline(output_format: str = "npz"):
+def get_openfold_pipeline(output_format: str = "npz", num_workers: Optional[int] = None):
     """Return the full list of OpenFold pipeline steps.
 
     Args:
@@ -359,47 +410,50 @@ def get_openfold_pipeline(output_format: str = "npz"):
         stage = PipelineStage.PREPROCESS
         description = "Extract atom coordinates from mmCIF structure files"
 
+        def __init__(self, num_workers: Optional[int] = None):
+            super().__init__()
+            self.num_workers = num_workers  # None → ProcessPoolExecutor default (cpu_count)
+
         def validate(self, ctx: PipelineContext) -> bool:
             return ctx.metadata.get("is_openfold", False)
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             import sys
             import time
+            from concurrent.futures import ProcessPoolExecutor
 
             proteins = ctx.data["proteins"]
             total = len(proteins)
             failed = 0
-            progress_every = max(1, total // 20)  # report ~every 5%
+            progress_every = max(1, total // 20)
             started_at = time.perf_counter()
 
-            for i, prot in enumerate(proteins, start=1):
-                try:
-                    seq, positions, mask, resolution = _parse_mmcif(prot["cif_path"])
-                    prot["sequence"] = seq
-                    prot["all_atom_positions"] = positions  # [N_res, 37, 3]
-                    prot["all_atom_mask"] = mask            # [N_res, 37]
-                    prot["resolution"] = resolution
-                    prot["n_res"] = len(seq)
-                except Exception as e:
-                    logger.warning(f"Failed to parse {prot['pdb_id']}: {e}")
-                    prot["parse_error"] = str(e)
-                    failed += 1
+            prot_by_id = {p["pdb_id"]: p for p in proteins}
+            args = [(p["pdb_id"], str(p["cif_path"])) for p in proteins]
 
-                if i % progress_every == 0 or i == total:
-                    elapsed = time.perf_counter() - started_at
-                    rate = i / elapsed if elapsed > 0 else 0.0
-                    pct = 100 * i / total
-                    print(
-                        f"\r  ⏳ Parsing mmCIF ... {i:,}/{total:,} ({pct:.0f}%)"
-                        f"  {rate:.0f} structures/s  {failed} failed",
-                        end="",
-                        flush=True,
-                        file=sys.stderr,
-                    )
+            done = 0
+            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+                for pdb_id, result in executor.map(_parse_mmcif_worker, args, chunksize=10):
+                    prot = prot_by_id[pdb_id]
+                    if "parse_error" in result:
+                        logger.warning(f"Failed to parse {pdb_id}: {result['parse_error']}")
+                        prot["parse_error"] = result["parse_error"]
+                        failed += 1
+                    else:
+                        prot.update(result)
+                    done += 1
+                    if done % progress_every == 0 or done == total:
+                        elapsed = time.perf_counter() - started_at
+                        rate = done / elapsed if elapsed > 0 else 0.0
+                        pct = 100 * done / total
+                        print(
+                            f"\r  ⏳ Parsing mmCIF ... {done:,}/{total:,} ({pct:.0f}%)"
+                            f"  {rate:.0f} structures/s  {failed} failed",
+                            end="", flush=True, file=sys.stderr,
+                        )
 
             print(file=sys.stderr)
-            ok = total - failed
-            logger.info(f"Parsed {ok}/{total} mmCIF structures")
+            logger.info(f"Parsed {total - failed}/{total} mmCIF structures")
             ctx.metadata["mmcif_parse_failures"] = failed
             return ctx
 
@@ -410,12 +464,17 @@ def get_openfold_pipeline(output_format: str = "npz"):
         stage = PipelineStage.PREPROCESS
         description = "Parse A3M MSA files into raw sequence strings and deletion counts"
 
+        def __init__(self, num_workers: Optional[int] = None):
+            super().__init__()
+            self.num_workers = num_workers  # None → ThreadPoolExecutor default
+
         def validate(self, ctx: PipelineContext) -> bool:
             return ctx.metadata.get("is_openfold", False)
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             import sys
             import time
+            from concurrent.futures import ThreadPoolExecutor
 
             proteins = ctx.data["proteins"]
             total = len(proteins)
@@ -423,50 +482,36 @@ def get_openfold_pipeline(output_format: str = "npz"):
             progress_every = max(1, total // 20)
             started_at = time.perf_counter()
 
-            for i, prot in enumerate(proteins, start=1):
-                if "parse_error" in prot:
-                    continue
+            prot_by_id = {p["pdb_id"]: p for p in proteins}
+            args = [
+                (
+                    p["pdb_id"],
+                    p["sequence"],
+                    p["n_res"],
+                    str(p["alignment_dir"]) if p["alignment_dir"] else None,
+                    p["has_msa"],
+                )
+                for p in proteins if "parse_error" not in p
+            ]
 
-                seq = prot["sequence"]
-
-                # Always include the query as the first row (zero deletions)
-                raw_seqs: List[str] = [seq]
-                raw_dels: List[List[int]] = [[0] * prot["n_res"]]
-                seen: set = {seq}  # deduplicate across files, matching OpenFold
-
-                if prot["has_msa"]:
-                    aln_dir: Path = prot["alignment_dir"]
-                    # Support both the legacy layout (uniref.a3m, bfd.*.a3m)
-                    # and the OpenProteinSet layout (uniref90_hits.a3m, etc.)
-                    # by globbing all *.a3m files in the alignment directory.
-                    for a3m_path in sorted(aln_dir.glob("*.a3m")):
-                        try:
-                            seqs, dels = _parse_a3m(a3m_path)
-                            for s, d in zip(seqs, dels):
-                                if s in seen:
-                                    continue
-                                seen.add(s)
-                                raw_seqs.append(s)
-                                raw_dels.append(d)
-                        except Exception as e:
-                            logger.warning(f"{prot['pdb_id']}/{a3m_path.name}: {e}")
-
-                prot["raw_msa_seqs"] = raw_seqs    # list of str, length varies
-                prot["raw_msa_dels"] = raw_dels    # list of list[int]
-                total_records += len(raw_seqs)
-
-                if i % progress_every == 0 or i == total:
-                    elapsed = time.perf_counter() - started_at
-                    rate = i / elapsed if elapsed > 0 else 0.0
-                    avg_rows = total_records // max(i, 1)
-                    pct = 100 * i / total
-                    print(
-                        f"\r  ⏳ Parsing MSAs ... {i:,}/{total:,} ({pct:.0f}%)"
-                        f"  {rate:.1f} proteins/s  avg {avg_rows:,} rows/protein",
-                        end="",
-                        flush=True,
-                        file=sys.stderr,
-                    )
+            done = 0
+            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+                for pdb_id, result in executor.map(_parse_msa_worker, args, chunksize=10):
+                    prot = prot_by_id[pdb_id]
+                    prot["raw_msa_seqs"] = result["raw_msa_seqs"]
+                    prot["raw_msa_dels"] = result["raw_msa_dels"]
+                    total_records += len(result["raw_msa_seqs"])
+                    done += 1
+                    if done % progress_every == 0 or done == total:
+                        elapsed = time.perf_counter() - started_at
+                        rate = done / elapsed if elapsed > 0 else 0.0
+                        avg_rows = total_records // max(done, 1)
+                        pct = 100 * done / total
+                        print(
+                            f"\r  ⏳ Parsing MSAs ... {done:,}/{total:,} ({pct:.0f}%)"
+                            f"  {rate:.1f} proteins/s  avg {avg_rows:,} rows/protein",
+                            end="", flush=True, file=sys.stderr,
+                        )
 
             print(file=sys.stderr)
             logger.info(
@@ -757,11 +802,13 @@ def get_openfold_pipeline(output_format: str = "npz"):
             train_ratio: float = 0.8,
             val_ratio: float = 0.1,
             random_seed: int = 42,
+            num_workers: Optional[int] = None,
         ):
             super().__init__()
             self.train_ratio = train_ratio
             self.val_ratio = val_ratio
             self.random_seed = random_seed
+            self.num_workers = num_workers
 
         def validate(self, ctx: PipelineContext) -> bool:
             return ctx.metadata.get("is_openfold", False)
@@ -794,14 +841,18 @@ def get_openfold_pipeline(output_format: str = "npz"):
 
             saved_files: List[str] = []
             split_counts: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
-
-            for i, prot in enumerate(proteins):
-                split = split_map[i]
-                pdb_id = prot["pdb_id"]
-                out_path = output_dir / split / f"{pdb_id}.npz"
-                np.savez_compressed(out_path, **prot["features"])
-                saved_files.append(str(out_path))
+            for split in split_map.values():
                 split_counts[split] += 1
+
+            args = [
+                (str(output_dir / split_map[i] / f"{prot['pdb_id']}.npz"), prot["features"])
+                for i, prot in enumerate(proteins)
+            ]
+
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+                for out_path_str in executor.map(_save_npz_worker, args, chunksize=50):
+                    saved_files.append(out_path_str)
 
             logger.info(
                 f"Saved {len(saved_files)} NPZ files — "
@@ -829,17 +880,17 @@ def get_openfold_pipeline(output_format: str = "npz"):
     else:  # "npz" — full IPTSO pipeline
         return [
             LoadOpenFoldDataset(),
-            ParseMMCIFStructures(),
-            ParseMSAAlignments(),
+            ParseMMCIFStructures(num_workers=num_workers),
+            ParseMSAAlignments(num_workers=num_workers),
             EncodeOpenFoldFeatures(),
             AssembleOpenFoldFeatures(),
-            SavePerProteinNPZ(),
+            SavePerProteinNPZ(num_workers=num_workers),
             WriteChecksums(),
             SaveMetadata(),
         ]
 
 
-def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional[int] = None):
+def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional[int] = None, num_workers: Optional[int] = None):
     """Return a pipeline that ingests directly from an OpenProteinSet data root.
 
     The root is expected to contain::
@@ -951,6 +1002,6 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
 
     # Build the shared downstream steps by calling the existing pipeline
     # factory and slicing off the ingest step (index 0).
-    downstream = get_openfold_pipeline(output_format=output_format)
+    downstream = get_openfold_pipeline(output_format=output_format, num_workers=num_workers)
     # downstream[0] is LoadOpenFoldDataset; replace it with LoadOpenProteinSet
     return [LoadOpenProteinSet(max_proteins=max_proteins)] + downstream[1:]

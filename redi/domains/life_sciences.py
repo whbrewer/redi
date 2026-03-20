@@ -366,7 +366,7 @@ def get_output_steps():
     return get_output_steps(output_format="hdf5")
 
 
-def get_full_pipeline(input_path=None, output_format=None, max_proteins=None):
+def get_full_pipeline(input_path=None, output_format=None, max_proteins=None, num_workers=None):
     """Get the complete life sciences preprocessing pipeline.
 
     If *input_path* is an OpenFold data root (has fasta/ and pdb/ subdirs),
@@ -392,11 +392,11 @@ def get_full_pipeline(input_path=None, output_format=None, max_proteins=None):
             if _is_openfold_ops_root(p):
                 logger.info("Detected OpenProteinSet layout — using OPS pipeline")
                 return get_openfold_ops_pipeline(
-                    output_format=output_format, max_proteins=max_proteins
+                    output_format=output_format, max_proteins=max_proteins, num_workers=num_workers
                 )
             if _is_openfold_root(p):
                 logger.info("Detected OpenFold dataset layout — using OpenFold pipeline")
-                return get_openfold_pipeline(output_format=output_format)
+                return get_openfold_pipeline(output_format=output_format, num_workers=num_workers)
 
     return (
         get_ingest_steps() +

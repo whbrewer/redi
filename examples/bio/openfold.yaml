@@ -33,6 +33,12 @@ output_dir: /lustre/orion/gen053/world-shared/openfold/out
 #                    directory layout (no pre-computed tensors)
 output_format: npz
 
+# Number of parallel workers.
+# ParseMMCIFStructures uses ProcessPoolExecutor (CPU-bound).
+# ParseMSAAlignments and SavePerProteinNPZ use ThreadPoolExecutor (I/O-bound).
+# Set to null to use the system default (cpu_count).
+num_workers: 32
+
 # Cap the number of proteins processed.
 # Set to null (or remove) to process all 131,487 PDB chains.
 # For a quick demo, 100–500 is a good range.
