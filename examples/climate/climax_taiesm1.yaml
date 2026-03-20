@@ -1,0 +1,51 @@
+# REDI config for TaiESM1 ClimaX preprocessing (Orion)
+#
+# Input: Nonedeg (already regridded) NetCDF files on Orion lustre
+# Output: ClimaX-compatible NPZ shards with normalization stats
+#
+# Data coverage: 1850-2015 (17 decadal files for 2m_temperature,
+#                1 file for temperature)
+# Total size: ~84 GB
+
+domain: climate
+
+input_path: /lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/Nonedeg
+
+output_dir: /lustre/orion/stf053/world-shared/vga/projects/ClimaX/redi_output/TaiESM1
+
+output_format: npz
+
+# Data is already regridded to Nonedeg — skip regridding
+regrid:
+  enabled: false
+
+# Compute z-score normalization stats across all timesteps
+normalize:
+  enabled: true
+  method: zscore
+  two_pass: true
+
+# Process all variables present
+variables:
+  select: null
+  pressure_levels: null
+
+# Temporal train/val/test split matching ClimaX convention
+split:
+  method: temporal
+  train:
+    start: "1850-01-01"
+    end: "2000-12-31"
+  val:
+    start: "2001-01-01"
+    end: "2010-12-31"
+  test:
+    start: "2011-01-01"
+    end: "2015-12-31"
+
+# ClimaX-compatible output
+climax_output:
+  enabled: true
+  save_coordinates: true       # lat.npy, lon.npy
+  save_normalization: true     # normalize_mean.npz, normalize_std.npz
+  variable_naming: name_level  # e.g., 2m_temperature, temperature_500
