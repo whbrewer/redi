@@ -2689,6 +2689,29 @@ Examples::
     validate_parser.add_argument("-v", "--verbose", action="store_true",
                                  help="Verbose output")
 
+    assess_parser = subparsers.add_parser(
+        'assess',
+        help='Assess AI-readiness with domain-specific metrics',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples::
+
+  redi assess data.csv                       # auto-detect domain
+  redi assess output/frontier/raps_jobs.npz --domain hpc
+  redi assess /opt/drai/ClimaX/TaiESM1/tas.nc
+  redi assess /opt/drai/aflow/aflow_ml_ready.csv --domain materials
+  redi assess --style json data.parquet      # JSON output
+        """
+    )
+    assess_parser.add_argument("input", help="Path to data file")
+    assess_parser.add_argument("-d", "--domain",
+                               choices=["climate", "materials", "life_sciences",
+                                        "fusion", "hpc", "geospatial", "general"],
+                               help="Domain (auto-detected if omitted)")
+    assess_parser.add_argument("-o", "--output", help="Save JSON report to this path")
+    assess_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
+                               help="Output style (default: rich)")
+
     return parser
 
 
@@ -2724,8 +2747,187 @@ def main():
         _handle_discover_command(args)
     elif args.command == 'validate':
         _handle_validate_command(args)
+    elif args.command == 'assess':
+        _handle_assess_command(args)
     else:
         parser.print_help()
+
+
+def _handle_assess_command(args):
+    """Handle the 'assess' subcommand."""
+    from .assess import run_assess
+    import json as _json
+
+    path = args.input
+    if not Path(path).exists():
+        print(f"{Colors.RED}Error: file not found: {path}{Colors.END}")
+        sys.exit(1)
+
+    result = run_assess(path, domain=getattr(args, 'domain', None))
+    style = args.style
+
+    if style == "json":
+        print(_json.dumps(result, indent=2, default=str))
+    elif style == "simple":
+        _print_assess_simple(result)
+    else:
+        _print_assess_rich(result)
+
+    if getattr(args, 'output', None):
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, 'w') as f:
+            _json.dump(result, f, indent=2, default=str)
+        if style == "rich":
+            print(f"\n    {Colors.BOLD}Report saved:{Colors.END} {Colors.DIM}{out}{Colors.END}")
+
+
+def _print_assess_rich(result: dict):
+    """Display a readiness assessment in rich terminal format."""
+    level = result["readiness_level"]
+    level_name = result["readiness_name"]
+    domain = result["domain"]
+    u = result["universal"]
+    s = result["domain_specific"]
+    gaps = result["gaps"]
+
+    level_colors = {1: Colors.RED, 2: Colors.YELLOW, 3: Colors.YELLOW,
+                    4: Colors.CYAN, 5: Colors.GREEN}
+    lc = level_colors.get(level, Colors.END)
+
+    print_banner()
+    print_section(f"Readiness Assessment: {Path(result['path']).name}")
+    print_metric("Domain", domain)
+    print(f"    {Colors.BOLD}Readiness Level:{Colors.END} "
+          f"{lc}{Colors.BOLD}Level {level} — {level_name}{Colors.END}")
+
+    # Universal metrics
+    print_section("Universal Metrics")
+    if "rows" in u:
+        print_metric("rows", f"{u['rows']:,}")
+    if "columns" in u:
+        print_metric("columns", str(u["columns"]))
+    if u.get("completeness") is not None:
+        _print_metric_bar("completeness", u["completeness"], good=0.95, bad=0.80)
+    if u.get("duplicate_ratio") is not None:
+        _print_metric_bar("duplicate_ratio", u["duplicate_ratio"], good=0.01, bad=0.05, invert=True)
+    if u.get("outlier_ratio") is not None:
+        _print_metric_bar("outlier_ratio", u["outlier_ratio"], good=0.05, bad=0.15, invert=True)
+
+    if u.get("null_by_column"):
+        print(f"    {Colors.DIM}Worst null columns:{Colors.END}")
+        for col, frac in list(u["null_by_column"].items())[:3]:
+            bar = _mini_bar(frac)
+            print(f"      {Colors.DIM}{col}:{Colors.END} {bar} {frac:.1%}")
+    if u.get("outlier_by_column"):
+        print(f"    {Colors.DIM}Worst outlier columns:{Colors.END}")
+        for col, frac in list(u["outlier_by_column"].items())[:3]:
+            bar = _mini_bar(frac)
+            print(f"      {Colors.DIM}{col}:{Colors.END} {bar} {frac:.1%}")
+    if u.get("class_imbalance_ratio") is not None:
+        ratio = u["class_imbalance_ratio"]
+        col = u.get("class_imbalance_col", "")
+        color = Colors.YELLOW if ratio > 5 else Colors.GREEN
+        print(f"    {Colors.DIM}class_imbalance ({col}):{Colors.END} {color}{ratio:.1f}:1{Colors.END}")
+
+    # Domain-specific metrics
+    if s:
+        print_section(f"Domain Metrics ({domain})")
+
+        req = s.get("required_fields", {})
+        if req:
+            print(f"    {Colors.BOLD}Required Fields:{Colors.END}")
+            for field, info in req.items():
+                if info.get("present"):
+                    cov = info.get("coverage", 1.0)
+                    cov_color = Colors.GREEN if cov >= 0.95 else Colors.YELLOW
+                    col_hint = f" [{info['column']}]" if info.get("column") else ""
+                    print(f"      {Colors.GREEN}✓{Colors.END} {field}{Colors.DIM}{col_hint}{Colors.END} "
+                          f"coverage={cov_color}{cov:.1%}{Colors.END}")
+                else:
+                    print(f"      {Colors.RED}✗{Colors.END} {field} {Colors.DIM}(not found){Colors.END}")
+
+        # Domain-specific extras
+        for key, val in s.items():
+            if key == "required_fields":
+                continue
+            if isinstance(val, dict) or isinstance(val, list):
+                continue
+            label = key.replace("_", " ")
+            print_metric(label, str(val))
+
+        # Temporal range
+        for tkey in ("temporal_range", "temporal_days", "temporal_steps"):
+            if tkey in s:
+                print_metric(tkey.replace("_", " "), str(s[tkey]))
+
+        # Variables list (climate)
+        if "variables" in s:
+            print_metric("variables", ", ".join(s["variables"][:8])
+                         + (f" (+{len(s['variables'])-8} more)" if len(s["variables"]) > 8 else ""))
+
+        # Utilization traces (HPC)
+        if "utilization_traces" in s:
+            traces = s["utilization_traces"]
+            color = Colors.GREEN if traces else Colors.DIM
+            print_metric("utilization traces", f"{color}{', '.join(traces) if traces else 'none'}{Colors.END}")
+
+        # NaN by variable (climate)
+        if "nan_fraction_by_variable" in s:
+            print(f"    {Colors.DIM}NaN fraction by variable:{Colors.END}")
+            for var, frac in s["nan_fraction_by_variable"].items():
+                bar = _mini_bar(frac)
+                print(f"      {Colors.DIM}{var}:{Colors.END} {bar} {frac:.1%}")
+
+    # Gaps
+    if gaps:
+        print_section("Gaps to Next Level")
+        for gap in gaps:
+            print(f"    {Colors.YELLOW}○{Colors.END} {gap}")
+    else:
+        next_level = level + 1
+        if next_level <= 5:
+            print_section(f"To Reach Level {next_level}")
+            print(f"    {Colors.GREEN}✓{Colors.END} {Colors.DIM}No blocking gaps detected at this level{Colors.END}")
+
+    print()
+
+
+def _print_assess_simple(result: dict):
+    u = result["universal"]
+    s = result["domain_specific"]
+    print(f"file:         {result['path']}")
+    print(f"domain:       {result['domain']}")
+    print(f"level:        {result['readiness_level']} ({result['readiness_name']})")
+    print(f"rows:         {u.get('rows', 'N/A')}")
+    print(f"completeness: {u.get('completeness', 'N/A')}")
+    print(f"dup_ratio:    {u.get('duplicate_ratio', 'N/A')}")
+    print(f"outlier_ratio:{u.get('outlier_ratio', 'N/A')}")
+    req = s.get("required_fields", {})
+    if req:
+        present = [k for k, v in req.items() if v.get("present")]
+        missing = [k for k, v in req.items() if not v.get("present")]
+        print(f"fields_ok:    {', '.join(present)}")
+        if missing:
+            print(f"fields_miss:  {', '.join(missing)}")
+    if result["gaps"]:
+        for g in result["gaps"]:
+            print(f"gap:          {g}")
+
+
+def _print_metric_bar(label: str, value: float, good: float, bad: float, invert: bool = False):
+    """Print a metric with a color indicator."""
+    if invert:
+        color = Colors.GREEN if value <= good else (Colors.YELLOW if value <= bad else Colors.RED)
+    else:
+        color = Colors.GREEN if value >= good else (Colors.YELLOW if value >= bad else Colors.RED)
+    bar = _mini_bar(value if not invert else 1 - value)
+    print(f"    {Colors.DIM}{label}:{Colors.END} {bar} {color}{value:.4f}{Colors.END}")
+
+
+def _mini_bar(fraction: float, width: int = 10) -> str:
+    filled = round(max(0.0, min(1.0, fraction)) * width)
+    return f"{Colors.DIM}[{'█' * filled}{'░' * (width - filled)}]{Colors.END}"
 
 
 def _handle_run_command(args):

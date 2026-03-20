@@ -180,3 +180,124 @@ class TestConvenienceFunctions:
         assert "Data Card" in report
         assert "Pipeline Recommendations" in report
         assert "AI Readiness" in report
+
+
+class TestNewFormatHandlers:
+    """Tests for NPZ, HDF5, Parquet, FASTA, and NPY format analysis."""
+
+    def test_inspect_npz(self, temp_dir):
+        """Test NPZ file inspection."""
+        import numpy as np
+        from redi.assess import DataAnalyzer
+
+        npz_path = temp_dir / "test.npz"
+        np.savez(npz_path, X=np.random.rand(100, 10), y=np.arange(100))
+
+        analyzer = DataAnalyzer(str(npz_path))
+        data_card = analyzer.analyze()
+
+        assert "npz" in data_card.characteristics.data_types
+        assert data_card.overview.num_features == 2
+        feature_names = [f["name"] for f in data_card.characteristics.features]
+        assert "X" in feature_names
+        assert "y" in feature_names
+
+    def test_inspect_npy(self, temp_dir):
+        """Test NPY file inspection."""
+        import numpy as np
+        from redi.assess import DataAnalyzer
+
+        npy_path = temp_dir / "test.npy"
+        arr = np.random.rand(50, 8)
+        np.save(npy_path, arr)
+
+        analyzer = DataAnalyzer(str(npy_path))
+        data_card = analyzer.analyze()
+
+        assert "npy" in data_card.characteristics.data_types
+        assert data_card.overview.num_records == 50
+        assert data_card.overview.num_features == 8
+
+    def test_inspect_parquet(self, temp_dir):
+        """Test Parquet file inspection."""
+        import pandas as pd
+        from redi.assess import DataAnalyzer
+
+        pq_path = temp_dir / "test.parquet"
+        df = pd.DataFrame({
+            "job_id": range(20),
+            "walltime": [100.0] * 20,
+            "queue": ["batch"] * 20,
+        })
+        df.to_parquet(pq_path)
+
+        analyzer = DataAnalyzer(str(pq_path))
+        data_card = analyzer.analyze()
+
+        assert "parquet" in data_card.characteristics.data_types
+        assert data_card.overview.num_records == 20
+        assert data_card.overview.num_features == 3
+        # HPC domain detection from column names
+        assert data_card.detected_domain == "hpc"
+
+    def test_inspect_hdf5(self, temp_dir):
+        """Test HDF5 file inspection."""
+        import numpy as np
+        from redi.assess import DataAnalyzer
+
+        try:
+            import h5py
+        except ImportError:
+            pytest.skip("h5py not available")
+
+        h5_path = temp_dir / "test.h5"
+        with h5py.File(h5_path, 'w') as f:
+            f.create_dataset("features", data=np.random.rand(30, 5))
+            f.create_dataset("labels", data=np.zeros(30))
+
+        analyzer = DataAnalyzer(str(h5_path))
+        data_card = analyzer.analyze()
+
+        assert "hdf5" in data_card.characteristics.data_types
+        assert data_card.overview.num_features == 2
+
+    def test_inspect_fasta(self, temp_dir):
+        """Test FASTA file inspection."""
+        from redi.assess import DataAnalyzer
+
+        fasta_path = temp_dir / "test.fasta"
+        fasta_path.write_text(
+            ">seq1 first sequence\n"
+            "ATCGATCGATCG\n"
+            ">seq2 second sequence\n"
+            "GCTAGCTAGCTA\n"
+            ">seq3 third sequence\n"
+            "TTTTAAAACCCC\n"
+        )
+
+        analyzer = DataAnalyzer(str(fasta_path))
+        data_card = analyzer.analyze()
+
+        assert "sequence" in data_card.characteristics.data_types
+        assert data_card.overview.num_records == 3
+        assert data_card.detected_domain == "life_sciences"
+
+    def test_inspect_pdb(self, temp_dir):
+        """Test PDB file inspection."""
+        from redi.assess import DataAnalyzer
+
+        pdb_path = temp_dir / "test.pdb"
+        # Minimal PDB with 3 ATOM records
+        pdb_path.write_text(
+            "ATOM      1  N   ALA A   1       1.000   2.000   3.000  1.00  0.00           N\n"
+            "ATOM      2  CA  ALA A   1       2.000   3.000   4.000  1.00  0.00           C\n"
+            "ATOM      3  C   ALA A   1       3.000   4.000   5.000  1.00  0.00           C\n"
+            "END\n"
+        )
+
+        analyzer = DataAnalyzer(str(pdb_path))
+        data_card = analyzer.analyze()
+
+        assert "protein" in data_card.characteristics.data_types
+        assert data_card.overview.num_records == 3
+        assert data_card.detected_domain == "life_sciences"
