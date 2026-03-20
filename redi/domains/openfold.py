@@ -935,14 +935,16 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
             ops_pdb_dir = root / "open_protein_set" / "pdb"
             mmcif_dir = root / "pdb_mmcif" / "mmcif_files"
 
-            # Listing 131k directories can itself take a few seconds
+            # Pre-scan mmCIF directory into a set — one directory listing instead
+            # of 131k individual exists() calls (much faster on Lustre).
             print("  ⏳ Scanning OpenProteinSet directory ...", end="", flush=True, file=sys.stderr)
+            available_cif = {p.stem.lower() for p in mmcif_dir.iterdir() if p.suffix == ".cif"}
             entries = sorted(p for p in ops_pdb_dir.iterdir() if p.is_dir())
             total = len(entries)
             if self.max_proteins is not None:
                 entries = entries[: self.max_proteins]
                 total = len(entries)
-            print(f"\r  ✔ Found {total:,} chain entries{' (capped)' if self.max_proteins else ''}    ", flush=True, file=sys.stderr)
+            print(f"\r  ✔ Found {total:,} chain entries{' (capped)' if self.max_proteins else ''}  ({len(available_cif):,} mmCIF files indexed)    ", flush=True, file=sys.stderr)
 
             proteins: List[Dict[str, Any]] = []
             missing_cif = 0
@@ -953,12 +955,11 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
                 chain_id = entry.name           # e.g. "101m_A"
                 # PDB ID is everything before the last underscore
                 pdb_id = chain_id.rsplit("_", 1)[0].lower()  # e.g. "101m"
-                cif_path = mmcif_dir / f"{pdb_id}.cif"
 
-                if not cif_path.exists():
+                if pdb_id not in available_cif:
                     missing_cif += 1
-                    logger.debug(f"No mmCIF for {chain_id} (expected {cif_path.name})")
                 else:
+                    cif_path = mmcif_dir / f"{pdb_id}.cif"
                     a3m_dir = entry / "a3m"
                     has_msa = a3m_dir.is_dir() and any(a3m_dir.glob("*.a3m"))
                     proteins.append({
@@ -984,6 +985,11 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
 
             print(file=sys.stderr)  # newline after final \r
 
+            if missing_cif:
+                logger.info(
+                    f"{missing_cif} chain(s) skipped — no matching mmCIF file "
+                    f"(these are absent from the pdb_mmcif download, not an error)"
+                )
             logger.info(
                 f"Found {len(proteins)} chains from OpenProteinSet "
                 f"({sum(p['has_msa'] for p in proteins)} with MSA, "
