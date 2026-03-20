@@ -310,6 +310,80 @@ def _save_npz_worker(args: Tuple) -> str:
     return out_path_str
 
 
+def _process_and_save_protein_worker(args: Tuple) -> Tuple[str, str, Optional[str]]:
+    """ProcessPoolExecutor worker: full per-protein pipeline in one call.
+
+    Parses mmCIF → parses MSA → encodes features → saves NPZ.
+    All large arrays live only in this worker process; the parent receives
+    only (chain_id, out_path_str, error_or_None), keeping parent memory bounded.
+
+    Skips proteins whose NPZ already exists (enables restart after a killed job).
+    """
+    chain_id, cif_path_str, alignment_dir_str, has_msa, out_path_str = args
+    from pathlib import Path as _P
+
+    if _P(out_path_str).exists():
+        return chain_id, out_path_str, None  # already done — skip
+
+    try:
+        seq, positions, mask, resolution = _parse_mmcif(_P(cif_path_str))
+        n_res = len(seq)
+
+        raw_seqs: List[str] = [seq]
+        raw_dels: List[List[int]] = [[0] * n_res]
+        seen: set = {seq}
+        if has_msa and alignment_dir_str:
+            aln_dir = _P(alignment_dir_str)
+            for a3m_path in sorted(aln_dir.glob("*.a3m")):
+                try:
+                    seqs, dels = _parse_a3m(a3m_path)
+                    for s, d in zip(seqs, dels):
+                        if s in seen:
+                            continue
+                        seen.add(s)
+                        raw_seqs.append(s)
+                        raw_dels.append(d)
+                except Exception:
+                    pass
+
+        aatype = _sequence_to_aatype(seq)
+        encoded_rows: List[np.ndarray] = []
+        encoded_dels_: List[np.ndarray] = []
+        for s, d in zip(raw_seqs, raw_dels):
+            enc = _encode_msa_row(s)
+            del_arr = np.array(d, dtype=np.int32)
+            if len(enc) != n_res:
+                enc = (enc[:n_res] if len(enc) > n_res
+                       else np.pad(enc, (0, n_res - len(enc)), constant_values=MSA_GAP_IDX))
+            if len(del_arr) != n_res:
+                del_arr = (del_arr[:n_res] if len(del_arr) > n_res
+                           else np.pad(del_arr, (0, n_res - len(del_arr))))
+            encoded_rows.append(enc)
+            encoded_dels_.append(del_arr)
+
+        msa_arr = np.stack(encoded_rows, axis=0)
+        del_mat = np.stack(encoded_dels_, axis=0)
+        n_seq   = msa_arr.shape[0]
+
+        features = {
+            "aatype":                   aatype,
+            "between_segment_residues": np.zeros(n_res, dtype=np.int32),
+            "residue_index":            np.arange(n_res, dtype=np.int32),
+            "seq_length":               np.full(n_res, n_res, dtype=np.int32),
+            "msa":                      msa_arr,
+            "deletion_matrix_int":      del_mat,
+            "num_alignments":           np.full(n_res, n_seq, dtype=np.int32),
+            "all_atom_positions":       positions,
+            "all_atom_mask":            mask,
+            "resolution":               np.array([resolution], dtype=np.float32),
+            "is_distillation":          np.array(0.0, dtype=np.float32),
+        }
+        np.savez_compressed(out_path_str, **features)
+        return chain_id, out_path_str, None
+    except Exception as exc:
+        return chain_id, out_path_str, str(exc)
+
+
 # ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
@@ -1002,12 +1076,137 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
             ctx.metadata["num_with_msa"] = sum(p["has_msa"] for p in proteins)
             return ctx
 
-    # Reuse all steps from get_openfold_pipeline — they operate on the same
-    # protein-dict structure so no changes needed.
     from ..pipeline.output import WriteChecksums, SaveMetadata
 
-    # Build the shared downstream steps by calling the existing pipeline
-    # factory and slicing off the ingest step (index 0).
-    downstream = get_openfold_pipeline(output_format=output_format, num_workers=num_workers)
-    # downstream[0] is LoadOpenFoldDataset; replace it with LoadOpenProteinSet
-    return [LoadOpenProteinSet(max_proteins=max_proteins)] + downstream[1:]
+    if output_format != "npz":
+        # "openfold_native" and other modes: reuse the existing multi-step pipeline
+        downstream = get_openfold_pipeline(output_format=output_format, num_workers=num_workers)
+        return [LoadOpenProteinSet(max_proteins=max_proteins)] + downstream[1:]
+
+    # -----------------------------------------------------------------------
+    # "npz" mode: streaming processor — parse+encode+save inside each worker
+    # so the parent process never accumulates large feature arrays in memory.
+    # -----------------------------------------------------------------------
+
+    class StreamingNPZProcessor(PipelineStep):
+        """Parse mmCIF + MSA, encode, and save one NPZ per protein.
+
+        Each protein is processed entirely inside a worker process
+        (parse mmCIF → parse MSA → encode → save NPZ), so the parent
+        process only ever holds tiny (chain_id, error) results.
+
+        Supports restart: existing NPZ files are skipped automatically.
+        """
+
+        name = "streaming_npz_processor"
+        stage = PipelineStage.PREPROCESS
+        description = "Stream per-protein NPZ saving (memory-bounded, restartable)"
+
+        def __init__(
+            self,
+            train_ratio: float = 0.8,
+            val_ratio: float = 0.1,
+            random_seed: int = 42,
+            num_workers: Optional[int] = None,
+        ):
+            super().__init__()
+            self.train_ratio = train_ratio
+            self.val_ratio   = val_ratio
+            self.random_seed = random_seed
+            self.num_workers = num_workers
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("is_openfold", False)
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            import sys
+            import time
+            from concurrent.futures import ProcessPoolExecutor
+
+            proteins = ctx.data["proteins"]
+            total    = len(proteins)
+            if total == 0:
+                ctx.add_error("No proteins to process")
+                return ctx
+
+            output_dir = ctx.output_dir
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Assign train / val / test splits up front
+            rng       = np.random.default_rng(self.random_seed)
+            idx       = rng.permutation(total)
+            train_end = int(total * self.train_ratio)
+            val_end   = train_end + int(total * self.val_ratio)
+
+            split_map: Dict[int, str] = {}
+            for i in idx[:train_end]:
+                split_map[i] = "train"
+            for i in idx[train_end:val_end]:
+                split_map[i] = "val"
+            for i in idx[val_end:]:
+                split_map[i] = "test"
+
+            for split in ("train", "val", "test"):
+                (output_dir / split).mkdir(exist_ok=True)
+
+            # Build args: only path strings — no large arrays
+            worker_args = [
+                (
+                    prot["pdb_id"],
+                    str(prot["cif_path"]),
+                    str(prot["alignment_dir"]) if prot["alignment_dir"] else None,
+                    prot["has_msa"],
+                    str(output_dir / split_map[i] / f"{prot['pdb_id']}.npz"),
+                )
+                for i, prot in enumerate(proteins)
+            ]
+
+            started_at     = time.perf_counter()
+            progress_every = max(1, total // 20)
+            saved = failed = 0
+            saved_files: List[str] = []
+
+            with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
+                for done, (chain_id, out_path, error) in enumerate(
+                    executor.map(_process_and_save_protein_worker, worker_args, chunksize=10),
+                    start=1,
+                ):
+                    if error:
+                        logger.warning(f"Failed {chain_id}: {error}")
+                        failed += 1
+                    else:
+                        saved_files.append(out_path)
+                        saved += 1
+                    if done % progress_every == 0 or done == total:
+                        elapsed = time.perf_counter() - started_at
+                        rate    = done / elapsed if elapsed > 0 else 0.0
+                        pct     = 100 * done / total
+                        print(
+                            f"\r  ⏳ Processing proteins ... {done:,}/{total:,} ({pct:.0f}%)"
+                            f"  {rate:.1f} proteins/s  {saved} saved  {failed} failed",
+                            end="", flush=True, file=sys.stderr,
+                        )
+
+            print(file=sys.stderr)
+            split_counts = {
+                s: sum(1 for v in split_map.values() if v == s)
+                for s in ("train", "val", "test")
+            }
+            logger.info(
+                f"Saved {saved}/{total} NPZ files — "
+                f"train={split_counts['train']}, val={split_counts['val']}, "
+                f"test={split_counts['test']}, failed={failed}"
+            )
+            ctx.data = {"proteins": [{"pdb_id": p["pdb_id"]} for p in proteins]}
+            ctx.metadata["saved_files"]   = saved_files
+            ctx.metadata["output_format"] = "npz"
+            ctx.metadata["split"]         = split_counts
+            ctx.metadata["num_assembled"] = saved
+            return ctx
+
+    return [
+        LoadOpenProteinSet(max_proteins=max_proteins),
+        StreamingNPZProcessor(num_workers=num_workers),
+        WriteChecksums(),
+        SaveMetadata(),
+    ]
