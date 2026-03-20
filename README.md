@@ -260,6 +260,8 @@ When enabled, `redi run` generates and saves:
 
 Both are written to the run output directory and reported in terminal output.
 
+> **Note:** Flowcept defaults to using Redis as its backend. If Redis is not available in your environment, run `flowcept --init-settings` to configure Flowcept and disable the Redis integration.
+
 ### Analyze Mode Config
 
 ```yaml

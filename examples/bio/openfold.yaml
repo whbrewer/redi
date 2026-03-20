@@ -44,6 +44,11 @@ num_workers: 32
 # For a quick demo, 100–500 is a good range.
 #max_proteins: 100
 
+# Provenance: record wall-clock time for each pipeline stage (ingest,
+# preprocess, transform, structure, output) in metadata.json under
+# "benchmark.stage_timings_seconds".
+provenance: true
+
 # Train / val / test split (applied by SavePerProteinNPZ)
 split:
   method: random
