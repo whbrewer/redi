@@ -9,7 +9,7 @@
 
 domain: climate
 
-input_path: /lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/Nonedeg
+input_path: /lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/raw/2m_temperature
 
 output_dir: /lustre/orion/stf053/world-shared/vga/projects/ClimaX/redi_output/TaiESM1
 

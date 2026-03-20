@@ -10,9 +10,11 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
 
-DATA_DIR=/lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/Nonedeg
-OUT_DIR=/lustre/orion/stf053/world-shared/vga/projects/ClimaX/redi_output/TaiESM1
+DATA_DIR=/lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/raw/2m_temperature
+OUT_DIR=/lustre/orion/scratch/whbrewer/stf053/ClimaX
 CONFIG=/ccs/home/whbrewer/drai/redi/examples/climate/climax_taiesm1.yaml
+
+mkdir -p $OUT_DIR
 
 source /ccs/home/whbrewer/venv/redi/bin/activate
 

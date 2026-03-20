@@ -257,6 +257,14 @@ class DetectFormat(PipelineStep):
                                 if sickle_format:
                                     detected_format = sickle_format
                                     logger.debug(f"     Detected SICKLE format: {sickle_format}")
+                                else:
+                                    # Check for directory of NetCDF files (flat or nested)
+                                    # e.g. ClimaX/CMIP6 layout: dir/*.nc or dir/variable/*.nc
+                                    nc_files = sorted(path.rglob("*.nc")) or sorted(path.rglob("*.nc4"))
+                                    if nc_files:
+                                        detected_format = "netcdf"
+                                        ctx.input_paths = nc_files
+                                        logger.debug(f"     Found {len(nc_files)} NetCDF files in directory tree")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():
