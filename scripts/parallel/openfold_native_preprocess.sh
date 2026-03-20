@@ -12,6 +12,9 @@ CODE=/lustre/orion/gen053/world-shared/openfold/code
 DATA=/lustre/orion/gen053/world-shared/openfold/data
 OUT=/lustre/orion/gen053/world-shared/openfold/out
 
+# Set to false to skip steps whose outputs already exist (useful for resuming)
+OVERRIDE_CACHED=true
+
 source /ccs/home/whbrewer/venv/redi/bin/activate
 export PYTHONPATH=/lustre/orion/gen053/world-shared/openfold/code:$PYTHONPATH
 
@@ -20,7 +23,7 @@ mkdir -p "$OUT/alignment_dbs"
 TOTAL_START=$SECONDS
 
 echo "=== Step 1: mmCIF cache === $(date)"
-if [ -f "$OUT/mmcif_cache.json" ]; then
+if [ "$OVERRIDE_CACHED" = "false" ] && [ -f "$OUT/mmcif_cache.json" ]; then
     echo "    -> already exists, skipping"
 else
     T0=$SECONDS
@@ -32,7 +35,7 @@ else
 fi
 
 echo "=== Step 2: Chain data cache === $(date)"
-if [ -f "$OUT/chain_data_cache.json" ]; then
+if [ "$OVERRIDE_CACHED" = "false" ] && [ -f "$OUT/chain_data_cache.json" ]; then
     echo "    -> already exists, skipping"
 else
     T0=$SECONDS
@@ -44,7 +47,7 @@ else
 fi
 
 echo "=== Step 3: Alignment DB === $(date)"
-if [ -f "$OUT/alignment_dbs/alignment_db.index" ]; then
+if [ "$OVERRIDE_CACHED" = "false" ] && [ -f "$OUT/alignment_dbs/alignment_db.index" ]; then
     echo "    -> already exists, skipping"
 else
     T0=$SECONDS
