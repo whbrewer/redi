@@ -1,0 +1,25 @@
+# REDI assess config — OpenFold before/after comparison
+#
+# Usage:
+#   redi assess -c examples/bio/openfold_assess.yaml
+#   redi assess -c examples/bio/openfold_assess.yaml --style json -o results.json
+#
+# Runs assessment on both the raw mmCIF structure and the REDI-processed NPZ,
+# showing quantitative before/after metrics:
+#   - resolution_angstrom, r_factor, experimental_method  (raw)
+#   - msa_depth, msa_duplicate_ratio, msa_gap_ratio       (both)
+#   - atom_completeness, backbone_completeness            (processed)
+#   - aa_entropy_bits, aa_imbalance_ratio, aa_distribution (processed)
+
+domain: life_sciences
+style: rich
+
+files:
+  # Raw: mmCIF structure file (text, no ML features)
+  - /lustre/orion/gen053/world-shared/openfold/data/pdb_mmcif/mmcif_files/101m.cif
+
+  # Processed: REDI output NPZ (tensor-ready, with MSA + atom masks)
+  - /lustre/orion/gen053/world-shared/openfold/redi_output/train/101m_A.npz
+
+# Optional: save combined JSON report
+# output: /lustre/orion/gen053/world-shared/openfold/redi_output/assess_report.json

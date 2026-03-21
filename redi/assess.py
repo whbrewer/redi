@@ -1135,6 +1135,11 @@ class DomainAssessor:
         if ext in ext_map:
             return ext_map[ext]
 
+        # NPZ: detect OpenFold / life-sciences format by key names
+        if ext == ".npz" and self._npz is not None:
+            if "aatype" in self._npz:
+                return "life_sciences"
+
         if self._df is not None:
             cols = [c.lower() for c in self._df.columns]
             col_text = " ".join(cols)
@@ -1541,6 +1546,92 @@ class DomainAssessor:
         m: Dict[str, Any] = {"required_fields": {}}
         ext = self.path.suffix.lower()
 
+        # ------------------------------------------------------------------
+        # OpenFold / life-sciences NPZ (aatype, msa, all_atom_mask, ...)
+        # ------------------------------------------------------------------
+        if ext == ".npz" and self._npz is not None and "aatype" in self._npz:
+            import numpy as np
+            import math
+            npz = self._npz
+
+            # Sequence length
+            if "aatype" in npz:
+                aatype = npz["aatype"]  # [N_res, 21] int32
+                n_res = int(aatype.shape[0])
+                m["sequence_length"] = n_res
+
+                # Amino acid class imbalance
+                aa_counts = aatype.sum(axis=0).astype(float)  # [21]
+                total = float(aa_counts.sum())
+                if total > 0:
+                    aa_freq = aa_counts / total
+                    AA_NAMES = list("ARNDCQEGHILKMFPSTWYV") + ["X"]
+                    m["aa_distribution"] = {
+                        AA_NAMES[i]: round(float(aa_freq[i]), 4)
+                        for i in range(len(AA_NAMES)) if aa_freq[i] > 0
+                    }
+                    # Shannon entropy: uniform over 20 AAs = log2(20) ≈ 4.32 bits
+                    entropy = -sum(float(f) * math.log2(float(f)) for f in aa_freq if f > 0)
+                    m["aa_entropy_bits"] = round(entropy, 3)
+                    m["aa_entropy_pct_uniform"] = round(entropy / math.log2(20) * 100, 1)
+                    # Dominant / rarest ratio
+                    nonzero = aa_freq[aa_freq > 0]
+                    m["aa_imbalance_ratio"] = round(float(nonzero.max() / nonzero.min()), 1)
+                m["required_fields"]["sequence"] = {"present": True, "coverage": 1.0}
+
+            # MSA metrics
+            if "msa" in npz:
+                msa = npz["msa"]  # [N_seq, N_res] int32
+                n_seq = int(msa.shape[0])
+                m["msa_depth"] = n_seq
+
+                # Duplicate MSA rows (hash-based)
+                if n_seq > 1:
+                    row_hashes = [hash(msa[i].tobytes()) for i in range(n_seq)]
+                    unique_count = len(set(row_hashes))
+                    m["msa_duplicate_ratio"] = round(1.0 - unique_count / n_seq, 4)
+                    m["msa_unique_sequences"] = unique_count
+
+                # Gap ratio (token 21 = gap/unknown in OpenFold encoding)
+                gap_mask = (msa == 21)
+                msa_gap_ratio = round(float(gap_mask.mean()), 4)
+                m["msa_gap_ratio"] = msa_gap_ratio
+                m["required_fields"]["msa"] = {
+                    "present": True,
+                    "coverage": round(1.0 - msa_gap_ratio, 4),
+                }
+
+            # Atom completeness (mask = 1 where atom is present)
+            if "all_atom_mask" in npz:
+                mask = npz["all_atom_mask"]  # [N_res, 37] float32
+                # full-matrix fill rate (inherently sparse; avg AA ~7/37 slots)
+                atom_comp = round(float(mask.mean()), 4)
+                # backbone (N, CA, C, O) completeness — the meaningful quality metric
+                backbone_comp = round(float(mask[:, :4].mean()), 4)
+                m["atom_completeness"] = atom_comp
+                m["backbone_completeness"] = backbone_comp
+                m["required_fields"]["structure"] = {
+                    "present": True,
+                    "coverage": backbone_comp,  # use backbone; all-atom is inherently sparse
+                }
+
+            # Resolution preserved from structure
+            if "resolution" in npz:
+                res_val = float(npz["resolution"].flat[0])
+                if res_val > 0:
+                    m["resolution_angstrom"] = round(res_val, 3)
+
+            # Distillation flag (non-PDB UniRef sequences lack ground-truth structure)
+            if "is_distillation" in npz:
+                m["is_distillation"] = bool(float(npz["is_distillation"]) > 0.5)
+
+            m["required_fields"]["identifier"] = {"present": True}
+            m["required_fields"]["label"] = {
+                "present": "all_atom_positions" in npz,
+                "coverage": 1.0 if "all_atom_positions" in npz else 0.0,
+            }
+            return m
+
         if ext in [".fasta", ".fastq", ".fa", ".fq"]:
             lengths, ambiguous_count, total_chars = [], 0, 0
             ambiguous_chars = set("NXBZJ?-")
@@ -1595,7 +1686,7 @@ class DomainAssessor:
 
         if ext in [".pdb", ".mmcif", ".cif"]:
             atom_count, residue_ids, chain_ids = 0, set(), set()
-            r_factor, method = None, None
+            r_factor, method, resolution = None, None, None
             is_pdb_fmt = ext == ".pdb"
             with open(self.path, 'r') as f:
                 for line in f:
@@ -1613,7 +1704,7 @@ class DomainAssessor:
                                     residue_ids.add((parts[6], parts[8]))
                         except IndexError:
                             pass
-                    # R-factor from REMARK 3
+                    # R-factor from REMARK 3 (PDB format)
                     elif line.startswith("REMARK   3") and "R VALUE" in line and r_factor is None:
                         parts = line.split()
                         for i, p in enumerate(parts):
@@ -1623,9 +1714,33 @@ class DomainAssessor:
                                     break
                                 except ValueError:
                                     pass
-                    # Experimental method
+                    # Experimental method (PDB format)
                     elif line.startswith("EXPDTA") and method is None:
                         method = line[6:].strip().split(";")[0].strip()
+                    # mmCIF: experimental method
+                    elif line.startswith("_exptl.method") and method is None:
+                        parts = line.split(None, 1)
+                        if len(parts) == 2:
+                            method = parts[1].strip().strip("'\"")
+                    # mmCIF: R-factor
+                    elif line.startswith("_refine.ls_R_factor_obs") and r_factor is None:
+                        parts = line.split()
+                        if len(parts) == 2 and parts[1] not in ("?", "."):
+                            try:
+                                r_factor = float(parts[1])
+                            except ValueError:
+                                pass
+                    # mmCIF: resolution (Å)
+                    elif resolution is None and (
+                        line.startswith("_refine.ls_d_res_high")
+                        or line.startswith("_reflns.d_resolution_high")
+                    ):
+                        parts = line.split()
+                        if len(parts) == 2 and parts[1] not in ("?", "."):
+                            try:
+                                resolution = round(float(parts[1]), 3)
+                            except ValueError:
+                                pass
 
             m["atom_count"] = atom_count
             m["residue_count"] = len(residue_ids)
@@ -1633,18 +1748,49 @@ class DomainAssessor:
             if r_factor is not None:
                 m["r_factor"] = r_factor
                 m["structure_resolution_flag"] = "good" if r_factor < 0.25 else "poor"
+            if resolution is not None:
+                m["resolution_angstrom"] = resolution
             if method:
                 m["experimental_method"] = method
+            # Residue completeness: ratio of observed residues to atom records per chain
+            if len(residue_ids) > 0 and atom_count > 0:
+                avg_atoms_per_res = round(atom_count / len(residue_ids), 1)
+                m["avg_atoms_per_residue"] = avg_atoms_per_res
+                # Full amino acid averages ~7-10 heavy atoms; backbone alone = 4
+                m["atom_completeness"] = round(
+                    min(1.0, avg_atoms_per_res / 7.3), 4
+                )
             m["required_fields"]["sequence"] = {"present": atom_count > 0, "coverage": 1.0}
-            # Check for MSA alongside the structure file
+            # Check for MSA alongside the structure file, and also in openfold layout
             msa_files = (
                 list(self.path.parent.glob("*.a3m")) +
                 list(self.path.parent.glob("*.sto")) +
                 list(self.path.parent.glob("*.aln"))
             )
-            m["required_fields"]["msa"] = {"present": len(msa_files) > 0}
+            # OpenFold layout: open_protein_set/pdb/<PDBID>_<CHAIN>/a3m/*.a3m
+            if not msa_files:
+                pdb_id = self.path.stem.lower()
+                ops_base = self.path.parents[2] / "open_protein_set" / "pdb"
+                if ops_base.is_dir():
+                    for chain_dir in ops_base.glob(f"{pdb_id}_*/a3m"):
+                        msa_files = list(chain_dir.glob("*.a3m"))
+                        if msa_files:
+                            break
             if msa_files:
-                m["msa_file"] = msa_files[0].name
+                # Count MSA depth from the largest a3m file
+                try:
+                    depths = []
+                    for f in msa_files[:3]:
+                        with open(f, 'r') as fh:
+                            depth = sum(1 for l in fh if l.startswith('>'))
+                        depths.append(depth)
+                    m["msa_depth"] = max(depths)
+                    m["msa_files"] = len(msa_files)
+                except Exception:
+                    pass
+                m["required_fields"]["msa"] = {"present": True, "coverage": 1.0}
+            else:
+                m["required_fields"]["msa"] = {"present": False}
             m["required_fields"]["identifier"] = {"present": False}
             m["required_fields"]["label"] = {"present": False}
             return m
@@ -1719,7 +1865,9 @@ class DomainAssessor:
             universal.get("rows", 0) > 0
             or universal.get("arrays", 0) > 0
             or specific.get("sequence_count", 0) > 0   # FASTA
-            or specific.get("atom_count", 0) > 0       # PDB
+            or specific.get("atom_count", 0) > 0       # PDB/mmCIF
+            or specific.get("sequence_length", 0) > 0  # OpenFold NPZ
+            or specific.get("msa_depth", 0) > 0        # OpenFold NPZ
         )
         if has_data:
             level = 2
@@ -1745,10 +1893,14 @@ class DomainAssessor:
             label_kws = ("label", "target", "class", "formation_energy", "band_gap",
                          "enthalpy", "go_term", "function")
             has_label = any(any(k in c.lower() for k in label_kws) for c in self._df.columns)
-        if domain == "life_sciences" and specific.get("atom_count", 0) > 0:
-            # PDB/mmCIF structures: coordinates are the implicit label for structure prediction
-            # but only count as LABELED if they also have a functional annotation
-            has_label = specific.get("r_factor") is not None or specific.get("experimental_method") is not None
+        if domain == "life_sciences":
+            if specific.get("atom_count", 0) > 0:
+                # PDB/mmCIF: labeled if method/quality metadata present
+                has_label = (specific.get("r_factor") is not None
+                             or specific.get("experimental_method") is not None)
+            elif specific.get("required_fields", {}).get("label", {}).get("present"):
+                # OpenFold NPZ: all_atom_positions present = structure labels present
+                has_label = True
 
         if has_label and not cleaning_gaps:
             level = max(level, 3)

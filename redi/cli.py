@@ -2703,7 +2703,7 @@ Examples::
   redi assess --style json data.parquet      # JSON output
         """
     )
-    assess_parser.add_argument("input", help="Path to data file")
+    assess_parser.add_argument("input", nargs="?", help="Path to data file")
     assess_parser.add_argument("-d", "--domain",
                                choices=["climate", "materials", "life_sciences",
                                         "fusion", "hpc", "geospatial", "general"],
@@ -2711,6 +2711,7 @@ Examples::
     assess_parser.add_argument("-o", "--output", help="Save JSON report to this path")
     assess_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
                                help="Output style (default: rich)")
+    assess_parser.add_argument("-c", "--config", help="YAML config file (supports multi-file comparison)")
 
     return parser
 
@@ -2758,13 +2759,60 @@ def _handle_assess_command(args):
     from .assess import run_assess
     import json as _json
 
+    style = args.style
+    domain = getattr(args, 'domain', None)
+
+    # Config-file mode: assess one or more files defined in YAML
+    config_path = getattr(args, 'config', None)
+    if config_path:
+        try:
+            import yaml
+        except ImportError:
+            print(f"{Colors.RED}Error: PyYAML is required for config files (pip install pyyaml){Colors.END}")
+            sys.exit(1)
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
+        domain = domain or cfg.get("domain")
+        style = style or cfg.get("style", "rich")
+        files = cfg.get("files", [])
+        if not files:
+            print(f"{Colors.RED}Error: config must contain a 'files' list{Colors.END}")
+            sys.exit(1)
+        results = []
+        for p in files:
+            if not Path(p).exists():
+                print(f"{Colors.YELLOW}Warning: file not found, skipping: {p}{Colors.END}")
+                continue
+            result = run_assess(p, domain=domain)
+            results.append(result)
+            if style == "json":
+                pass  # collected below
+            elif style == "simple":
+                _print_assess_simple(result)
+            else:
+                _print_assess_rich(result)
+        if style == "json":
+            print(_json.dumps(results, indent=2, default=str))
+        out_path = getattr(args, 'output', None) or cfg.get("output")
+        if out_path:
+            out = Path(out_path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with open(out, 'w') as f:
+                _json.dump(results, f, indent=2, default=str)
+            if style == "rich":
+                print(f"\n    {Colors.BOLD}Report saved:{Colors.END} {Colors.DIM}{out}{Colors.END}")
+        return
+
+    # Single-file mode
     path = args.input
+    if not path:
+        print(f"{Colors.RED}Error: provide a file path or -c/--config{Colors.END}")
+        sys.exit(1)
     if not Path(path).exists():
         print(f"{Colors.RED}Error: file not found: {path}{Colors.END}")
         sys.exit(1)
 
-    result = run_assess(path, domain=getattr(args, 'domain', None))
-    style = args.style
+    result = run_assess(path, domain=domain)
 
     if style == "json":
         print(_json.dumps(result, indent=2, default=str))
@@ -2847,9 +2895,67 @@ def _print_assess_rich(result: dict):
                 else:
                     print(f"      {Colors.RED}✗{Colors.END} {field} {Colors.DIM}(not found){Colors.END}")
 
-        # Domain-specific extras
+        # OpenFold / life-sciences NPZ metrics
+        if s.get("msa_depth") is not None:
+            depth = s["msa_depth"]
+            color = Colors.GREEN if depth >= 128 else (Colors.YELLOW if depth >= 32 else Colors.RED)
+            print_metric("msa depth", f"{color}{depth:,} sequences{Colors.END}")
+        if s.get("msa_unique_sequences") is not None:
+            uniq = s["msa_unique_sequences"]
+            total_msa = s.get("msa_depth", uniq)
+            pct = uniq / total_msa if total_msa > 0 else 1.0
+            color = Colors.GREEN if pct >= 0.99 else Colors.YELLOW
+            print_metric("msa unique", f"{color}{uniq:,} ({pct:.1%}){Colors.END}")
+        if s.get("msa_gap_ratio") is not None:
+            _print_metric_bar("msa gap ratio", s["msa_gap_ratio"], good=0.05, bad=0.30, invert=True)
+        if s.get("atom_completeness") is not None and s.get("msa_depth") is not None:
+            _print_metric_bar("atom completeness", s["atom_completeness"], good=0.70, bad=0.50)
+        if s.get("backbone_completeness") is not None:
+            _print_metric_bar("backbone completeness", s["backbone_completeness"], good=0.99, bad=0.95)
+        if s.get("resolution_angstrom") is not None:
+            res = s["resolution_angstrom"]
+            color = Colors.GREEN if res <= 2.5 else (Colors.YELLOW if res <= 3.5 else Colors.RED)
+            print_metric("resolution", f"{color}{res} Å{Colors.END}")
+        if s.get("aa_entropy_bits") is not None:
+            ent = s["aa_entropy_bits"]
+            pct = s.get("aa_entropy_pct_uniform", 0)
+            color = Colors.GREEN if pct >= 85 else (Colors.YELLOW if pct >= 70 else Colors.RED)
+            imb = s.get("aa_imbalance_ratio", "?")
+            print_metric("AA entropy", f"{color}{ent:.3f} bits ({pct:.1f}% of uniform){Colors.END}"
+                         f"  {Colors.DIM}max/min ratio: {imb}:1{Colors.END}")
+        if s.get("aa_distribution"):
+            aa_dist = s["aa_distribution"]
+            top5 = sorted(aa_dist.items(), key=lambda x: -x[1])[:5]
+            bot5 = sorted(aa_dist.items(), key=lambda x: x[1])[:3]
+            print(f"    {Colors.DIM}AA freq (top 5):{Colors.END}  "
+                  + "  ".join(f"{aa}={v:.1%}" for aa, v in top5))
+            print(f"    {Colors.DIM}AA freq (bot 3):{Colors.END}  "
+                  + "  ".join(f"{aa}={v:.1%}" for aa, v in bot5))
+
+        # CIF / PDB-specific
+        if s.get("experimental_method") is not None and s.get("msa_depth") is None:
+            print_metric("experimental method", s["experimental_method"])
+        if s.get("r_factor") is not None:
+            rf = s["r_factor"]
+            color = Colors.GREEN if rf < 0.20 else (Colors.YELLOW if rf < 0.25 else Colors.RED)
+            print_metric("R-factor", f"{color}{rf:.4f}{Colors.END}")
+        if s.get("resolution_angstrom") is not None and s.get("msa_depth") is None:
+            res = s["resolution_angstrom"]
+            color = Colors.GREEN if res <= 2.5 else (Colors.YELLOW if res <= 3.5 else Colors.RED)
+            print_metric("resolution", f"{color}{res} Å{Colors.END}")
+        if s.get("atom_completeness") is not None and s.get("msa_depth") is None:
+            _print_metric_bar("atom completeness", s["atom_completeness"], good=0.75, bad=0.50)
+
+        # Domain-specific extras (generic scalar fallback, skip already-rendered keys)
+        _rendered = {
+            "msa_depth", "msa_unique_sequences", "msa_gap_ratio",
+            "atom_completeness", "backbone_completeness", "resolution_angstrom",
+            "aa_entropy_bits", "aa_entropy_pct_uniform", "aa_imbalance_ratio",
+            "aa_distribution", "experimental_method", "r_factor", "is_distillation",
+            "structure_resolution_flag",
+        }
         for key, val in s.items():
-            if key == "required_fields":
+            if key == "required_fields" or key in _rendered:
                 continue
             if isinstance(val, dict) or isinstance(val, list):
                 continue
