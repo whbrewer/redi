@@ -346,6 +346,9 @@ def _infer_characteristics(inspection: dict, style: str) -> dict:
             cols = sample.get('columns', [])
             cols_lower = [c.lower() for c in cols]
 
+            _hpc_keywords = ['job', 'queue', 'walltime', 'node', 'core', 'cpu', 'gpu',
+                              'wait', 'submit', 'partition', 'scheduler', 'slurm', 'pbs']
+
             if any(c in cols_lower for c in ['temperature', 'lat', 'lon', 'latitude', 'longitude']):
                 inference['likely_domain'] = 'climate'
             elif any(c in cols_lower for c in ['formula', 'lattice', 'spacegroup', 'energy']):
@@ -354,10 +357,12 @@ def _infer_characteristics(inspection: dict, style: str) -> dict:
                 inference['likely_domain'] = 'life_sciences'
             elif any(c in cols_lower for c in ['plasma', 'tokamak', 'disruption', 'ip']):
                 inference['likely_domain'] = 'fusion'
-            elif any(c in cols_lower for c in ['job', 'queue', 'walltime', 'nodes', 'cores']):
+            elif any(kw in col for col in cols_lower for kw in _hpc_keywords):
                 inference['likely_domain'] = 'hpc'
 
-            if any(c in cols_lower for c in ['label', 'target', 'y', 'class', 'category']):
+            _label_names = ['label', 'target', 'class', 'category', 'completed', 'success',
+                             'failed', 'outcome', 'result']
+            if any(any(ln in c for ln in _label_names) for c in cols_lower):
                 inference['has_labels'] = True
 
             if any(c in cols_lower for c in ['split', 'fold', 'train', 'test', 'val']):

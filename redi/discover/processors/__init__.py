@@ -170,13 +170,19 @@ class ProcessorRegistry:
 def _register_builtins() -> None:
     from redi.discover.processors.csv_processor import CsvProcessor
     from redi.discover.processors.markdown_processor import MarkdownProcessor
+    from redi.discover.processors.netcdf_processor import NetCDFProcessor
 
     registry.register(CsvProcessor())
     registry.register(MarkdownProcessor())
+    registry.register(NetCDFProcessor())
     # TSV reuses the CSV processor
     tsv = CsvProcessor()
     tsv.extension = ".tsv"
     registry.register(tsv)
+    # .nc4 reuses the NetCDF processor
+    nc4 = NetCDFProcessor()
+    nc4.extension = ".nc4"
+    registry.register(nc4)
 
 
 registry = ProcessorRegistry()

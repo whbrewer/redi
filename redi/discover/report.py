@@ -79,6 +79,8 @@ def _render_file_section(d: FileDiscovery) -> list[str]:
         lines += _render_csv_section(d)
     elif d.file_type == "Markdown":
         lines += _render_markdown_section(d)
+    elif d.file_type == "NetCDF":
+        lines += _render_netcdf_section(d)
     else:
         if d.metadata:
             lines += ["**Metadata:**", ""]
@@ -126,6 +128,46 @@ def _render_csv_section(d: FileDiscovery) -> list[str]:
             stats = col_stats.get(col, {})
             stats_str = _fmt_stats(ctype, stats)
             lines.append(f"| `{col}` | {ctype} | {stats_str} |")
+        lines.append("")
+
+    return lines
+
+
+def _render_netcdf_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+
+    dims = meta.get("dimensions", {})
+    if dims:
+        dim_str = " × ".join(f"{k}={v}" for k, v in dims.items())
+        lines.append(f"**Dimensions:** {dim_str}")
+        lines.append("")
+
+    lat_range = meta.get("lat_range")
+    lon_range = meta.get("lon_range")
+    res = meta.get("resolution_deg")
+    if lat_range and lon_range:
+        lines.append(f"**Spatial:** lat {lat_range[0]}°–{lat_range[1]}°, lon {lon_range[0]}°–{lon_range[1]}°" +
+                     (f" at {res}° resolution" if res else ""))
+        lines.append("")
+
+    t_start = meta.get("time_start")
+    t_end = meta.get("time_end")
+    t_steps = meta.get("time_steps")
+    if t_start and t_end:
+        lines.append(f"**Time:** {t_start} → {t_end} ({t_steps} timesteps)")
+        lines.append("")
+
+    var_info = meta.get("variable_info", {})
+    if var_info:
+        lines += ["### Variables", ""]
+        lines += ["| Variable | Shape | Units | Long Name |",
+                  "|----------|-------|-------|-----------|"]
+        for var, info in var_info.items():
+            shape = "×".join(str(s) for s in info.get("shape", []))
+            units = info.get("units", "—")
+            long_name = info.get("long_name", "—")
+            lines.append(f"| `{var}` | {shape} | {units} | {long_name} |")
         lines.append("")
 
     return lines

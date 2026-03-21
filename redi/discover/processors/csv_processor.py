@@ -126,6 +126,10 @@ class CsvProcessor(BaseProcessor):
         steps: list[PreprocessingStep] = []
         pct_missing = stats.get("pct_missing", 0.0)
 
+        # Skip row-index columns — normalizing them is meaningless
+        if col.lower() in ('index', 'row', 'rowid', 'row_id', 'idx'):
+            return steps
+
         if col_type == "numeric":
             mn = stats.get("min")
             mx = stats.get("max")
