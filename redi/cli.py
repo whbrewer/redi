@@ -2946,6 +2946,34 @@ def _print_assess_rich(result: dict):
         if s.get("atom_completeness") is not None and s.get("msa_depth") is None:
             _print_metric_bar("atom completeness", s["atom_completeness"], good=0.75, bad=0.50)
 
+        # Climate NPZ metrics (REDI-processed arrays)
+        if s.get("array_shape") is not None:
+            shape = s["array_shape"]
+            print_metric("array shape", f"{shape}")
+            _rendered_climate_npz = True
+        if s.get("n_timesteps") is not None:
+            print_metric("timesteps", f"{s['n_timesteps']:,}")
+        if s.get("spatial_shape") is not None:
+            print_metric("spatial grid", f"{s['spatial_shape'][0]} lat × {s['spatial_shape'][1]} lon")
+        if s.get("value_mean") is not None:
+            mean, std = s["value_mean"], s.get("value_std", "?")
+            vmin, vmax = s.get("value_min", "?"), s.get("value_max", "?")
+            print_metric("value range", f"[{vmin}, {vmax}]  mean={mean}  std={std}")
+        if s.get("appears_normalized") is not None:
+            flag = s["appears_normalized"]
+            color = Colors.GREEN if flag else Colors.YELLOW
+            print_metric("normalized", f"{color}{'yes (z-score)' if flag else 'no'}{Colors.END}")
+        if s.get("normalization_mean") is not None:
+            for var, mu in s["normalization_mean"].items():
+                sigma = s.get("normalization_std", {}).get(var, "?")
+                print_metric(f"norm {var}", f"mean={mu}  std={sigma}")
+        if s.get("nan_fraction") is not None:
+            frac = s["nan_fraction"]
+            color = Colors.GREEN if frac == 0 else Colors.RED
+            print_metric("NaN fraction", f"{color}{frac:.6f}{Colors.END}")
+        if s.get("variable_names") is not None:
+            print_metric("variables", ", ".join(s["variable_names"]))
+
         # Domain-specific extras (generic scalar fallback, skip already-rendered keys)
         _rendered = {
             "msa_depth", "msa_unique_sequences", "msa_gap_ratio",
@@ -2953,6 +2981,10 @@ def _print_assess_rich(result: dict):
             "aa_entropy_bits", "aa_entropy_pct_uniform", "aa_imbalance_ratio",
             "aa_distribution", "experimental_method", "r_factor", "is_distillation",
             "structure_resolution_flag",
+            # climate NPZ keys
+            "array_shape", "n_timesteps", "spatial_shape", "value_min", "value_max",
+            "value_mean", "value_std", "appears_normalized", "normalization_mean",
+            "normalization_std", "nan_fraction", "variable_names", "npz_keys", "dtype",
         }
         for key, val in s.items():
             if key == "required_fields" or key in _rendered:

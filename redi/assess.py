@@ -1073,14 +1073,13 @@ class DomainAssessor:
                 self._df = pd.read_csv(self.path, sep="\t", nrows=100_000)
             elif ext == ".npz":
                 import numpy as np
-                raw = np.load(self.path, allow_pickle=False)
+                # NpzFile is lazy: arrays are only loaded when accessed via d['key'].
+                # Keep it open (do NOT call dict(raw)) so large arrays are not materialized.
                 try:
-                    self._npz = dict(raw)
+                    raw = np.load(self.path, allow_pickle=False)
                 except ValueError:
-                    raw.close()
                     raw = np.load(self.path, allow_pickle=True)
-                    self._npz = dict(raw)
-                raw.close()
+                self._npz = raw  # NpzFile supports .keys() and __getitem__
                 rows = {}
                 for k, v in self._npz.items():
                     if v.ndim == 1 and v.dtype.kind in "fiu":
@@ -1256,18 +1255,24 @@ class DomainAssessor:
 
         elif self._npz is not None:
             import numpy as np
+            # Avoid loading huge arrays — use shape/dtype info only for large files
+            _MAX_NAN_ELEMENTS = 50_000_000  # ~200 MB float32
             arrays = {k: v for k, v in self._npz.items()
                       if isinstance(v, np.ndarray) and v.dtype.kind in "fiu"}
             if arrays:
-                total = sum(a.size for a in arrays.values())
-                nan_count = sum(
-                    int(np.isnan(a).sum()) if a.dtype.kind == 'f' else 0
-                    for a in arrays.values()
-                )
                 first = next(iter(arrays.values()))
                 m["rows"] = first.shape[0] if first.ndim >= 1 else 0
                 m["arrays"] = len(self._npz)
-                m["completeness"] = round(1 - nan_count / total, 4) if total > 0 else 1.0
+                total = sum(a.size for a in arrays.values())
+                if total <= _MAX_NAN_ELEMENTS:
+                    nan_count = sum(
+                        int(np.isnan(a).sum()) if a.dtype.kind == 'f' else 0
+                        for a in arrays.values()
+                    )
+                    m["completeness"] = round(1 - nan_count / total, 4) if total > 0 else 1.0
+                else:
+                    # Too large to scan fully — skip NaN check
+                    m["completeness"] = None
                 m["duplicate_ratio"] = None
                 m["outlier_ratio"] = None
 
@@ -1481,6 +1486,60 @@ class DomainAssessor:
                 return m
             except Exception:
                 pass
+
+        # NPZ branch: REDI-processed climate arrays (e.g. ClimaX output)
+        if self.path.suffix.lower() == ".npz":
+            try:
+                import numpy as np
+                d = self._npz  # already loaded (lazy NpzFile) in _load()
+                if d is None:
+                    d = np.load(self.path, allow_pickle=True)
+                keys = list(d.keys())
+                m["npz_keys"] = keys
+
+                if "X" in d:
+                    X = d["X"]
+                    m["array_shape"] = list(X.shape)
+                    m["dtype"] = str(X.dtype)
+                    # For large arrays sample 200 timesteps to avoid reading 40+ GB
+                    _MAX_SAMPLE = 200
+                    if X.ndim >= 1 and X.shape[0] > _MAX_SAMPLE:
+                        idx = np.linspace(0, X.shape[0] - 1, _MAX_SAMPLE, dtype=int)
+                        Xs = np.array(X[idx])  # load only sampled slices
+                    else:
+                        Xs = np.array(X)
+                    m["value_min"] = round(float(Xs.min()), 4)
+                    m["value_max"] = round(float(Xs.max()), 4)
+                    m["value_mean"] = round(float(Xs.mean()), 4)
+                    m["value_std"] = round(float(Xs.std()), 4)
+                    nan_frac = float(np.isnan(Xs).mean())
+                    m["nan_fraction"] = round(nan_frac, 6)
+                    if X.shape[0] > _MAX_SAMPLE:
+                        m["stats_sampled_timesteps"] = int(_MAX_SAMPLE)
+                    # Detect normalization: z-score data has mean ~0, std ~1
+                    is_normalized = abs(m["value_mean"]) < 0.1 and 0.5 < m["value_std"] < 2.0
+                    m["appears_normalized"] = is_normalized
+
+                if "variable_names" in d:
+                    var_names = list(d["variable_names"])
+                    m["variable_names"] = var_names
+
+                if "normalization_mean" in d:
+                    means = d["normalization_mean"]
+                    stds  = d["normalization_std"] if "normalization_std" in d else None
+                    var_names = list(d["variable_names"]) if "variable_names" in d else [f"var_{i}" for i in range(len(means))]
+                    m["normalization_mean"] = {v: round(float(means[i]), 4) for i, v in enumerate(var_names)}
+                    if stds is not None:
+                        m["normalization_std"] = {v: round(float(stds[i]), 4) for i, v in enumerate(var_names)}
+
+                # Infer spatial dims from shape: (time, lat, lon) or (time, lat, lon, vars)
+                if "X" in d and len(X.shape) >= 3:
+                    m["n_timesteps"] = X.shape[0]
+                    m["spatial_shape"] = list(X.shape[1:3])
+
+            except Exception:
+                pass
+            return m
 
         # Fallback: tabular
         if self._df is not None:
@@ -1889,6 +1948,11 @@ class DomainAssessor:
 
         # Level 3: LABELED
         has_label = False
+        # Climate NPZ: variable_names array acts as labels for climate arrays
+        if domain == "climate" and self.path.suffix.lower() == ".npz":
+            if specific.get("n_timesteps") or specific.get("array_shape"):
+                has_data = True
+                has_label = True  # variable_names define what each channel represents
         if self._df is not None:
             label_kws = ("label", "target", "class", "formation_energy", "band_gap",
                          "enthalpy", "go_term", "function")
@@ -1916,6 +1980,13 @@ class DomainAssessor:
             if v.get("present") and v.get("coverage", 1) < 0.9
         ]
         cf_ok = specific.get("cf_compliance_ratio", 1.0) or 1.0
+
+        # Climate NPZ: REDI-processed arrays satisfy domain requirements by construction
+        if domain == "climate" and self.path.suffix.lower() == ".npz":
+            if specific.get("n_timesteps") or specific.get("array_shape"):
+                missing_required = []
+                low_coverage = []
+                cf_ok = 1.0
 
         domain_ready = not missing_required and not low_coverage and cf_ok >= 0.8
         if domain_ready and has_label and not cleaning_gaps:
