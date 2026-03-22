@@ -81,6 +81,12 @@ def _render_file_section(d: FileDiscovery) -> list[str]:
         lines += _render_markdown_section(d)
     elif d.file_type == "NetCDF":
         lines += _render_netcdf_section(d)
+    elif d.file_type == "FASTA":
+        lines += _render_fasta_section(d)
+    elif d.file_type == "A3M":
+        lines += _render_a3m_section(d)
+    elif d.file_type == "mmCIF":
+        lines += _render_mmcif_section(d)
     else:
         if d.metadata:
             lines += ["**Metadata:**", ""]
@@ -130,6 +136,51 @@ def _render_csv_section(d: FileDiscovery) -> list[str]:
             lines.append(f"| `{col}` | {ctype} | {stats_str} |")
         lines.append("")
 
+    return lines
+
+
+def _render_fasta_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+    lines.append(f"**Sequences:** {meta.get('n_sequences', '?')}  ")
+    lines.append(f"**Type:** {meta.get('sequence_type', 'unknown')}  ")
+    mn, mx, mean = meta.get('length_min'), meta.get('length_max'), meta.get('length_mean')
+    if mn is not None:
+        lines.append(f"**Length:** min={mn}, max={mx}, mean={mean} residues")
+    ids = meta.get("ids", [])
+    if ids:
+        lines.append(f"**Sample IDs:** {', '.join(ids)}")
+    lines.append("")
+    return lines
+
+
+def _render_a3m_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+    lines.append(f"**Query:** `{meta.get('query_id', '?')}`  ")
+    lines.append(f"**Query length:** {meta.get('query_length', '?')} residues  ")
+    lines.append(f"**Alignment depth:** {meta.get('alignment_depth', '?')} sequences")
+    lines.append("")
+    return lines
+
+
+def _render_mmcif_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+    if meta.get("pdb_id"):
+        lines.append(f"**PDB ID:** {meta['pdb_id']}  ")
+    if meta.get("experimental_method"):
+        lines.append(f"**Method:** {meta['experimental_method']}  ")
+    if meta.get("resolution_angstrom"):
+        lines.append(f"**Resolution:** {meta['resolution_angstrom']} Å  ")
+    if meta.get("n_chains"):
+        chains = ", ".join(meta.get("chains", []))
+        lines.append(f"**Chains:** {meta['n_chains']} ({chains})  ")
+    if meta.get("sequence_length_min") is not None:
+        mn, mx = meta["sequence_length_min"], meta["sequence_length_max"]
+        label = "residues" if mn == mx else f"{mn}–{mx} residues"
+        lines.append(f"**Sequence length:** {label}")
+    lines.append("")
     return lines
 
 
