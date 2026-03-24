@@ -51,7 +51,8 @@ run_domain climate \
     --npz-file /lustre/orion/scratch/whbrewer/stf053/ClimaX/data.npz \
     --output-dir $OUT/climate \
     --n-reads 500 \
-    --window 10
+    --window 10 \
+    --skip-pack
 
 # --- fusion (XGC1) ---
 run_domain fusion \
