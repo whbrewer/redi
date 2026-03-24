@@ -696,9 +696,10 @@ def get_output_steps():
             elif fmt == "zarr":
                 import zarr
                 path = output_dir / f"{split_name}.zarr"
-                root = zarr.open(str(path), mode='w')
-                root.create_dataset('X', data=X)
-                root.attrs['variable_names'] = var_names
+                root = zarr.open_group(str(path), mode='w')
+                root.create_array('X', data=X)
+                root.attrs['variable_names'] = list(var_names)
+                zarr.consolidate_metadata(str(path))
             elif fmt == "pt":
                 import torch
                 path = output_dir / f"{split_name}.pt"
