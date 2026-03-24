@@ -2515,6 +2515,8 @@ Download examples (climate domain)::
                                 "Prerequisites are auto-included (e.g., -s preprocess runs ingest,preprocess)")
     run_parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
                            default="npz", help="Output format")
+    run_parser.add_argument("--shards", type=int, default=1, metavar="N",
+                           help="Number of output shards per split (e.g. match your training node count)")
     run_parser.add_argument("--array", action="store_true",
                            help="Optimize pipeline for array data (skip DataFrame-specific steps)")
     run_parser.add_argument("--normalize", choices=["minmax", "zscore"],
@@ -3110,6 +3112,8 @@ def _handle_run_command(args):
         config['output_dir'] = args.output
     if args.format != 'npz':
         config['output_format'] = args.format
+    if args.shards > 1:
+        config['shards'] = args.shards
     if args.verbose:
         config['verbose'] = True
     if args.stages:

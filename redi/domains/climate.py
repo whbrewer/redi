@@ -730,19 +730,30 @@ def get_output_steps():
                 elif isinstance(ctx.data, dict) and "X" in ctx.data:
                     X = ctx.data["X"]
                     var_names = ctx.data.get("variable_names", ctx.data.get("feature_names", []))
+                    n_shards = int(ctx.config.get("shards", 1))
 
+                    splits = {}
                     if "train_idx" in ctx.data:
-                        # Save split files
                         for split_name, idx_key in [("train", "train_idx"), ("val", "val_idx"), ("test", "test_idx")]:
-                            idx = ctx.data[idx_key]
-                            path = self._save_split(X[idx], var_names, split_name, ctx.output_dir, fmt)
-                            saved_files.append(path)
-                        logger.info(f"Saved train/val/test {fmt.upper()} files")
+                            splits[split_name] = ctx.data[idx_key]
                     else:
-                        # No split, save single file
-                        path = self._save_split(X, var_names, "data", ctx.output_dir, fmt)
-                        saved_files.append(path)
-                        logger.info(f"Saved {fmt.upper()}: {path}")
+                        splits["data"] = np.arange(len(X))
+
+                    for split_name, idx in splits.items():
+                        split_data = X[idx]
+                        if n_shards > 1:
+                            shard_indices = np.array_split(np.arange(len(split_data)), n_shards)
+                            for i, shard_idx in enumerate(shard_indices):
+                                shard_name = f"{split_name}_shard_{i:04d}"
+                                path = self._save_split(split_data[shard_idx], var_names, shard_name, ctx.output_dir, fmt)
+                                saved_files.append(path)
+                            logger.info(f"Saved {n_shards} {fmt.upper()} shards for {split_name}")
+                        else:
+                            path = self._save_split(split_data, var_names, split_name, ctx.output_dir, fmt)
+                            saved_files.append(path)
+
+                    n_files = len(saved_files)
+                    logger.info(f"Saved {n_files} {fmt.upper()} file(s)")
 
                 ctx.metadata["output_format"] = fmt
                 ctx.metadata["saved_files"] = saved_files

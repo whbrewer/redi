@@ -294,23 +294,37 @@ class SaveNPZ(PipelineStep):
                                 np.savez(file_path, **shard)
                             saved_files.append(str(file_path))
                 else:
-                    # Save splits directly
-                    logger.debug(f"     Saving splits: {list(ctx.data.keys())}")
+                    # Save splits directly, with optional sharding
+                    n_shards = int(ctx.config.get("shards", 1))
+                    logger.debug(f"     Saving splits: {list(ctx.data.keys())} (shards={n_shards})")
                     for split_name, split_data in ctx.data.items():
                         if not isinstance(split_data, dict) or "X" not in split_data:
                             continue
 
-                        file_path = output_dir / f"{split_name}.npz"
                         save_data = {k: v for k, v in split_data.items() if k != "feature_names"}
-                        if self.compress:
-                            np.savez_compressed(file_path, **save_data)
+                        if n_shards > 1:
+                            X = save_data["X"]
+                            shard_indices = np.array_split(np.arange(len(X)), n_shards)
+                            for i, shard_idx in enumerate(shard_indices):
+                                shard_data = {k: (v[shard_idx] if hasattr(v, '__len__') and len(v) == len(X) else v)
+                                              for k, v in save_data.items()}
+                                file_path = output_dir / f"{split_name}_shard_{i:04d}.npz"
+                                if self.compress:
+                                    np.savez_compressed(file_path, **shard_data)
+                                else:
+                                    np.savez(file_path, **shard_data)
+                                saved_files.append(str(file_path))
+                            logger.debug(f"     {split_name}: saved {n_shards} shards")
                         else:
-                            np.savez(file_path, **save_data)
-
-                        file_size = file_path.stat().st_size
-                        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"
-                        logger.debug(f"     Saved {file_path.name}: {size_str}")
-                        saved_files.append(str(file_path))
+                            file_path = output_dir / f"{split_name}.npz"
+                            if self.compress:
+                                np.savez_compressed(file_path, **save_data)
+                            else:
+                                np.savez(file_path, **save_data)
+                            file_size = file_path.stat().st_size
+                            size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024*1024 else f"{file_size / (1024*1024):.2f} MB"
+                            logger.debug(f"     Saved {file_path.name}: {size_str}")
+                            saved_files.append(str(file_path))
 
             ctx.metadata["saved_files"] = saved_files
             ctx.metadata["output_format"] = "npz"
