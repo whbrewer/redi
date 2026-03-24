@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=openfold-io-bench
+#SBATCH --job-name=redi-io-bench
 #SBATCH --account=stf053
 #SBATCH --partition=batch
 #SBATCH --nodes=1
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --exclusive
-#SBATCH --output=openfold-io-bench-%j.out
+#SBATCH --output=redi-io-bench-%j.out
 
 set -e
 echo "== Start $(date) =="
@@ -21,34 +21,41 @@ echo "=== LIFE_SCIENCES ==="
 python $BENCH \
     --domain life_sciences \
     --npz-dir /lustre/orion/gen053/world-shared/openfold/redi_output/train \
+    --alignment-dir /lustre/orion/gen053/world-shared/openfold/data/open_protein_set/pdb \
+    --mmcif-dir /lustre/orion/gen053/world-shared/openfold/data/pdb_mmcif/mmcif_files \
     --output-dir $OUT/life_sciences \
     --n-samples 5000 \
+    --n-reads 1000 \
+    --skip-pack
+
+# --- materials (OC22 / HydraGNN) ---
+echo ""
+echo "=== MATERIALS (OC22 / HydraGNN) ==="
+python $BENCH \
+    --domain materials \
+    --lmdb-dir /lustre/orion/stf053/proj-shared/drai/HydraGNN/data/oc22/s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total/train \
+    --npz-file /lustre/orion/stf053/scratch/whbrewer/redi_oc22_bench_output/oc22_redi_output.npz \
+    --output-dir $OUT/materials \
+    --n-samples 100000 \
     --n-reads 1000
 
-# --- climate (ClimaX) — wait for job 3244958 to finish first; use single_file_test as fallback ---
+# --- climate (ClimaX) ---
 echo ""
 echo "=== CLIMATE ==="
-CLIMAX_NPZ=/lustre/orion/scratch/whbrewer/stf053/ClimaX/data.npz
-CLIMAX_SINGLE=/lustre/orion/scratch/whbrewer/stf053/ClimaX/single_file_test/data.npz
-if [ -f "$CLIMAX_NPZ" ]; then
-    NPZ_FILE=$CLIMAX_NPZ
-else
-    NPZ_FILE=$CLIMAX_SINGLE
-    echo "Using single_file_test NPZ as fallback"
-fi
 python $BENCH \
     --domain climate \
-    --npz-file $NPZ_FILE \
+    --npz-file /lustre/orion/scratch/whbrewer/stf053/ClimaX/data.npz \
     --output-dir $OUT/climate \
     --n-reads 500 \
     --window 10
 
-# --- fusion (XGC1) — input is HDF5, benchmark HDF5 vs Zarr ---
+# --- fusion (XGC1) ---
 echo ""
 echo "=== FUSION (XGC1) ==="
 python $BENCH \
     --domain fusion \
     --h5-file /lustre/orion/stf053/proj-shared/ketan/redi-all-data-processed/xgc.3d.00002.bp.outdir/data.h5 \
+    --bp-dir /lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data/n560fr_ITER_PFPO_W_Ne \
     --output-dir $OUT/fusion \
     --n-reads 500 \
     --window 1

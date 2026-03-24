@@ -1,12 +1,13 @@
 """
 REDI I/O Format Benchmark
 ==========================
-Compares read throughput across file formats for multiple domains,
+Compares read AND write throughput across file formats for multiple domains,
 simulating DataLoader access patterns at training time.
 
 Domains and formats tested:
-  life_sciences (OpenFold): per-sample NPZ, LMDB (compressed), HDF5
-  fusion       (XGC1):      NPZ, HDF5, Zarr
+  life_sciences (OpenFold): native (mmCIF+A3M), per-sample NPZ, LMDB, HDF5
+  materials    (OC22/HydraGNN): native sharded LMDB, REDI NPZ, REDI HDF5
+  fusion       (XGC1):      ADIOS2 (native BP), HDF5, Zarr
   climate      (ClimaX):    NPZ, HDF5, Zarr
 
 Access patterns:
@@ -15,13 +16,21 @@ Access patterns:
 
 Usage:
     python redi_io_benchmark.py --domain life_sciences \
-        --npz-dir /path/to/npz --output-dir /tmp/bench
+        --npz-dir /path/to/npz --output-dir /tmp/bench \
+        --alignment-dir /path/to/alignments \
+        --mmcif-dir /path/to/mmcif_files
 
     python redi_io_benchmark.py --domain climate \
         --npz-file /path/to/data.npz --output-dir /tmp/bench
 
     python redi_io_benchmark.py --domain fusion \
-        --npz-file /path/to/data.npz --output-dir /tmp/bench
+        --h5-file /path/to/data.h5 --output-dir /tmp/bench \
+        --bp-dir /path/to/xgc1_bp_snapshots
+
+    python redi_io_benchmark.py --domain materials \
+        --lmdb-dir /path/to/oc22/train \
+        --npz-file /path/to/oc22_redi_output.npz \
+        --output-dir /tmp/bench
 """
 
 import argparse
@@ -43,6 +52,7 @@ import numpy as np
 def check_dependencies(domain):
     needed = {
         "life_sciences": ["lmdb", "h5py"],
+        "materials":     ["lmdb", "h5py"],
         "climate":       ["h5py", "zarr"],
         "fusion":        ["h5py", "zarr"],
     }
@@ -119,6 +129,11 @@ def pack_hdf5_proteins(npz_files, out_path, n_samples):
 
 def convert_npz_to_hdf5(npz_path, out_path, key="X"):
     import h5py
+    # Remove stale file/lock from previous runs
+    for suffix in ["", ".lock"]:
+        p = Path(str(out_path) + suffix)
+        if p.exists():
+            p.unlink()
     print(f"Converting NPZ → HDF5: {out_path}")
     d = np.load(npz_path, allow_pickle=True)
     X = d[key]
@@ -131,6 +146,16 @@ def convert_npz_to_hdf5(npz_path, out_path, key="X"):
                 f.create_dataset(k, data=d[k])
     print(f"  HDF5 size: {os.path.getsize(out_path)/1024**2:.0f} MB")
 
+def _zarr_write(grp, name, arr, chunk=None):
+    """Write an array to a Zarr group (zarr v3)."""
+    from zarr.codecs import BloscCodec
+    kwargs = {"data": arr, "overwrite": True}
+    if chunk:
+        kwargs["chunks"] = chunk
+        kwargs["compressors"] = [BloscCodec(cname="lz4", clevel=1)]
+    grp.create_array(name, **kwargs)
+
+
 def convert_npz_to_zarr(npz_path, out_path, key="X"):
     import zarr
     print(f"Converting NPZ → Zarr: {out_path}")
@@ -138,28 +163,31 @@ def convert_npz_to_zarr(npz_path, out_path, key="X"):
     X = d[key]
     chunk_t = min(100, X.shape[0])
     root = zarr.open_group(str(out_path), mode="w")
-    root.array(key, X, chunks=(chunk_t,) + X.shape[1:],
-               compressor=zarr.Blosc(cname="lz4", clevel=1))
+    _zarr_write(root, key, X, chunk=(chunk_t,) + X.shape[1:])
     for k in d.keys():
         if k != key:
-            root.array(k, d[k])
+            _zarr_write(root, k, np.asarray(d[k]))
     zarr.consolidate_metadata(str(out_path))
     print("  Zarr written (consolidated metadata)")
 
 def convert_h5_to_zarr(h5_path, out_path):
-    """Convert XGC1-style HDF5 (multiple variables) → Zarr."""
+    """Convert XGC1-style HDF5 (multiple variables, possibly nested) → Zarr."""
     import h5py, zarr
     print(f"Converting HDF5 → Zarr: {out_path}")
     root = zarr.open_group(str(out_path), mode="w")
     with h5py.File(h5_path, "r") as f:
-        for key in f.keys():
-            arr = f[key][:]
-            if arr.ndim >= 2:
-                chunk = (min(4, arr.shape[0]),) + arr.shape[1:]
-                root.array(key, arr, chunks=chunk,
-                           compressor=zarr.Blosc(cname="lz4", clevel=1))
-            else:
-                root.array(key, arr)
+        def _copy(name, obj):
+            if not isinstance(obj, h5py.Dataset):
+                return
+            arr = obj[()] if obj.ndim == 0 else obj[:]
+            parts = name.split("/")
+            grp = root
+            for part in parts[:-1]:
+                grp = grp.require_group(part)
+            ds_name = parts[-1]
+            chunk = (min(4, arr.shape[0]),) + arr.shape[1:] if arr.ndim >= 2 else None
+            _zarr_write(grp, ds_name, arr, chunk)
+        f.visititems(_copy)
     zarr.consolidate_metadata(str(out_path))
     print("  Zarr written")
 
@@ -203,6 +231,26 @@ def _worker_hdf5_proteins(args):
             _ = f[name]["aatype"][:]
     return n_reads, time.perf_counter() - t0
 
+def _worker_native_openfold(args):
+    """Read native OpenFold format: mmCIF + 3 A3M alignment files per protein."""
+    alignment_dir, mmcif_dir, names, n_reads, seed = args
+    rng = random.Random(seed)
+    sample = rng.choices(names, k=n_reads)
+    t0 = time.perf_counter()
+    for name in sample:
+        # Read mmCIF
+        pdb_id = name.split("_")[0].lower()
+        mmcif_path = Path(mmcif_dir) / f"{pdb_id}.cif"
+        if mmcif_path.exists():
+            _ = mmcif_path.read_bytes()
+        # Read 3 A3M alignment files
+        aln_path = Path(alignment_dir) / name / "a3m"
+        for a3m in ["uniref90_hits.a3m", "mgnify_hits.a3m", "bfd_uniclust_hits.a3m"]:
+            p = aln_path / a3m
+            if p.exists():
+                _ = p.read_bytes()
+    return n_reads, time.perf_counter() - t0
+
 def _worker_npz_array(args):
     npz_path, n_timesteps, window, n_reads, seed = args
     rng = random.Random(seed)
@@ -237,6 +285,210 @@ def _worker_zarr_array(args):
         i = rng.randint(0, n_timesteps - window - 1)
         _ = X[i:i+window]
     return n_reads, time.perf_counter() - t0
+
+def _worker_adios2(args):
+    """Read native ADIOS2 BP format — simulates XGC1 training data access."""
+    import adios2
+    bp_paths, array_key, n_reads, seed = args
+    # array_key may be a nested HDF5 path like "train/dpot"; use leaf name for ADIOS2
+    adios_key = array_key.split("/")[-1]
+    rng = random.Random(seed)
+    sample = rng.choices(bp_paths, k=n_reads)
+    t0 = time.perf_counter()
+    for bp_path in sample:
+        r = adios2.FileReader(bp_path)
+        _ = r.read(adios_key)
+        r.close()
+    return n_reads, time.perf_counter() - t0
+
+
+def _worker_lmdb_oc22_sharded(args):
+    """Read from native OC22 sharded LMDB (HydraGNN format).
+
+    Each shard is an independent LMDB file. Workers pick a random shard per
+    read, simulating the access pattern of fairchem/HydraGNN DataLoaders.
+    """
+    import lmdb, pickle
+    lmdb_paths, n_reads, seed = args
+    rng = random.Random(seed)
+    t0 = time.perf_counter()
+    # open all shards (each is small enough)
+    envs = [lmdb.open(p, readonly=True, lock=False, subdir=False)
+            for p in lmdb_paths]
+    for _ in range(n_reads):
+        env = rng.choice(envs)
+        with env.begin() as txn:
+            n = txn.stat()["entries"]
+            idx = rng.randint(0, n - 1)
+            val = txn.get(str(idx).encode())
+            if val is None:
+                # some shards use integer keys; try sequential fallback
+                cur = txn.cursor()
+                cur.first()
+                for _ in range(idx % min(n, 100)):
+                    cur.next()
+                val = cur.value()
+            _ = pickle.loads(val)
+    for env in envs:
+        env.close()
+    return n_reads, time.perf_counter() - t0
+
+
+def _worker_npz_graphs(args):
+    """Read random graphs from flat REDI NPZ (split_index-based access)."""
+    npz_path, n_graphs, n_reads, seed = args
+    rng = random.Random(seed)
+    d = np.load(npz_path, allow_pickle=True)
+    natoms  = d["natoms"]
+    offsets = np.concatenate([[0], np.cumsum(natoms)])
+    positions = d["positions"]
+    forces    = d["forces"]
+    t0 = time.perf_counter()
+    for _ in range(n_reads):
+        i = rng.randint(0, n_graphs - 1)
+        s, e = offsets[i], offsets[i + 1]
+        _ = positions[s:e]
+        _ = forces[s:e]
+    return n_reads, time.perf_counter() - t0
+
+
+def _worker_hdf5_graphs(args):
+    """Read random graphs from REDI HDF5 (flat arrays + offsets)."""
+    import h5py
+    h5_path, n_graphs, n_reads, seed = args
+    rng = random.Random(seed)
+    t0 = time.perf_counter()
+    with h5py.File(h5_path, "r") as f:
+        offsets   = f["offsets"][:]
+        positions = f["positions"]
+        forces    = f["forces"]
+        for _ in range(n_reads):
+            i = rng.randint(0, n_graphs - 1)
+            s, e = int(offsets[i]), int(offsets[i + 1])
+            _ = positions[s:e]
+            _ = forces[s:e]
+    return n_reads, time.perf_counter() - t0
+
+
+def pack_hdf5_graphs(npz_path, out_path, n_graphs):
+    """Pack first n_graphs from flat REDI NPZ into chunked HDF5."""
+    import h5py
+    print(f"Packing {n_graphs:,} graphs → HDF5: {out_path}")
+    d = np.load(npz_path, allow_pickle=True)
+    natoms  = d["natoms"][:n_graphs]
+    offsets = np.concatenate([[0], np.cumsum(natoms)]).astype(np.int64)
+    total_atoms = int(offsets[-1])
+    positions = d["positions"][:total_atoms]
+    forces    = d["forces"][:total_atoms]
+    atomic_numbers = d["atomic_numbers"][:total_atoms]
+    energy    = d["energy_per_atom"][:n_graphs]
+    chunk = min(4096, total_atoms)
+    for suffix in ["", ".lock"]:
+        p = Path(str(out_path) + suffix)
+        if p.exists(): p.unlink()
+    with h5py.File(out_path, "w") as f:
+        f.create_dataset("positions", data=positions,
+                         chunks=(chunk, 3), compression="gzip", compression_opts=1)
+        f.create_dataset("forces", data=forces,
+                         chunks=(chunk, 3), compression="gzip", compression_opts=1)
+        f.create_dataset("atomic_numbers", data=atomic_numbers,
+                         chunks=(chunk,), compression="gzip", compression_opts=1)
+        f.create_dataset("energy_per_atom", data=energy,
+                         chunks=(min(4096, n_graphs),), compression="gzip", compression_opts=1)
+        f.create_dataset("natoms",  data=natoms)
+        f.create_dataset("offsets", data=offsets)
+    print(f"  HDF5 size: {os.path.getsize(out_path)/1024**3:.2f} GB")
+    return n_graphs
+
+
+def benchmark_materials(args, out):
+    """Benchmark OC22/HydraGNN: native sharded LMDB vs REDI NPZ vs REDI HDF5."""
+    import lmdb
+    wc  = [1, 2, 4, 8, 16, 32]
+    all_results = {}
+    hdf5_path = out / "oc22_graphs.h5"
+
+    # --- Native sharded LMDB ---
+    if args.lmdb_dir:
+        lmdb_paths = sorted(Path(args.lmdb_dir).glob("*.lmdb"))
+        lmdb_paths = [str(p) for p in lmdb_paths if not p.name.endswith("-lock")]
+        if lmdb_paths:
+            print(f"\n--- Native sharded LMDB ({len(lmdb_paths)} shards) ---")
+            all_results["lmdb_sharded"] = run_multiworker(
+                _worker_lmdb_oc22_sharded, (lmdb_paths,), args.n_reads, wc)
+        else:
+            print(f"  No LMDB shards found in {args.lmdb_dir}")
+
+    # --- REDI flat NPZ ---
+    if args.npz_file:
+        d = np.load(args.npz_file, allow_pickle=True)
+        n_graphs = len(d["natoms"])
+        n_bench  = min(args.n_samples, n_graphs)
+        print(f"\nNPZ: {n_graphs:,} total graphs, benchmarking {n_bench:,}")
+
+        print("\n--- REDI NPZ (flat, split_index) ---")
+        all_results["npz"] = run_multiworker(
+            _worker_npz_graphs, (args.npz_file, n_bench), args.n_reads, wc)
+
+        if not args.skip_pack:
+            pack_hdf5_graphs(args.npz_file, hdf5_path, n_bench)
+        print("\n--- REDI HDF5 (flat + offsets, chunked gzip) ---")
+        all_results["hdf5"] = run_multiworker(
+            _worker_hdf5_graphs, (str(hdf5_path), n_bench), args.n_reads, wc)
+
+    return all_results
+
+
+# ---------------------------------------------------------------------------
+# Write benchmarks (single-threaded — packing is sequential in REDI)
+# ---------------------------------------------------------------------------
+
+def benchmark_write_npz(npz_files, n_samples, out_path):
+    """Measure write throughput: copy N NPZ files to output dir."""
+    import shutil
+    out_path.mkdir(exist_ok=True)
+    t0 = time.perf_counter()
+    for p in npz_files[:n_samples]:
+        shutil.copy2(p, out_path / Path(p).name)
+    elapsed = time.perf_counter() - t0
+    tput = n_samples / elapsed
+    print(f"  write NPZ ({n_samples} files): {tput:.1f} files/sec  ({elapsed:.1f}s)")
+    return tput
+
+def benchmark_write_lmdb(npz_files, n_samples, lmdb_path):
+    """Measure LMDB write throughput (compressed)."""
+    import lmdb
+    sample_size = np.mean([len(_npz_to_bytes(p)) for p in npz_files[:10]])
+    map_size = int(n_samples * sample_size * 10)  # 10x headroom
+    t0 = time.perf_counter()
+    env = lmdb.open(str(lmdb_path) + "_write_bench", map_size=map_size, subdir=False)
+    with env.begin(write=True) as txn:
+        for p in npz_files[:n_samples]:
+            txn.put(Path(p).stem.encode(), _npz_to_bytes(p))
+    env.close()
+    elapsed = time.perf_counter() - t0
+    tput = n_samples / elapsed
+    print(f"  write LMDB ({n_samples} proteins): {tput:.1f} proteins/sec  ({elapsed:.1f}s)")
+    return tput
+
+def benchmark_write_hdf5(npz_files, n_samples, hdf5_path):
+    """Measure HDF5 write throughput."""
+    import h5py
+    t0 = time.perf_counter()
+    with h5py.File(str(hdf5_path) + "_write_bench.h5", "w") as f:
+        for p in npz_files[:n_samples]:
+            grp = f.create_group(Path(p).stem)
+            d = np.load(p, allow_pickle=True)
+            for k in d.keys():
+                arr = d[k]
+                if arr.ndim == 0:
+                    grp.create_dataset(k, data=arr)
+                else:
+                    grp.create_dataset(k, data=arr, compression="gzip", compression_opts=1)
+    elapsed = time.perf_counter() - t0
+    tput = n_samples / elapsed
+    print(f"  write HDF5 ({n_samples} proteins): {tput:.1f} proteins/sec  ({elapsed:.1f}s)")
+    return tput
 
 
 # ---------------------------------------------------------------------------
@@ -278,34 +530,76 @@ def benchmark_life_sciences(args, out):
         with open(str(lmdb_path) + ".keys.pkl", "rb") as f:
             keys = pickle.load(f)
 
-    wc = [1, 2, 4, 8]
-    all_results = {}
+    wc = [1, 2, 4, 8, 16, 32]
+    read_results = {}
+    write_results = {}
+
+    # --- Read benchmarks ---
+    if args.alignment_dir and args.mmcif_dir:
+        # Only include proteins that have native alignment data
+        native_names = [n for n in names
+                        if (Path(args.alignment_dir) / n / "a3m" / "uniref90_hits.a3m").exists()][:n]
+        print(f"\n--- Native OpenFold (mmCIF + 3×A3M, {len(native_names)} proteins) ---")
+        read_results["native"] = run_multiworker(
+            _worker_native_openfold,
+            (args.alignment_dir, args.mmcif_dir, native_names),
+            args.n_reads, wc)
+
     print("\n--- NPZ (per-protein files) ---")
-    all_results["npz"] = run_multiworker(_worker_npz_proteins, (npz_sample,), args.n_reads, wc)
+    read_results["npz"] = run_multiworker(_worker_npz_proteins, (npz_sample,), args.n_reads, wc)
     print("\n--- LMDB (compressed) ---")
-    all_results["lmdb"] = run_multiworker(_worker_lmdb, (str(lmdb_path), keys), args.n_reads, wc)
+    read_results["lmdb"] = run_multiworker(_worker_lmdb, (str(lmdb_path), keys), args.n_reads, wc)
     print("\n--- HDF5 (all proteins, one file) ---")
-    all_results["hdf5"] = run_multiworker(_worker_hdf5_proteins, (str(hdf5_path), names), args.n_reads, wc)
-    return all_results
+    read_results["hdf5"] = run_multiworker(_worker_hdf5_proteins, (str(hdf5_path), names), args.n_reads, wc)
+
+    # --- Write benchmarks (n_samples=200 for speed) ---
+    n_write = min(200, n)
+    print(f"\n=== WRITE BENCHMARKS ({n_write} proteins) ===")
+    write_results["npz"]  = benchmark_write_npz([Path(p) for p in npz_sample[:n_write]],
+                                                 n_write, out / "write_npz")
+    write_results["lmdb"] = benchmark_write_lmdb([Path(p) for p in npz_sample[:n_write]],
+                                                  n_write, lmdb_path)
+    write_results["hdf5"] = benchmark_write_hdf5([Path(p) for p in npz_sample[:n_write]],
+                                                  n_write, hdf5_path)
+
+    return {"read": read_results, "write": write_results}
 
 
 def benchmark_array_domain(args, out):
     import h5py
-    wc = [1, 2, 4, 8]
+    wc = [1, 2, 4, 8, 16, 32]
     all_results = {}
     zarr_path = out / "data.zarr"
 
     if args.h5_file:
-        # Fusion: input is HDF5; benchmark HDF5 vs Zarr
+        # Fusion: input is HDF5; benchmark ADIOS2 (native) vs HDF5 vs Zarr
+        # Datasets may be nested under a group (e.g. train/dpot)
         with h5py.File(args.h5_file, "r") as f:
-            # Use first 2D variable as the benchmark array
-            key = next(k for k in f.keys() if f[k].ndim >= 2)
+            found = []
+            f.visititems(lambda name, obj:
+                found.append(name) if isinstance(obj, h5py.Dataset) and obj.ndim >= 2 and not found else None)
+            if not found:
+                raise RuntimeError(f"No 2-D datasets found in {args.h5_file}")
+            key = found[0]          # e.g. "train/dpot"
             shape = f[key].shape
         n_timesteps = shape[0]
         print(f"HDF5 key='{key}', shape={shape}, window={args.window}")
         if not args.skip_pack:
             convert_h5_to_zarr(args.h5_file, zarr_path)
-        print("\n--- HDF5 (original) ---")
+
+        # ADIOS2 native: benchmark across multiple BP snapshot files
+        if args.bp_dir:
+            bp_paths = sorted(Path(args.bp_dir).glob("xgc.3d.*.bp"))[:20]
+            if bp_paths:
+                print(f"\n--- ADIOS2 native ({len(bp_paths)} BP snapshots) ---")
+                all_results["adios2"] = run_multiworker(
+                    _worker_adios2,
+                    (list(map(str, bp_paths)), key),
+                    args.n_reads, wc)
+            else:
+                print(f"  No BP files found in {args.bp_dir} — skipping ADIOS2")
+
+        print("\n--- HDF5 (REDI output) ---")
         all_results["hdf5"] = run_multiworker(_worker_hdf5_array,
                                               (str(args.h5_file), key, n_timesteps, args.window),
                                               args.n_reads, wc)
@@ -341,18 +635,27 @@ def benchmark_array_domain(args, out):
 # Summary
 # ---------------------------------------------------------------------------
 
-def print_summary(all_results, domain):
-    wc = sorted(next(iter(all_results.values())).keys())
+def print_summary(results, domain):
+    # Handle both flat dict (climate/fusion) and {read, write} dict (life_sciences)
+    read_results  = results.get("read",  results) if isinstance(results, dict) and "read" in results else results
+    write_results = results.get("write", {})
+
+    wc = sorted(next(iter(read_results.values())).keys())
     print(f"\n{'='*65}")
-    print(f"SUMMARY — {domain.upper()}  (samples/sec)")
+    print(f"SUMMARY — {domain.upper()}  (READ samples/sec)")
     header = f"  {'Format':<8}" + "".join(f"  {f'w={n}':>10}" for n in wc)
     print(header)
     print("-" * 65)
-    for fmt, results in all_results.items():
-        row = f"  {fmt:<8}" + "".join(f"  {results[n]:>10.1f}" for n in wc)
+    for fmt, r in read_results.items():
+        row = f"  {fmt:<8}" + "".join(f"  {r[n]:>10.1f}" for n in wc)
         print(row)
-    best = max(all_results, key=lambda f: all_results[f][max(wc)])
-    print(f"\nBest at {max(wc)} workers: {best.upper()}")
+    best = max(read_results, key=lambda f: read_results[f][max(wc)])
+    print(f"\nBest read at {max(wc)} workers: {best.upper()}")
+
+    if write_results:
+        print(f"\n{'WRITE throughput (proteins/sec)':}")
+        for fmt, tput in write_results.items():
+            print(f"  {fmt:<8}: {tput:.1f}")
 
 
 # ---------------------------------------------------------------------------
@@ -362,16 +665,20 @@ def print_summary(all_results, domain):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--domain", required=True,
-                        choices=["life_sciences", "climate", "fusion"])
+                        choices=["life_sciences", "materials", "climate", "fusion"])
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--n-samples", type=int, default=2000)
     parser.add_argument("--n-reads",   type=int, default=1000)
     parser.add_argument("--window",    type=int, default=10,
                         help="Timestep window for climate/fusion reads")
     parser.add_argument("--skip-pack", action="store_true")
-    parser.add_argument("--npz-dir",  help="Dir of per-protein NPZ (life_sciences)")
-    parser.add_argument("--npz-file", help="Single large NPZ file (climate)")
-    parser.add_argument("--h5-file",  help="HDF5 file (fusion)")
+    parser.add_argument("--npz-dir",       help="Dir of per-protein NPZ (life_sciences)")
+    parser.add_argument("--npz-file",      help="Single large NPZ file (climate)")
+    parser.add_argument("--h5-file",       help="HDF5 file (fusion)")
+    parser.add_argument("--alignment-dir", help="OpenFold alignment dir (native benchmark)")
+    parser.add_argument("--mmcif-dir",     help="OpenFold mmCIF dir (native benchmark)")
+    parser.add_argument("--bp-dir",        help="Dir of ADIOS2 BP snapshots (fusion native benchmark)")
+    parser.add_argument("--lmdb-dir",      help="Dir of sharded OC22 LMDB files (materials native benchmark)")
     args = parser.parse_args()
 
     check_dependencies(args.domain)
@@ -385,6 +692,10 @@ def main():
         if not args.npz_dir:
             parser.error("--npz-dir required for life_sciences")
         results = benchmark_life_sciences(args, out)
+    elif args.domain == "materials":
+        if not args.lmdb_dir and not args.npz_file:
+            parser.error("--lmdb-dir and/or --npz-file required for materials")
+        results = benchmark_materials(args, out)
     elif args.domain == "climate":
         if not args.npz_file:
             parser.error("--npz-file required for climate")
