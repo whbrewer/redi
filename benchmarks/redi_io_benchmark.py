@@ -46,6 +46,33 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _npz_peek_shape(npz_path, key="X"):
+    """Read array shape from an NPZ without decompressing the data.
+
+    NPZ files are zip archives of .npy files.  Each .npy has a small text
+    header (typically < 256 bytes) that contains the dtype, order, and shape.
+    We read only that header, so this works instantly even on 50+ GB files.
+    """
+    import zipfile, struct, ast
+    with zipfile.ZipFile(npz_path) as zf:
+        with zf.open(key + ".npy") as f:
+            f.read(6)           # \x93NUMPY magic
+            major = ord(f.read(1))
+            f.read(1)           # minor version
+            if major >= 2:
+                header_len = struct.unpack("<I", f.read(4))[0]
+            else:
+                header_len = struct.unpack("<H", f.read(2))[0]
+            header = f.read(header_len).decode("latin1")
+    # header looks like: "{'descr': '<f4', 'fortran_order': False, 'shape': (14601, 181, 360), }\n"
+    d = ast.literal_eval(header.strip().rstrip(",\n "))
+    return d["shape"]
+
+
+# ---------------------------------------------------------------------------
 # Dependency check
 # ---------------------------------------------------------------------------
 
@@ -613,9 +640,9 @@ def benchmark_array_domain(args, out, timeout=120):
                                               args.n_reads, wc, timeout=timeout)
     else:
         # Climate: input is large NPZ; benchmark NPZ vs HDF5 vs Zarr
-        d = np.load(args.npz_file, allow_pickle=True)
-        n_timesteps = d["X"].shape[0]
-        print(f"NPZ shape: {d['X'].shape}, window: {args.window}")
+        shape = _npz_peek_shape(args.npz_file, key="X")
+        n_timesteps = shape[0]
+        print(f"NPZ shape: {shape}, window: {args.window}")
         hdf5_path = out / "data.h5"
         if not args.skip_pack:
             convert_npz_to_hdf5(args.npz_file, hdf5_path)
