@@ -191,7 +191,7 @@ def convert_npz_to_zarr(npz_path, out_path, key="X"):
     chunk_t = min(100, X.shape[0])
     root = zarr.open_group(str(out_path), mode="w")
     _zarr_write(root, key, X, chunk=(chunk_t,) + X.shape[1:])
-    for k in d.keys():
+    for k in d.files:
         if k != key:
             _zarr_write(root, k, np.asarray(d[k]))
     zarr.consolidate_metadata(str(out_path))
