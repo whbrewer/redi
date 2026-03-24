@@ -1,0 +1,29 @@
+# REDI Benchmark Config — OpenFold / OpenProteinSet
+#
+# SC26 paper: pipeline stage timing benchmark
+# Input: OpenProteinSet layout on Lustre/Orion
+#   /lustre/orion/gen053/world-shared/openfold/data/
+#     open_protein_set/pdb/<ID>_<CHAIN>/a3m/  *.a3m
+#     pdb_mmcif/mmcif_files/<PDB_ID>.cif
+#
+# input_path set to the OPS root so the life_sciences domain
+# auto-detects the OpenProteinSet layout.
+
+domain: life_sciences
+input_path: /lustre/orion/gen053/world-shared/openfold/data
+output_format: npz
+provenance: true
+
+# Cap proteins for the timing benchmark; full dataset has 131,487.
+max_proteins: 5000
+
+# Parallel workers for mmCIF parsing and NPZ saving (I/O-bound).
+num_workers: 16
+
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  random_seed: 42

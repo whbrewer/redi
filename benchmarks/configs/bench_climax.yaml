@@ -1,0 +1,38 @@
+# REDI Benchmark Config — ClimaX / TaiESM1
+#
+# SC26 paper: pipeline stage timing benchmark
+# Input: 5 × 10-year NetCDF chunks from TaiESM1 on Lustre/Orion
+#   /lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/raw/2m_temperature/
+#
+# input_path is overridden at runtime by the benchmark runner.
+
+domain: climate
+output_format: npz
+provenance: true
+
+regrid:
+  enabled: true
+  target_resolution: 1.40625   # degrees (ClimaX 128×256 grid)
+  method: bilinear
+  climax_grid: true
+
+normalize:
+  enabled: true
+  method: zscore
+
+variables:
+  select: null   # process all available variables (tas / t2m)
+  rename:
+    tas: t2m
+
+split:
+  enabled: true
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  random_seed: 42
+
+climax_output:
+  enabled: true
