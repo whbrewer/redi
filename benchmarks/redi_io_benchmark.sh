@@ -24,7 +24,7 @@ run_domain() {
     fi
     echo ""
     echo "=== $domain ==="
-    python $BENCH --domain "$domain" "$@" || echo "WARNING: $domain benchmark failed, continuing..."
+    python -u $BENCH --domain "$domain" "$@" || echo "WARNING: $domain benchmark failed, continuing..."
 }
 
 # --- life_sciences (OpenFold) ---
