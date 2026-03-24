@@ -7,7 +7,6 @@
 #SBATCH --exclusive
 #SBATCH --output=redi-io-bench-%j.out
 
-set -e
 echo "== Start $(date) =="
 
 source ~/venv/redi/bin/activate
@@ -15,11 +14,21 @@ source ~/venv/redi/bin/activate
 BENCH=benchmarks/redi_io_benchmark.py
 OUT=/lustre/orion/scratch/whbrewer/stf053/openfold_io_bench
 
+run_domain() {
+    local domain=$1
+    local result_json="$OUT/$domain/benchmark_${domain}.json"
+    shift
+    if [ -f "$result_json" ]; then
+        echo "=== SKIP $domain (results already exist: $result_json) ==="
+        return 0
+    fi
+    echo ""
+    echo "=== $domain ==="
+    python $BENCH --domain "$domain" "$@" || echo "WARNING: $domain benchmark failed, continuing..."
+}
+
 # --- life_sciences (OpenFold) ---
-echo ""
-echo "=== LIFE_SCIENCES ==="
-python $BENCH \
-    --domain life_sciences \
+run_domain life_sciences \
     --npz-dir /lustre/orion/gen053/world-shared/openfold/redi_output/train \
     --alignment-dir /lustre/orion/gen053/world-shared/openfold/data/open_protein_set/pdb \
     --mmcif-dir /lustre/orion/gen053/world-shared/openfold/data/pdb_mmcif/mmcif_files \
@@ -29,31 +38,23 @@ python $BENCH \
     --skip-pack
 
 # --- materials (OC22 / HydraGNN) ---
-echo ""
-echo "=== MATERIALS (OC22 / HydraGNN) ==="
-python $BENCH \
-    --domain materials \
+run_domain materials \
     --lmdb-dir /lustre/orion/stf053/proj-shared/drai/HydraGNN/data/oc22/s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total/train \
     --npz-file /lustre/orion/stf053/scratch/whbrewer/redi_oc22_bench_output/oc22_redi_output.npz \
     --output-dir $OUT/materials \
     --n-samples 100000 \
-    --n-reads 1000
+    --n-reads 1000 \
+    --timeout 120
 
 # --- climate (ClimaX) ---
-echo ""
-echo "=== CLIMATE ==="
-python $BENCH \
-    --domain climate \
+run_domain climate \
     --npz-file /lustre/orion/scratch/whbrewer/stf053/ClimaX/data.npz \
     --output-dir $OUT/climate \
     --n-reads 500 \
     --window 10
 
 # --- fusion (XGC1) ---
-echo ""
-echo "=== FUSION (XGC1) ==="
-python $BENCH \
-    --domain fusion \
+run_domain fusion \
     --h5-file /lustre/orion/stf053/proj-shared/ketan/redi-all-data-processed/xgc.3d.00002.bp.outdir/data.h5 \
     --bp-dir /lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data/n560fr_ITER_PFPO_W_Ne \
     --output-dir $OUT/fusion \

@@ -401,7 +401,7 @@ def pack_hdf5_graphs(npz_path, out_path, n_graphs):
     return n_graphs
 
 
-def benchmark_materials(args, out):
+def benchmark_materials(args, out, timeout=120):
     """Benchmark OC22/HydraGNN: native sharded LMDB vs REDI NPZ vs REDI HDF5."""
     import lmdb
     wc  = [1, 2, 4, 8, 16, 32]
@@ -415,7 +415,7 @@ def benchmark_materials(args, out):
         if lmdb_paths:
             print(f"\n--- Native sharded LMDB ({len(lmdb_paths)} shards) ---")
             all_results["lmdb_sharded"] = run_multiworker(
-                _worker_lmdb_oc22_sharded, (lmdb_paths,), args.n_reads, wc)
+                _worker_lmdb_oc22_sharded, (lmdb_paths,), args.n_reads, wc, timeout=timeout)
         else:
             print(f"  No LMDB shards found in {args.lmdb_dir}")
 
@@ -428,13 +428,13 @@ def benchmark_materials(args, out):
 
         print("\n--- REDI NPZ (flat, split_index) ---")
         all_results["npz"] = run_multiworker(
-            _worker_npz_graphs, (args.npz_file, n_bench), args.n_reads, wc)
+            _worker_npz_graphs, (args.npz_file, n_bench), args.n_reads, wc, timeout=timeout)
 
         if not args.skip_pack:
             pack_hdf5_graphs(args.npz_file, hdf5_path, n_bench)
         print("\n--- REDI HDF5 (flat + offsets, chunked gzip) ---")
         all_results["hdf5"] = run_multiworker(
-            _worker_hdf5_graphs, (str(hdf5_path), n_bench), args.n_reads, wc)
+            _worker_hdf5_graphs, (str(hdf5_path), n_bench), args.n_reads, wc, timeout=timeout)
 
     return all_results
 
@@ -495,14 +495,21 @@ def benchmark_write_hdf5(npz_files, n_samples, hdf5_path):
 # Multi-worker runner
 # ---------------------------------------------------------------------------
 
-def run_multiworker(worker_fn, base_args, n_reads_total, worker_counts):
+def run_multiworker(worker_fn, base_args, n_reads_total, worker_counts, timeout=120):
     results = {}
     for nw in worker_counts:
         reads_per_worker = max(1, n_reads_total // nw)
         args_list = [base_args + (reads_per_worker, 42 + w) for w in range(nw)]
         t0 = time.perf_counter()
         with mp.Pool(nw) as pool:
-            outs = pool.map(worker_fn, args_list)
+            async_result = pool.map_async(worker_fn, args_list)
+            try:
+                outs = async_result.get(timeout=timeout)
+            except mp.TimeoutError:
+                pool.terminate()
+                print(f"    workers={nw:2d}: TIMEOUT after {timeout}s — skipping")
+                results[nw] = float("nan")
+                continue
         wall = time.perf_counter() - t0
         tput = sum(o[0] for o in outs) / wall
         results[nw] = tput
@@ -514,7 +521,7 @@ def run_multiworker(worker_fn, base_args, n_reads_total, worker_counts):
 # Domain benchmarks
 # ---------------------------------------------------------------------------
 
-def benchmark_life_sciences(args, out):
+def benchmark_life_sciences(args, out, timeout=120):
     npz_files = sorted(Path(args.npz_dir).glob("*.npz"))
     print(f"Found {len(npz_files):,} NPZ files")
     n = min(args.n_samples, len(npz_files))
@@ -543,14 +550,14 @@ def benchmark_life_sciences(args, out):
         read_results["native"] = run_multiworker(
             _worker_native_openfold,
             (args.alignment_dir, args.mmcif_dir, native_names),
-            args.n_reads, wc)
+            args.n_reads, wc, timeout=timeout)
 
     print("\n--- NPZ (per-protein files) ---")
-    read_results["npz"] = run_multiworker(_worker_npz_proteins, (npz_sample,), args.n_reads, wc)
+    read_results["npz"] = run_multiworker(_worker_npz_proteins, (npz_sample,), args.n_reads, wc, timeout=timeout)
     print("\n--- LMDB (compressed) ---")
-    read_results["lmdb"] = run_multiworker(_worker_lmdb, (str(lmdb_path), keys), args.n_reads, wc)
+    read_results["lmdb"] = run_multiworker(_worker_lmdb, (str(lmdb_path), keys), args.n_reads, wc, timeout=timeout)
     print("\n--- HDF5 (all proteins, one file) ---")
-    read_results["hdf5"] = run_multiworker(_worker_hdf5_proteins, (str(hdf5_path), names), args.n_reads, wc)
+    read_results["hdf5"] = run_multiworker(_worker_hdf5_proteins, (str(hdf5_path), names), args.n_reads, wc, timeout=timeout)
 
     # --- Write benchmarks (n_samples=200 for speed) ---
     n_write = min(200, n)
@@ -565,7 +572,7 @@ def benchmark_life_sciences(args, out):
     return {"read": read_results, "write": write_results}
 
 
-def benchmark_array_domain(args, out):
+def benchmark_array_domain(args, out, timeout=120):
     import h5py
     wc = [1, 2, 4, 8, 16, 32]
     all_results = {}
@@ -595,18 +602,18 @@ def benchmark_array_domain(args, out):
                 all_results["adios2"] = run_multiworker(
                     _worker_adios2,
                     (list(map(str, bp_paths)), key),
-                    args.n_reads, wc)
+                    args.n_reads, wc, timeout=timeout)
             else:
                 print(f"  No BP files found in {args.bp_dir} — skipping ADIOS2")
 
         print("\n--- HDF5 (REDI output) ---")
         all_results["hdf5"] = run_multiworker(_worker_hdf5_array,
                                               (str(args.h5_file), key, n_timesteps, args.window),
-                                              args.n_reads, wc)
+                                              args.n_reads, wc, timeout=timeout)
         print("\n--- Zarr (converted, lz4) ---")
         all_results["zarr"] = run_multiworker(_worker_zarr_array,
                                               (str(zarr_path), key, n_timesteps, args.window),
-                                              args.n_reads, wc)
+                                              args.n_reads, wc, timeout=timeout)
     else:
         # Climate: input is large NPZ; benchmark NPZ vs HDF5 vs Zarr
         d = np.load(args.npz_file, allow_pickle=True)
@@ -619,15 +626,15 @@ def benchmark_array_domain(args, out):
         print("\n--- NPZ (single large file) ---")
         all_results["npz"] = run_multiworker(_worker_npz_array,
                                              (args.npz_file, n_timesteps, args.window),
-                                             args.n_reads, wc)
+                                             args.n_reads, wc, timeout=timeout)
         print("\n--- HDF5 (chunked) ---")
         all_results["hdf5"] = run_multiworker(_worker_hdf5_array,
                                               (str(hdf5_path), "X", n_timesteps, args.window),
-                                              args.n_reads, wc)
+                                              args.n_reads, wc, timeout=timeout)
         print("\n--- Zarr (chunked, lz4) ---")
         all_results["zarr"] = run_multiworker(_worker_zarr_array,
                                               (str(zarr_path), "X", n_timesteps, args.window),
-                                              args.n_reads, wc)
+                                              args.n_reads, wc, timeout=timeout)
     return all_results
 
 
@@ -647,9 +654,13 @@ def print_summary(results, domain):
     print(header)
     print("-" * 65)
     for fmt, r in read_results.items():
-        row = f"  {fmt:<8}" + "".join(f"  {r[n]:>10.1f}" for n in wc)
+        def _fmt(v):
+            return f"{'TIMEOUT':>10}" if (isinstance(v, float) and np.isnan(v)) else f"{v:>10.1f}"
+        row = f"  {fmt:<8}" + "".join(f"  {_fmt(r[n])}" for n in wc)
         print(row)
-    best = max(read_results, key=lambda f: read_results[f][max(wc)])
+    valid = {f: r for f, r in read_results.items()
+             if not (isinstance(r[max(wc)], float) and np.isnan(r[max(wc)]))}
+    best = max(valid, key=lambda f: valid[f][max(wc)]) if valid else "N/A"
     print(f"\nBest read at {max(wc)} workers: {best.upper()}")
 
     if write_results:
@@ -672,6 +683,8 @@ def main():
     parser.add_argument("--window",    type=int, default=10,
                         help="Timestep window for climate/fusion reads")
     parser.add_argument("--skip-pack", action="store_true")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Per-worker-count timeout in seconds (default: 120)")
     parser.add_argument("--npz-dir",       help="Dir of per-protein NPZ (life_sciences)")
     parser.add_argument("--npz-file",      help="Single large NPZ file (climate)")
     parser.add_argument("--h5-file",       help="HDF5 file (fusion)")
@@ -691,19 +704,19 @@ def main():
     if args.domain == "life_sciences":
         if not args.npz_dir:
             parser.error("--npz-dir required for life_sciences")
-        results = benchmark_life_sciences(args, out)
+        results = benchmark_life_sciences(args, out, timeout=args.timeout)
     elif args.domain == "materials":
         if not args.lmdb_dir and not args.npz_file:
             parser.error("--lmdb-dir and/or --npz-file required for materials")
-        results = benchmark_materials(args, out)
+        results = benchmark_materials(args, out, timeout=args.timeout)
     elif args.domain == "climate":
         if not args.npz_file:
             parser.error("--npz-file required for climate")
-        results = benchmark_array_domain(args, out)
+        results = benchmark_array_domain(args, out, timeout=args.timeout)
     else:  # fusion
         if not args.h5_file and not args.npz_file:
             parser.error("--h5-file or --npz-file required for fusion")
-        results = benchmark_array_domain(args, out)
+        results = benchmark_array_domain(args, out, timeout=args.timeout)
 
     print_summary(results, args.domain)
 
