@@ -402,7 +402,7 @@ def pack_hdf5_graphs(npz_path, out_path, n_graphs):
 
 
 def benchmark_materials(args, out, timeout=120):
-    """Benchmark OC22/HydraGNN: native sharded LMDB vs REDI NPZ vs REDI HDF5."""
+    """Benchmark OC22/HydraGNN: native sharded LMDB vs REDI HDF5."""
     import lmdb
     wc  = [1, 2, 4, 8, 16, 32]
     all_results = {}
@@ -419,16 +419,13 @@ def benchmark_materials(args, out, timeout=120):
         else:
             print(f"  No LMDB shards found in {args.lmdb_dir}")
 
-    # --- REDI flat NPZ ---
+    # --- REDI HDF5 (NPZ is not benchmarked here: flat graph NPZ requires loading
+    #     the entire file per worker, making it unsuitable for this access pattern) ---
     if args.npz_file:
         d = np.load(args.npz_file, allow_pickle=True)
         n_graphs = len(d["natoms"])
         n_bench  = min(args.n_samples, n_graphs)
-        print(f"\nNPZ: {n_graphs:,} total graphs, benchmarking {n_bench:,}")
-
-        print("\n--- REDI NPZ (flat, split_index) ---")
-        all_results["npz"] = run_multiworker(
-            _worker_npz_graphs, (args.npz_file, n_bench), args.n_reads, wc, timeout=timeout)
+        print(f"\nGraphs available: {n_graphs:,}, benchmarking {n_bench:,}")
 
         if not args.skip_pack:
             pack_hdf5_graphs(args.npz_file, hdf5_path, n_bench)
