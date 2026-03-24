@@ -47,8 +47,16 @@ run_domain materials \
     --timeout 120
 
 # --- climate (ClimaX) ---
+# Run REDI on TaiESM1 data to produce train.zarr / train.npz, then benchmark.
+CLIMATE_NC="/lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/raw/2m_temperature/2m_temperature_185001010000-186001010000_raw.nc"
+CLIMATE_REDI_OUT="$OUT/climate/redi_output"
+if [ ! -d "$CLIMATE_REDI_OUT/train.zarr" ]; then
+    echo "Running REDI on TaiESM1 climate data..."
+    redi run "$CLIMATE_NC" --domain climate --format zarr -o "$CLIMATE_REDI_OUT"
+    redi run "$CLIMATE_NC" --domain climate --format npz  -o "$CLIMATE_REDI_OUT"
+fi
 run_domain climate \
-    --npz-file /lustre/orion/scratch/whbrewer/stf053/ClimaX/data.npz \
+    --redi-output-dir "$CLIMATE_REDI_OUT" \
     --output-dir $OUT/climate \
     --n-reads 500 \
     --window 10

@@ -638,8 +638,33 @@ def benchmark_array_domain(args, out, timeout=120):
         all_results["zarr"] = run_multiworker(_worker_zarr_array,
                                               (str(zarr_path), key, n_timesteps, args.window),
                                               args.n_reads, wc, timeout=timeout)
+    elif args.redi_output_dir:
+        # Climate: REDI output directory containing train.zarr and train.npz
+        redi_dir = Path(args.redi_output_dir)
+        train_zarr = redi_dir / "train.zarr"
+        train_npz  = redi_dir / "train.npz"
+
+        # Get shape from zarr metadata — instant, no data loaded
+        import zarr as _zarr
+        _root = _zarr.open_consolidated(str(train_zarr), mode="r")
+        shape = _root["X"].shape
+        n_timesteps = shape[0]
+        print(f"REDI output shape (train): {shape}, window: {args.window}")
+
+        if train_npz.exists():
+            print("\n--- NPZ (REDI per-split train.npz) ---")
+            all_results["npz"] = run_multiworker(_worker_npz_array,
+                                                 (str(train_npz), n_timesteps, args.window),
+                                                 args.n_reads, wc, timeout=timeout)
+
+        print("\n--- Zarr (REDI output, chunked) ---")
+        all_results["zarr"] = run_multiworker(_worker_zarr_array,
+                                              (str(train_zarr), "X", n_timesteps, args.window),
+                                              args.n_reads, wc, timeout=timeout)
     else:
-        # Climate: input is large NPZ; benchmark NPZ vs HDF5 vs Zarr
+        # Climate: legacy monolithic NPZ — convert to HDF5 and Zarr first.
+        # NOTE: for large files (>10 GB) this will be very slow or timeout.
+        # Prefer --redi-output-dir instead.
         shape = _npz_peek_shape(args.npz_file, key="X")
         n_timesteps = shape[0]
         print(f"NPZ shape: {shape}, window: {args.window}")
@@ -710,7 +735,8 @@ def main():
     parser.add_argument("--timeout", type=int, default=120,
                         help="Per-worker-count timeout in seconds (default: 120)")
     parser.add_argument("--npz-dir",       help="Dir of per-protein NPZ (life_sciences)")
-    parser.add_argument("--npz-file",      help="Single large NPZ file (climate)")
+    parser.add_argument("--npz-file",      help="Single large NPZ file (climate, legacy)")
+    parser.add_argument("--redi-output-dir", help="REDI output dir with train.zarr / train.npz (climate)")
     parser.add_argument("--h5-file",       help="HDF5 file (fusion)")
     parser.add_argument("--alignment-dir", help="OpenFold alignment dir (native benchmark)")
     parser.add_argument("--mmcif-dir",     help="OpenFold mmCIF dir (native benchmark)")
@@ -734,8 +760,8 @@ def main():
             parser.error("--lmdb-dir and/or --npz-file required for materials")
         results = benchmark_materials(args, out, timeout=args.timeout)
     elif args.domain == "climate":
-        if not args.npz_file:
-            parser.error("--npz-file required for climate")
+        if not args.redi_output_dir and not args.npz_file:
+            parser.error("--redi-output-dir (preferred) or --npz-file required for climate")
         results = benchmark_array_domain(args, out, timeout=args.timeout)
     else:  # fusion
         if not args.h5_file and not args.npz_file:
