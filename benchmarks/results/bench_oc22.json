@@ -1,0 +1,24 @@
+{
+  "case": "oc22_hydragnn",
+  "domain": "materials",
+  "split": "train",
+  "n_shards": 41,
+  "n_loaded": 8225334,
+  "n_valid": 8225293,
+  "n_atoms_total": 656545105,
+  "stages_ms": {
+    "ingest": 6090809,
+    "preprocess": 118817,
+    "transform": 1280857,
+    "structure": 59132,
+    "output": 779430
+  },
+  "total_ms": 8329045,
+  "total_s": 8329.0,
+  "throughput_structs_per_s": 987.54,
+  "throughput_label": "structs/s",
+  "output": {
+    "npz_path": "/lustre/orion/stf053/scratch/whbrewer/redi_oc22_bench_output/oc22_redi_output.npz",
+    "size_mb": 13964.0
+  }
+}

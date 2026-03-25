@@ -33,25 +33,27 @@ OUT_JSON = str(Path(__file__).parent.parent / "results" / "bench_openfold.json")
 #   prepare_transformer / train_val_test_split → structure
 #   SavePerProteinNPZ / write_checksums / save_metadata → output
 STAGE_MAP = {
-    "detect_format":          "ingest",
-    "load_open_protein_set":  "ingest",
-    "LoadOpenProteinSet":     "ingest",
-    "parse_mmcif":            "ingest",
-    "ParseMMCIFStructures":   "ingest",
-    "parse_msa":              "preprocess",
-    "ParseMSAAlignments":     "preprocess",
-    "anonymize_pii":          "preprocess",
-    "filter_sequences":       "preprocess",
-    "encode_sequences":       "transform",
-    "sequence_features":      "transform",
-    "prepare_transformer":    "structure",
-    "PrepareForTransformer":  "structure",
-    "train_val_test_split":   "structure",
-    "save_per_protein_npz":   "output",
-    "SavePerProteinNPZ":      "output",
-    "save_hdf5":              "output",
-    "write_checksums":        "output",
-    "save_metadata":          "output",
+    "detect_format":            "ingest",
+    "load_open_protein_set":    "ingest",
+    "LoadOpenProteinSet":       "ingest",
+    "parse_mmcif":              "ingest",
+    "ParseMMCIFStructures":     "ingest",
+    "parse_msa":                "preprocess",
+    "ParseMSAAlignments":       "preprocess",
+    "anonymize_pii":            "preprocess",
+    "filter_sequences":         "preprocess",
+    "streaming_npz_processor":  "preprocess",   # mmCIF→MSA→encode→NPZ per protein
+    "StreamingNPZProcessor":    "preprocess",
+    "encode_sequences":         "transform",
+    "sequence_features":        "transform",
+    "prepare_transformer":      "structure",
+    "PrepareForTransformer":    "structure",
+    "train_val_test_split":     "structure",
+    "save_per_protein_npz":     "output",
+    "SavePerProteinNPZ":        "output",
+    "save_hdf5":                "output",
+    "write_checksums":          "output",
+    "save_metadata":            "output",
 }
 
 STEP_RE = re.compile(r"(\w+)\s+.*?\((\d+)ms\)")
@@ -121,11 +123,17 @@ def main():
     step_t = parse_timings(result.stdout)
     stage_t = aggregate_stages(step_t)
 
-    # Estimate how many proteins were actually processed from stdout
+    # Estimate how many proteins were actually processed.
+    # Parse from the streaming_npz_processor step detail: "N files"
     n_actual = args.n_proteins
-    m = re.search(r"(\d+)\s+proteins?", result.stdout, re.IGNORECASE)
+    m = re.search(r"streaming_npz_processor.*?(\d[\d,]*)\s+files", result.stdout)
     if m:
-        n_actual = int(m.group(1))
+        n_actual = int(m.group(1).replace(",", ""))
+    else:
+        # Fallback: look for "Saved N/..." in streaming progress output
+        m = re.search(r"Saved\s+(\d[\d,]*)/\d", result.stdout)
+        if m:
+            n_actual = int(m.group(1).replace(",", ""))
 
     throughput = n_actual / (total_ms / 1000) if total_ms > 0 else 0
 

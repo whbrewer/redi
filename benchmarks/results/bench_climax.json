@@ -1,0 +1,30 @@
+{
+  "case": "climax_taiesm1",
+  "domain": "climate",
+  "n_files": 5,
+  "total_input_gib": 8.61,
+  "input_shape_per_file": "14601\u00d7192\u00d7288",
+  "output_shape_per_file": "14601\u00d7128\u00d7256",
+  "stages_ms": {
+    "ingest": 35989,
+    "preprocess": 108251,
+    "transform": 17118,
+    "structure": 5122,
+    "output": 434941
+  },
+  "total_ms": 621823,
+  "total_s": 621.8,
+  "throughput_grid_pts_per_s": 3847120,
+  "throughput_label": "grid-pts/s",
+  "step_timings_ms": {
+    "detect_format": 18,
+    "load_climate": 35971,
+    "regrid_climate": 108251,
+    "normalize_climate": 17113,
+    "select_variables": 5,
+    "climate_to_numpy": 1275,
+    "train_val_test_split": 3847,
+    "save_climate": 428165,
+    "write_checksums": 6776
+  }
+}

@@ -79,7 +79,8 @@ def get_normalised_values(data: dict, mode: str) -> dict:
         return {s: stages_ms.get(s, 0) / 1000.0 for s in STAGES}
 
     if mode == "pct":
-        return {s: 100.0 * stages_ms.get(s, 0) / total_ms if total_ms else 0
+        stage_total = sum(stages_ms.get(s, 0) for s in STAGES)
+        return {s: 100.0 * stages_ms.get(s, 0) / stage_total if stage_total else 0
                 for s in STAGES}
 
     if mode == "per_gib":
@@ -133,7 +134,7 @@ def make_plot(entries: list, mode: str, out_base: str):
         )
         left += widths
 
-    # Total time annotations at end of each bar
+    # Annotations
     for i, (lbl, data) in enumerate(entries):
         total = sum(all_vals[i][s] for s in STAGES)
         unit = {
@@ -142,21 +143,37 @@ def make_plot(entries: list, mode: str, out_base: str):
             "per_gib":    "s/GiB",
             "per_sample": "s/1k",
         }[mode]
-        ax.text(total + 0.01 * left.max(), y_positions[i],
-                f"{total:.1f} {unit}", va="center", ha="left", fontsize=8)
+
+        if mode == "pct":
+            # Show actual wall-clock total just above each bar, centred
+            total_s = data.get("total_s", data.get("total_ms", 0) / 1000)
+            label_s = f"{total_s:.0f} s" if total_s >= 10 else f"{total_s:.1f} s"
+            ax.text(50, y_positions[i] + bar_h * 0.55,
+                    label_s, va="bottom", ha="center", fontsize=8.5,
+                    fontweight="bold", color="#333333")
+        else:
+            ax.text(total + 0.01 * left.max(), y_positions[i],
+                    f"{total:.1f} {unit}", va="center", ha="left", fontsize=8)
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels([lbl for lbl, _ in entries], fontsize=10)
     ax.set_xlabel(x_label(mode), fontsize=11)
     ax.set_title("REDI Pipeline Stage Timings", fontsize=13, fontweight="bold")
 
-    # Legend
+    # Legend — horizontal, centred below the bars
     handles = [mpatches.Patch(color=COLORS[s], label=STAGE_LABELS[s]) for s in STAGES]
-    ax.legend(handles=handles, loc="lower right", fontsize=9, framealpha=0.8)
+    if mode == "pct":
+        # Place legend inside the axes in the gap below the bottom bar
+        ax.legend(handles=handles, loc="lower center",
+                  bbox_to_anchor=(0.5, 0.01), ncol=len(STAGES),
+                  fontsize=9, framealpha=0.85, borderpad=0.4)
+    else:
+        ax.legend(handles=handles, loc="lower right", fontsize=9, framealpha=0.8)
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.margins(y=0.15)
+    # pct mode: larger bottom margin to create space for the in-axes legend
+    ax.margins(y=0.28 if mode == "pct" else 0.15)
 
     # Add sample-size annotations below each bar
     for i, (lbl, data) in enumerate(entries):

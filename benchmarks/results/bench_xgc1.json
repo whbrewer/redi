@@ -1,0 +1,33 @@
+{
+  "case": "xgc1_iter",
+  "domain": "fusion",
+  "n_files": 5,
+  "files": [
+    "xgc.3d.00002.bp",
+    "xgc.3d.00004.bp",
+    "xgc.3d.00006.bp",
+    "xgc.3d.00008.bp",
+    "xgc.3d.00010.bp"
+  ],
+  "total_input_gib": 27.58,
+  "stages_ms": {
+    "ingest": 38852,
+    "preprocess": 2445,
+    "transform": 0,
+    "structure": 4683,
+    "output": 1016241
+  },
+  "total_ms": 1082454,
+  "total_s": 1082.5,
+  "throughput_gib_per_s": 0.025,
+  "throughput_label": "GiB/s",
+  "step_timings_ms": {
+    "detect_format": 6118,
+    "load_adios": 32734,
+    "handle_shots": 2445,
+    "train_val_test_split": 4683,
+    "save_hdf5": 995207,
+    "write_checksums": 21029,
+    "save_metadata": 5
+  }
+}
