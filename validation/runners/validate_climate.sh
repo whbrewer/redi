@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Run REDI pipeline + redi validate for all available TaiESM1 2m_temperature chunks.
-# Produces validate_results/taiesm1_2m_temp_<ystr>_validate.json for each.
+# Produces validation/results/taiesm1_2m_temp_<ystr>_validate.json for each.
 #
-# Usage: bash scripts/validate_climate_2m_all.sh
+# Usage: bash validation/runners/validate_climate.sh
 
 set -e
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 source /opt/venvs/drai/bin/activate
 
 RAW_DIR="/opt/drai/datasets/CMIP6/TaiESM1/raw/2m_temperature"
 GT_DIR="/opt/drai/datasets/CMIP6/TaiESM1/1.40625deg/2m_temperature"
-RESULTS="validate_results"
-BASE_CFG="examples/climate_taiesm1_validate.yaml"
+RESULTS="validation/results"
+BASE_CFG="validation/configs/climate_taiesm1_2m_temperature.yaml"
 mkdir -p "$RESULTS"
 
 echo "TaiESM1 2m_temperature — all chunks"
@@ -95,7 +95,7 @@ echo "====================================="
 echo "Summary table:"
 python3 - <<'PYEOF'
 import json
-with open("validate_results/taiesm1_2m_temp_all_validate.json") as f:
+with open("validation/results/taiesm1_2m_temp_all_validate.json") as f:
     results = json.load(f)
 print(f"  {'Year range':<38s}  {'Corr':>8s}  {'MAE (K)':>8s}  {'RMSE (K)':>9s}")
 print(f"  {'-'*38}  {'-'*8}  {'-'*8}  {'-'*9}")

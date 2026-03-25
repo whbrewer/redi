@@ -2,24 +2,24 @@
 # Validate REDI vs ClimaX for TaiESM1 3D variables (ta, ua, va).
 # Run after raw files are downloaded to /opt/drai/CMIP6/TaiESM1/raw/<name>/
 #
-# Usage: bash scripts/validate_climate_3d.sh
+# Usage: bash validation/runners/validate_climate_3d.sh
 
 set -e
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 source /opt/venvs/drai/bin/activate
 
 YSTR="186001010600-187001010000"
 CLIMAX_SRC="/home/w1b/drai/domains/climate/ClimaX/src/data_preprocessing/regrid.py"
 GT_BASE="/opt/drai/datasets/CMIP6/TaiESM1/1.40625deg"
 RAW_BASE="/opt/drai/CMIP6/TaiESM1/raw"
-RESULTS="validate_results"
+RESULTS="validation/results"
 
 declare -A CMIP_NAME=( [temperature]=ta [u_component_of_wind]=ua [v_component_of_wind]=va )
 declare -A ERA_NAME=(  [temperature]=t  [u_component_of_wind]=u  [v_component_of_wind]=v  )
 declare -A REDI_CFG=(
-  [temperature]=examples/climate_taiesm1_temperature_validate.yaml
-  [u_component_of_wind]=examples/climate_taiesm1_uwind_validate.yaml
-  [v_component_of_wind]=examples/climate_taiesm1_vwind_validate.yaml
+  [temperature]=validation/configs/climate_taiesm1_temperature_3d.yaml
+  [u_component_of_wind]=validation/configs/climate_taiesm1_uwind_3d.yaml
+  [v_component_of_wind]=validation/configs/climate_taiesm1_vwind_3d.yaml
 )
 declare -A REDI_OUT=(
   [temperature]=output/taiesm1_temperature_redi
@@ -40,7 +40,6 @@ for NAME in temperature u_component_of_wind v_component_of_wind; do
   echo "Variable: $NAME  ($CMIP -> $ERA)"
   echo "========================================"
 
-  # Check raw file exists
   if [ ! -f "$RAW" ]; then
     echo "  ERROR: raw file not found: $RAW"
     echo "  Run: wget <esgf_url> -O $RAW"
@@ -59,7 +58,6 @@ for NAME in temperature u_component_of_wind v_component_of_wind; do
       --reuse_weights 0 \
       --cmip 1 \
       --rename "$CMIP" "$ERA"
-    # regrid.py writes a .nc.tmp file; rename it
     TMP="${GT_DIR}/${NAME}_${YSTR}_1.40625deg.nc.tmp"
     if [ -f "$TMP" ]; then mv "$TMP" "$GT_FILE"; fi
     echo "  ClimaX GT saved: $GT_FILE"
@@ -82,7 +80,6 @@ for NAME in temperature u_component_of_wind v_component_of_wind; do
     --style json \
     > "$VAL_JSON" 2>&1
 
-  # Print summary
   python3 - <<PYEOF
 import json
 with open("$VAL_JSON") as f:
