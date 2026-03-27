@@ -9,16 +9,15 @@
 #SBATCH -A gen053
 #SBATCH -J redi-parallel-speedup
 #SBATCH -o redi-parallel-speedup-%j.out
-#SBATCH -e redi-parallel-speedup-%j.err
 #SBATCH -N 1
 #SBATCH --ntasks-per-node 1
 #SBATCH --cpus-per-task 32
-#SBATCH -t 8:00:00
+#SBATCH -t 16:00:00
 #SBATCH -p batch
 
 set -e
 
-REDI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REDI_ROOT="$SLURM_SUBMIT_DIR/benchmarks"
 source ~/venv/redi/bin/activate
 
 echo "================================================================"
