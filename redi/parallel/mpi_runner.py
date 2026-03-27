@@ -3,13 +3,15 @@ MPI-based REDI parallel runner.
 
 Each MPI rank processes its share of input files independently through the
 REDI pipeline. After processing, ranks communicate:
-  - comm.gather()   — collects per-file metadata/stats from all ranks to rank 0
-  - comm.allreduce() — aggregates global statistics (sample counts, feature ranges)
-  - Rank 0 writes a unified DataCard and (optionally) a merged output file
+  - comm.allreduce()  — aggregates global statistics (sample counts) across all ranks
+  - comm.gather()     — collects per-file metadata/paths from all ranks to rank 0
+  - Rank 0 merges per-file NPZ outputs into N output shards and writes a unified
+    metadata.json and datacard.json
 
 Usage:
     srun python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out
-    mpirun -n 8 python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out
+    srun python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out --shards 4
+    mpirun -n 8 python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out --merge
 """
 
 import argparse
@@ -33,7 +35,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stages",
                    help="Comma-separated pipeline stages to run")
     p.add_argument("--merge", action="store_true",
-                   help="Gather per-file results and write a unified DataCard on rank 0")
+                   help="Gather per-rank results on rank 0 and write unified outputs")
+    p.add_argument("--shards", type=int, default=1, metavar="N",
+                   help="Number of output shard files to write on rank 0 (default: 1)")
     p.add_argument("--style", default="simple",
                    help="redi output style: simple, rich, json (default: simple)")
     return p.parse_args()
@@ -43,10 +47,10 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
     """
     Run `redi run` on a single file as a subprocess.
 
-    Returns a result dict with input path, output directory, and metadata
-    extracted from the pipeline's metadata.json (if present).
+    Returns a result dict with input path, output directory, paths to any
+    NPZ files written, and metadata extracted from metadata.json (if present).
     """
-    output_dir = Path(args.output) / Path(filepath).stem
+    output_dir = Path(args.output) / "per_rank" / f"rank{rank:04d}" / Path(filepath).stem
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = ["redi", "run", filepath, "-o", str(output_dir), "--style", args.style]
@@ -61,6 +65,7 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
         "input": filepath,
         "output_dir": str(output_dir),
         "rank": rank,
+        "npz_files": [],
         "errors": [],
         "metadata": {},
     }
@@ -70,6 +75,9 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
         if proc.returncode != 0:
             result["errors"].append(proc.stderr.strip() or f"redi exited {proc.returncode}")
             return result
+
+        # Collect any NPZ files written by the pipeline
+        result["npz_files"] = [str(p) for p in sorted(output_dir.glob("*.npz"))]
 
         # Read metadata.json produced by SaveMetadata pipeline step
         meta_path = output_dir / "metadata.json"
@@ -83,38 +91,124 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
     return result
 
 
-def _allreduce_stats(comm, all_results: list) -> dict:
+def _allreduce_stats(comm, my_results: list) -> dict:
     """
-    Compute global aggregate statistics via MPI allreduce.
+    Compute global aggregate statistics via MPI allreduce (symmetric on all ranks).
 
-    Currently aggregates:
-      - total_samples: sum across all files
-      - global feature min/max (when per-file stats are present)
-
-    Returns a dict of global stats on all ranks (allreduce result is symmetric).
+    Aggregates:
+      - total_samples: sum of train+val+test sample counts across all files/ranks
     """
-    try:
-        from mpi4py import MPI
-    except ImportError:
-        return {}
+    from mpi4py import MPI
 
-    # Aggregate total sample count
     local_samples = sum(
         r["metadata"].get("split", {}).get("train_size", 0) +
         r["metadata"].get("split", {}).get("val_size", 0) +
         r["metadata"].get("split", {}).get("test_size", 0)
-        for r in all_results
+        for r in my_results
         if not r["errors"]
     )
     global_samples = comm.allreduce(local_samples, op=MPI.SUM)
 
+    local_ok = sum(1 for r in my_results if not r["errors"])
+    global_ok = comm.allreduce(local_ok, op=MPI.SUM)
+
+    local_failed = sum(1 for r in my_results if r["errors"])
+    global_failed = comm.allreduce(local_failed, op=MPI.SUM)
+
     return {
         "total_samples": global_samples,
+        "successful": global_ok,
+        "failed": global_failed,
     }
 
 
-def write_datacard(all_results: list, global_stats: dict, args: argparse.Namespace):
-    """Write a unified DataCard JSON on rank 0."""
+def merge_npz_shards(all_results: list, output_dir: Path, n_shards: int) -> list:
+    """
+    Load per-file NPZ outputs gathered from all ranks, concatenate, and write
+    N evenly-sized shard files to output_dir.
+
+    Returns list of shard file Paths that were written.
+    """
+    import numpy as np
+
+    npz_paths = []
+    for r in all_results:
+        if r["errors"]:
+            continue
+        for p in r.get("npz_files", []):
+            if Path(p).exists():
+                npz_paths.append(Path(p))
+
+    if not npz_paths:
+        print("[rank 0] No NPZ files found — skipping merge", flush=True)
+        return []
+
+    print(f"[rank 0] Merging {len(npz_paths)} NPZ file(s) into {n_shards} shard(s) ...",
+          flush=True)
+
+    # Load and concatenate all arrays
+    arrays: dict = {}
+    for npz_path in npz_paths:
+        data = np.load(npz_path, allow_pickle=True)
+        for key in data.files:
+            if key not in arrays:
+                arrays[key] = []
+            arrays[key].append(data[key])
+
+    merged = {k: np.concatenate(v, axis=0) for k, v in arrays.items()}
+    total = len(next(iter(merged.values())))
+
+    # Shard and write
+    shard_size = max(1, (total + n_shards - 1) // n_shards)
+    shard_paths = []
+    for i in range(n_shards):
+        start = i * shard_size
+        if start >= total:
+            break
+        end = min(start + shard_size, total)
+        shard = {k: v[start:end] for k, v in merged.items()}
+        shard_path = output_dir / f"shard_{i:04d}.npz"
+        np.savez_compressed(shard_path, **shard)
+        shard_paths.append(shard_path)
+        print(f"[rank 0]   {shard_path.name}  ({end - start} samples)", flush=True)
+
+    return shard_paths
+
+
+def write_metadata(all_results: list, global_stats: dict,
+                   shard_paths: list, args: argparse.Namespace,
+                   n_ranks: int):
+    """Write a single metadata.json to the output directory (rank 0 only)."""
+    output_dir = Path(args.output)
+
+    successful = [r for r in all_results if not r["errors"]]
+    domains = list({r["metadata"].get("domain") for r in successful
+                    if r["metadata"].get("domain")})
+
+    metadata = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "backend": "mpi",
+        "mpi_ranks": n_ranks,
+        "domain": domains[0] if len(domains) == 1 else (domains or None),
+        "output_format": args.output_format,
+        "total_files": len(all_results),
+        "successful": global_stats.get("successful", len(successful)),
+        "failed": global_stats.get("failed", len(all_results) - len(successful)),
+        "total_samples": global_stats.get("total_samples", 0),
+        "shards": len(shard_paths),
+        "shard_files": [str(p) for p in shard_paths],
+        "global_stats": global_stats,
+    }
+
+    meta_path = output_dir / "metadata.json"
+    meta_path.write_text(json.dumps(metadata, indent=2, default=str))
+    print(f"[rank 0] metadata.json  → {meta_path}", flush=True)
+    return meta_path
+
+
+def write_datacard(all_results: list, global_stats: dict,
+                   shard_paths: list, args: argparse.Namespace):
+    """Write a unified datacard.json to the output directory (rank 0 only)."""
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,11 +222,13 @@ def write_datacard(all_results: list, global_stats: dict, args: argparse.Namespa
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "backend": "mpi",
         "output_format": args.output_format,
-        "domain": domains[0] if len(domains) == 1 else domains,
+        "domain": domains[0] if len(domains) == 1 else (domains or None),
         "total_files": len(all_results),
         "successful": len(successful),
         "failed": len(failed),
         "global_stats": global_stats,
+        "shards": len(shard_paths),
+        "shard_files": [str(p) for p in shard_paths],
         "failed_files": [
             {"input": r["input"], "errors": r["errors"]}
             for r in failed
@@ -142,6 +238,7 @@ def write_datacard(all_results: list, global_stats: dict, args: argparse.Namespa
                 "input": r["input"],
                 "output_dir": r["output_dir"],
                 "rank": r["rank"],
+                "npz_files": r["npz_files"],
                 "metadata": r["metadata"],
             }
             for r in successful
@@ -150,7 +247,7 @@ def write_datacard(all_results: list, global_stats: dict, args: argparse.Namespa
 
     datacard_path = output_dir / "datacard.json"
     datacard_path.write_text(json.dumps(datacard, indent=2, default=str))
-    print(f"[rank 0] DataCard written to {datacard_path}", flush=True)
+    print(f"[rank 0] datacard.json  → {datacard_path}", flush=True)
 
     if failed:
         print(f"[rank 0] {len(failed)} file(s) failed:", flush=True)
@@ -164,7 +261,7 @@ def main():
     except ImportError:
         print(
             "Error: mpi4py is required for the MPI backend.\n"
-            "Install with: pip install mpi4py",
+            "Install with: MPICC=cc pip install --no-binary mpi4py mpi4py",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -175,7 +272,7 @@ def main():
 
     args = parse_args()
 
-    # Rank 0 reads the file list and broadcasts to all ranks
+    # ── Rank 0: read file list and broadcast ────────────────────────────
     if rank == 0:
         filelist_path = Path(args.filelist)
         if not filelist_path.exists():
@@ -183,38 +280,58 @@ def main():
             comm.Abort(1)
         all_files = [line.strip() for line in filelist_path.read_text().splitlines()
                      if line.strip()]
-        print(f"[rank 0] {len(all_files)} files across {size} rank(s)", flush=True)
+        print(f"[rank 0] {len(all_files)} file(s) → {size} rank(s), "
+              f"shards={args.shards}, merge={args.merge}", flush=True)
     else:
         all_files = None
 
     all_files = comm.bcast(all_files, root=0)
 
-    # Each rank takes every size-th file starting from its rank (round-robin)
+    # ── Round-robin scatter: each rank takes every size-th file ─────────
     my_files = [f for i, f in enumerate(all_files) if i % size == rank]
     print(f"[rank {rank}] processing {len(my_files)} file(s)", flush=True)
 
-    # Process files — each rank is independent here
+    # ── Process files — ranks are independent here ──────────────────────
     my_results = [process_file(f, args, rank) for f in my_files]
 
     local_errors = sum(1 for r in my_results if r["errors"])
-    print(f"[rank {rank}] done — {len(my_results) - local_errors} ok, {local_errors} failed",
-          flush=True)
+    print(f"[rank {rank}] done — {len(my_results) - local_errors} ok, "
+          f"{local_errors} failed", flush=True)
 
-    # Allreduce for global statistics (symmetric result on all ranks)
+    # ── Allreduce: global statistics (symmetric on all ranks) ────────────
     global_stats = _allreduce_stats(comm, my_results)
 
     if not args.merge:
+        if rank == 0:
+            print(f"[rank 0] global_stats = {global_stats}", flush=True)
         return
 
-    # Gather all results to rank 0 for DataCard
+    # ── Gather all results to rank 0 ────────────────────────────────────
     all_results_nested = comm.gather(my_results, root=0)
 
     if rank == 0:
+        # Flatten and restore original file order
         all_results = [r for rank_results in all_results_nested for r in rank_results]
-        # Sort by original file order for deterministic DataCard output
         order = {f: i for i, f in enumerate(all_files)}
         all_results.sort(key=lambda r: order.get(r["input"], 9999))
-        write_datacard(all_results, global_stats, args)
+
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Merge per-file NPZ outputs → N shard files
+        shard_paths = []
+        if args.output_format == "npz":
+            shard_paths = merge_npz_shards(all_results, output_dir, args.shards)
+
+        # Write unified metadata.json and datacard.json
+        write_metadata(all_results, global_stats, shard_paths, args, size)
+        write_datacard(all_results, global_stats, shard_paths, args)
+
+        print(f"\n[rank 0] == All done ==", flush=True)
+        print(f"[rank 0]   output: {output_dir}", flush=True)
+        if shard_paths:
+            print(f"[rank 0]   shards: {len(shard_paths)} × {output_dir.name}/shard_NNNN.npz",
+                  flush=True)
 
 
 if __name__ == "__main__":
