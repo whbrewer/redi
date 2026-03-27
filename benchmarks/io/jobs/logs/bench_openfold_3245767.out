@@ -1,0 +1,29 @@
+=== REDI OpenFold Benchmark  Mon Mar 23 23:45:43 EDT 2026 ===
+  Node:    andes125.olcf.ornl.gov
+  Job ID:  3245767
+
+OpenFold / OpenProteinSet Stage Timing Benchmark
+  OPS root:  /lustre/orion/gen053/world-shared/openfold/data
+  Proteins:  5,000
+  Workers:   16
+  Config:    /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/configs/bench_openfold.yaml
+
+  Running: redi run /lustre/orion/gen053/world-shared/openfold/data -c /tmp/redi_openfold_bench.yaml
+
+Results → benchmarks/results/bench_openfold.json
+
+=================================================================
+OPENFOLD TIMING SUMMARY  (2 proteins, 16 workers)
+=================================================================
+  Stage                    s       %
+  ----------------  --------  ------
+  ingest                54.6    8.3%
+  preprocess             0.0    0.0%
+  transform              0.0    0.0%
+  structure              0.0    0.0%
+  output                 5.5    0.8%
+  TOTAL                660.4  100.0%
+
+  Throughput: 0.003 proteins/s
+=================================================================
+=== Done  Mon Mar 23 23:56:44 EDT 2026 ===

@@ -1,0 +1,41 @@
+=== REDI XGC1 Benchmark  Mon Mar 23 23:45:43 EDT 2026 ===
+  Node:    andes128.olcf.ornl.gov
+  Job ID:  3245768
+
+XGC1 ITER Stage Timing Benchmark
+  BP dir:    /lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data/n560fr_ITER_PFPO_W_Ne
+  Files:     5 × xgc.3d snapshots
+    xgc.3d.00002.bp
+    xgc.3d.00004.bp
+    xgc.3d.00006.bp
+    xgc.3d.00008.bp
+    xgc.3d.00010.bp
+
+  [file 1] xgc.3d.00002.bp  (5.5 GiB)
+    225.3s  ingest=13.6s  preprocess=0.8s  structure=0.9s  output=203.3s
+  [file 2] xgc.3d.00004.bp  (5.5 GiB)
+    215.4s  ingest=6.9s  preprocess=0.4s  structure=0.9s  output=203.9s
+  [file 3] xgc.3d.00006.bp  (5.5 GiB)
+    213.7s  ingest=6.2s  preprocess=0.4s  structure=1.0s  output=202.8s
+  [file 4] xgc.3d.00008.bp  (5.5 GiB)
+    214.1s  ingest=6.1s  preprocess=0.4s  structure=1.0s  output=203.3s
+  [file 5] xgc.3d.00010.bp  (5.5 GiB)
+    213.9s  ingest=6.0s  preprocess=0.4s  structure=0.9s  output=202.9s
+
+Results → benchmarks/results/bench_xgc1.json
+
+=================================================================
+XGC1 TIMING SUMMARY  (5 ITER snapshots, 27.6 GiB)
+=================================================================
+  Stage                    s       %
+  ----------------  --------  ------
+  ingest                38.9    3.6%
+  preprocess             2.4    0.2%
+  transform              0.0    0.0%
+  structure              4.7    0.4%
+  output              1016.2   93.9%
+  TOTAL               1082.5  100.0%
+
+  Throughput: 0.025 GiB/s
+=================================================================
+=== Done  Tue Mar 24 00:03:51 EDT 2026 ===

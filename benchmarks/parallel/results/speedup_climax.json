@@ -1,0 +1,61 @@
+{
+  "case": "climax_cmcc",
+  "domain": "climate",
+  "n_files": 32,
+  "runs": [
+    {
+      "workers": 1,
+      "n_files": 32,
+      "n_ok": 23,
+      "total_ms": 1424386,
+      "total_s": 1424.4,
+      "speedup": 1.0,
+      "parallel_efficiency": 1.0
+    },
+    {
+      "workers": 2,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 649838,
+      "total_s": 649.8,
+      "speedup": 2.192,
+      "parallel_efficiency": 1.096
+    },
+    {
+      "workers": 4,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 322172,
+      "total_s": 322.2,
+      "speedup": 4.421,
+      "parallel_efficiency": 1.105
+    },
+    {
+      "workers": 8,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 163669,
+      "total_s": 163.7,
+      "speedup": 8.703,
+      "parallel_efficiency": 1.088
+    },
+    {
+      "workers": 16,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 84282,
+      "total_s": 84.3,
+      "speedup": 16.9,
+      "parallel_efficiency": 1.056
+    },
+    {
+      "workers": 32,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 47419,
+      "total_s": 47.4,
+      "speedup": 30.038,
+      "parallel_efficiency": 0.939
+    }
+  ]
+}

@@ -2305,7 +2305,7 @@ def run_parallel_pipeline(
         print_metric("Workers", str(workers) if workers else "auto")
         print_metric("Batch Size", str(batch_size))
         print_metric("Distribution", distribution)
-        if backend == "slurm":
+        if backend in ("gnu", "mpi"):
             print_metric("SLURM Nodes", str(slurm_nodes))
             print_metric("Cores/Node", str(slurm_cores_per_node))
             print_metric("Time Limit", slurm_time)
@@ -2358,7 +2358,7 @@ def run_parallel_pipeline(
             for name, path in scripts.items():
                 print(f"      📄 {Colors.BOLD}{name}{Colors.END}")
 
-            if backend == "slurm":
+            if backend in ("gnu", "mpi"):
                 print()
                 print(f"    {Colors.CYAN}To submit:{Colors.END} cd {script_dir} && sbatch multinodejob.sh")
         elif style == "simple":
@@ -2562,8 +2562,9 @@ Download examples (climate domain)::
                                 help="Enable parallel execution across input files")
     parallel_group.add_argument("-w", "--workers", type=int, default=None,
                                 help="Number of parallel workers (default: auto-detect CPU count)")
-    parallel_group.add_argument("--backend", choices=["local", "slurm"], default="local",
-                                help="Parallel backend: local (GNU parallel) or slurm")
+    parallel_group.add_argument("--backend", choices=["local", "gnu", "mpi"], default="local",
+                                help="Parallel backend: local (GNU parallel, no SLURM), "
+                                     "gnu (SLURM + GNU parallel), mpi (SLURM + mpi4py)")
     parallel_group.add_argument("--batch-size", type=int, default=4,
                                 help="Files per worker batch (default: 4)")
     parallel_group.add_argument("--generate-only", action="store_true",
@@ -2573,7 +2574,7 @@ Download examples (climate domain)::
                                 help="File distribution strategy (default: round_robin)")
 
     # SLURM-specific options
-    slurm_group = run_parser.add_argument_group("SLURM options (for --backend slurm)")
+    slurm_group = run_parser.add_argument_group("SLURM options (for --backend gnu or mpi)")
     slurm_group.add_argument("--slurm-nodes", type=int, default=4,
                              help="Number of compute nodes (default: 4)")
     slurm_group.add_argument("--slurm-cores", type=int, default=56,

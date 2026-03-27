@@ -1,0 +1,62 @@
+{
+  "case": "xgc1_iter",
+  "domain": "fusion",
+  "n_files": 32,
+  "total_input_gib": 176.5,
+  "runs": [
+    {
+      "workers": 1,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 6846928,
+      "total_s": 6846.9,
+      "speedup": 1.0,
+      "parallel_efficiency": 1.0
+    },
+    {
+      "workers": 2,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 3442533,
+      "total_s": 3442.5,
+      "speedup": 1.989,
+      "parallel_efficiency": 0.995
+    },
+    {
+      "workers": 4,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 1749576,
+      "total_s": 1749.6,
+      "speedup": 3.913,
+      "parallel_efficiency": 0.978
+    },
+    {
+      "workers": 8,
+      "n_files": 32,
+      "n_ok": 32,
+      "total_ms": 946495,
+      "total_s": 946.5,
+      "speedup": 7.234,
+      "parallel_efficiency": 0.904
+    },
+    {
+      "workers": 16,
+      "n_files": 32,
+      "n_ok": 25,
+      "total_ms": 952965,
+      "total_s": 953.0,
+      "speedup": 7.185,
+      "parallel_efficiency": 0.449
+    },
+    {
+      "workers": 32,
+      "n_files": 32,
+      "n_ok": 13,
+      "total_ms": 1017208,
+      "total_s": 1017.2,
+      "speedup": 6.731,
+      "parallel_efficiency": 0.21
+    }
+  ]
+}

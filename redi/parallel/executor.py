@@ -24,7 +24,7 @@ class ParallelConfig:
     Configuration for parallel execution.
 
     Attributes:
-        backend: Backend type ("local" or "slurm").
+        backend: Backend type ("local", "gnu", or "mpi").
         workers: Number of parallel workers (None for auto-detect).
         batch_size: Number of files per worker batch.
         output_dir: Base output directory.
@@ -32,16 +32,22 @@ class ParallelConfig:
         style: Output style for redi (default: simple for parallel).
         distribution: Distribution strategy ("round_robin" or "balanced").
 
-        # SLURM-specific options
+        # SLURM options (shared by "gnu" and "mpi" backends)
         slurm_nodes: Number of compute nodes.
-        slurm_cores_per_node: CPU cores per node.
+        slurm_cores_per_node: CPU cores per node (gnu backend).
         slurm_time: Time limit (HH:MM:SS).
         slurm_account: Account/allocation name.
         slurm_partition: Partition name.
-        slurm_burst_buffer: Burst buffer path pattern.
+        slurm_burst_buffer: Burst buffer path pattern (gnu backend).
         slurm_modules: Modules to load.
         slurm_conda_env: Conda environment to activate.
         slurm_constraint: Node constraint (e.g., "nvme").
+        slurm_final_output: Where to copy results after job completes.
+
+        # MPI-specific options (mpi backend only)
+        mpi_ntasks_per_node: MPI tasks per node (default 1).
+        mpi_merge: Gather results and write unified DataCard on rank 0.
+        mpi_merge_format: Output format for merged file (npz, hdf5, zarr).
     """
 
     backend: str = "local"
@@ -52,7 +58,7 @@ class ParallelConfig:
     style: str = "simple"
     distribution: str = "round_robin"
 
-    # SLURM options
+    # SLURM options (gnu + mpi)
     slurm_nodes: int = 4
     slurm_cores_per_node: int = 56
     slurm_time: str = "0:30:00"
@@ -64,7 +70,12 @@ class ParallelConfig:
     )
     slurm_conda_env: str = "conda-redi"
     slurm_constraint: Optional[str] = "nvme"
-    slurm_final_output: Optional[str] = None  # Where to copy results
+    slurm_final_output: Optional[str] = None
+
+    # MPI-specific options
+    mpi_ntasks_per_node: int = 1
+    mpi_merge: bool = True
+    mpi_merge_format: str = "npz"
 
     def __post_init__(self):
         if self.workers is None and self.backend == "local":

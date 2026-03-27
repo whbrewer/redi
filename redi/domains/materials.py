@@ -35,6 +35,50 @@ def get_ingest_steps():
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
     from ..pipeline.ingest import DetectFormat
 
+    class LoadOC22LMDB(PipelineStep):
+        """Load an OC22 LMDB shard (PyG Data objects serialised with pickle)."""
+
+        name = "load_oc22_lmdb"
+        stage = PipelineStage.INGEST
+        description = "Load OC22 structures from an LMDB shard"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "lmdb"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import lmdb
+                import pickle
+
+                path = ctx.input_path
+                env = lmdb.open(
+                    str(path), subdir=False, readonly=True, lock=False,
+                    meminit=False, map_size=int(1e12),
+                )
+                records = []
+                txn = env.begin()
+                cursor = txn.cursor()
+                cursor.first()
+                while True:
+                    records.append(pickle.loads(cursor.value()))
+                    if not cursor.next():
+                        break
+                txn.abort()
+                env.close()
+
+                ctx.data = records
+                ctx.metadata["n_structures_raw"] = len(records)
+                ctx.metadata["lmdb_shard"] = path.name
+                # OC22 is pre-split by directory — disable the train/val/test split step
+                ctx.config.setdefault("split", {})["enabled"] = False
+                logger.info(f"Loaded {len(records):,} structures from {path.name}")
+
+            except ImportError:
+                ctx.add_error(missing_dependency_error("lmdb", "materials"))
+            except Exception as e:
+                ctx.add_error(f"Error loading LMDB: {str(e)}")
+            return ctx
+
     class LoadMaterialsCSV(PipelineStep):
         """Load materials CSV with composition parsing"""
 
@@ -156,6 +200,51 @@ def get_preprocess_steps():
     """Get materials-specific preprocess steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
 
+    class PreprocessOC22Structures(PipelineStep):
+        """Drop OC22 structures with NaN energies/forces or zero atoms."""
+
+        name = "preprocess_oc22"
+        stage = PipelineStage.PREPROCESS
+        description = "Validate and filter OC22 structures"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "lmdb"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+
+                def _get(obj, key, default=None):
+                    try:
+                        return vars(obj).get(key, default)
+                    except TypeError:
+                        return getattr(obj, key, default)
+
+                valid, n_dropped = [], 0
+                for obj in ctx.data:
+                    try:
+                        energy = _get(obj, "y")
+                        natoms = _get(obj, "natoms")
+                        force  = _get(obj, "force")
+                        if energy is None or natoms is None or force is None:
+                            n_dropped += 1; continue
+                        if int(natoms) == 0 or not np.isfinite(float(energy)):
+                            n_dropped += 1; continue
+                        if not np.all(np.isfinite(np.array(force))):
+                            n_dropped += 1; continue
+                        valid.append(obj)
+                    except Exception:
+                        n_dropped += 1
+
+                ctx.data = valid
+                ctx.metadata["n_structures_valid"] = len(valid)
+                ctx.metadata["n_structures_dropped"] = n_dropped
+                logger.info(f"OC22 preprocess: {len(valid):,} valid, {n_dropped} dropped")
+
+            except Exception as e:
+                ctx.add_error(f"Error preprocessing OC22: {str(e)}")
+            return ctx
+
     class CleanMaterialsData(PipelineStep):
         """Clean materials data (remove invalid compositions, handle missing)"""
 
@@ -212,6 +301,64 @@ def get_preprocess_steps():
 def get_transform_steps():
     """Get materials-specific transform steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class NormalizeOC22(PipelineStep):
+        """
+        Normalise OC22 structures:
+          - Centre atomic positions (subtract centre of mass).
+          - Per-atom energy: E_atom = y / natoms.
+          - Z-score forces per structure.
+        Returns a list of normalised dicts ready for AssembleOC22Tensors.
+        """
+
+        name = "normalize_oc22"
+        stage = PipelineStage.TRANSFORM
+        description = "Normalise OC22 positions, energies, and forces"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "lmdb"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+
+                def _get(obj, key, default=None):
+                    try:
+                        return vars(obj).get(key, default)
+                    except TypeError:
+                        return getattr(obj, key, default)
+
+                out = []
+                for obj in ctx.data:
+                    pos    = np.array(_get(obj, "pos"),            dtype=np.float32)
+                    z      = np.array(_get(obj, "atomic_numbers"), dtype=np.int32)
+                    forces = np.array(_get(obj, "force"),          dtype=np.float32)
+                    energy = float(_get(obj, "y"))
+                    natoms = int(_get(obj, "natoms"))
+                    tags_r = _get(obj, "tags")
+                    tags   = np.array(tags_r, dtype=np.int32) if tags_r is not None else np.zeros(natoms, np.int32)
+
+                    pos_centred  = pos - pos.mean(axis=0)
+                    e_per_atom   = np.float32(energy / natoms)
+                    f_std        = forces.std()
+                    forces_norm  = (forces - forces.mean()) / (f_std + 1e-8)
+
+                    out.append({
+                        "atomic_numbers": z,
+                        "pos":            pos_centred,
+                        "forces":         forces_norm,
+                        "energy_per_atom": e_per_atom,
+                        "natoms":         natoms,
+                        "tags":           tags,
+                        "sid":            str(getattr(obj, "sid", "")),
+                    })
+
+                ctx.data = out
+                logger.info(f"OC22 normalised {len(out):,} structures")
+
+            except Exception as e:
+                ctx.add_error(f"Error normalising OC22: {str(e)}")
+            return ctx
 
     class FeaturizeCompositions(PipelineStep):
         """Generate composition-based features using matminer"""
@@ -331,6 +478,58 @@ def get_transform_steps():
 def get_structure_steps():
     """Get materials-specific structure steps"""
     from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+
+    class AssembleOC22Tensors(PipelineStep):
+        """
+        Assemble per-structure OC22 dicts into consolidated flat numpy arrays:
+          atomic_numbers [total_atoms], positions [total_atoms,3],
+          forces [total_atoms,3], energy_per_atom [N], natoms [N],
+          split_index [N]  (cumulative atom counts for un-batching).
+        """
+
+        name = "assemble_oc22"
+        stage = PipelineStage.STRUCTURE
+        description = "Assemble OC22 structures into flat numpy tensors"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "lmdb"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+
+                if not ctx.data:
+                    ctx.add_error("No OC22 structures to assemble")
+                    return ctx
+
+                flat_z, flat_pos, flat_f = [], [], []
+                energies, natoms_list = [], []
+
+                for r in ctx.data:
+                    flat_z.append(r["atomic_numbers"])
+                    flat_pos.append(r["pos"])
+                    flat_f.append(r["forces"])
+                    energies.append(r["energy_per_atom"])
+                    natoms_list.append(r["natoms"])
+
+                n_atoms_list = [int(n) for n in natoms_list]
+                tensors = {
+                    "atomic_numbers":  np.concatenate(flat_z),
+                    "positions":       np.concatenate(flat_pos, axis=0),
+                    "forces":          np.concatenate(flat_f, axis=0),
+                    "energy_per_atom": np.array(energies, dtype=np.float32),
+                    "natoms":          np.array(n_atoms_list, dtype=np.int32),
+                    "split_index":     np.cumsum([0] + n_atoms_list[:-1], dtype=np.int32),
+                }
+                ctx.data = tensors
+                ctx.metadata["n_structures"] = len(natoms_list)
+                ctx.metadata["n_atoms_total"] = int(tensors["atomic_numbers"].shape[0])
+                logger.info(f"OC22: assembled {len(natoms_list):,} structures, "
+                            f"{tensors['atomic_numbers'].shape[0]:,} atoms total")
+
+            except Exception as e:
+                ctx.add_error(f"Error assembling OC22 tensors: {str(e)}")
+            return ctx
 
     class CreateGraphFromStructure(PipelineStep):
         """Create graph representation of crystal structure"""
