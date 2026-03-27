@@ -19,10 +19,23 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# PMI/SLURM env vars that cause child processes linked against libmpi to try
+# to initialize MPI.  Strip them so `redi run` subprocesses stay serial.
+_PMI_VARS = {"PMI_FD", "PMI_RANK", "PMI_SIZE", "PMI_PORT",
+             "SLURM_MPI_TYPE", "SLURM_STEP_LAUNCHER_PORT"}
+_PMI_PREFIXES = ("PMI2_", "PMIX_", "OMPI_MCA_orte", "OMPI_MCA_plm")
+
+
+def _child_env() -> dict:
+    """Return os.environ minus any PMI/MPI init vars."""
+    return {k: v for k, v in os.environ.items()
+            if k not in _PMI_VARS and not any(k.startswith(p) for p in _PMI_PREFIXES)}
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,7 +130,7 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
     }
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=_child_env())
         if proc.returncode != 0:
             result["errors"].append(proc.stderr.strip() or f"redi exited {proc.returncode}")
             return result
