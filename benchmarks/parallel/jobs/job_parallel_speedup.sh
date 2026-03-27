@@ -28,10 +28,10 @@ echo "Cores:  $(nproc)"
 echo "Date:   $(date)"
 echo "================================================================"
 
-# ── ClimaX / TaiESM1 ────────────────────────────────────────────────
-# 17 NC files; sweep 1,2,4,8,16 workers
+# ── ClimaX / CMCC ───────────────────────────────────────────────────
+# 32 NC annual temperature files; sweep 1,2,4,8,16,32 workers
 echo ""
-echo "--- ClimaX ---"
+echo "--- ClimaX/CMCC ---"
 python "$REDI_ROOT/parallel/runners/run_climax_speedup.py" --sweep
 
 # ── XGC1 / ITER ─────────────────────────────────────────────────────
