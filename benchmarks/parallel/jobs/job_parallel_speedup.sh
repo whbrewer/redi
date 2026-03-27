@@ -46,6 +46,12 @@ echo ""
 echo "--- OpenFold ---"
 python "$REDI_ROOT/parallel/runners/run_openfold_speedup.py" --n-proteins 128 --sweep
 
+# ── OC22 / HydraGNN ─────────────────────────────────────────────────
+# 32 LMDB shards (~1.5 GiB each); sweep 1,2,4,8,16,32 workers
+echo ""
+echo "--- OC22/HydraGNN ---"
+python "$REDI_ROOT/parallel/runners/run_oc22_speedup.py" --n-shards 32 --sweep
+
 echo ""
 echo "================================================================"
 echo "All done in $(($SECONDS / 60)) minutes"

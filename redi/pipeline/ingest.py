@@ -63,6 +63,7 @@ class DetectFormat(PipelineStep):
         ".tfrecord": "tfrecord",
         ".adios": "adios",
         ".bp": "adios",
+        ".lmdb": "lmdb",
     }
 
     def _sniff_format(self, path: Path) -> str:
