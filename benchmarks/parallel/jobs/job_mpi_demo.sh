@@ -25,40 +25,27 @@ set -e
 
 source ~/venv/redi/bin/activate
 
-SUBMIT_DIR="$SLURM_SUBMIT_DIR"
-OUT_DIR="$SUBMIT_DIR/benchmarks/parallel/results/mpi_demo"
-FILELIST="$OUT_DIR/filelist.txt"
+NC_DIR="/lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/CMCC/raw/temperature"
+OUT_DIR="$SLURM_SUBMIT_DIR/benchmarks/parallel/results/mpi_demo"
 
 echo "================================================================"
 echo "REDI MPI Demo"
 echo "Node(s):  $(squeue -j $SLURM_JOB_ID -h -o '%N')"
 echo "Ranks:    $SLURM_NTASKS  ($SLURM_NNODES nodes x $SLURM_NTASKS_PER_NODE/node)"
 echo "Date:     $(date)"
+echo "Input:    $NC_DIR"
 echo "Output:   $OUT_DIR"
 echo "================================================================"
 
-# Build file list: first 16 ClimaX/CMCC annual temperature NC files
 mkdir -p "$OUT_DIR"
-python - <<'EOF'
-from pathlib import Path
-nc_dir = Path("/lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/CMCC/raw/temperature")
-files = sorted(nc_dir.glob("*.nc"))[:16]
-if not files:
-    raise SystemExit(f"No .nc files found in {nc_dir}")
-import os
-out = os.environ["FILELIST"]
-with open(out, "w") as f:
-    for p in files:
-        f.write(str(p) + "\n")
-print(f"File list: {len(files)} NC files → {out}")
-EOF
 
 echo ""
 echo "--- Launching mpi_runner across $SLURM_NTASKS ranks ---"
 
 srun python -m redi.parallel.mpi_runner \
-    --filelist  "$FILELIST"    \
+    --input     "$NC_DIR"      \
     --output    "$OUT_DIR"     \
+    --n-files   16             \
     --domain    climate        \
     --format    npz            \
     --shards    4              \

@@ -9,9 +9,12 @@ REDI pipeline. After processing, ranks communicate:
     metadata.json and datacard.json
 
 Usage:
-    srun python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out
-    srun python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out --shards 4
-    mpirun -n 8 python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out --merge
+    # Point at a directory (rank 0 discovers files):
+    srun python -m redi.parallel.mpi_runner --input /data/nc/ --output /path/out --domain climate --merge
+    srun python -m redi.parallel.mpi_runner --input /data/nc/ --output /path/out --n-files 16 --shards 4 --merge
+
+    # Use a pre-built file list (compatible with gnu backend):
+    srun python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out --merge
 """
 
 import argparse
@@ -24,10 +27,17 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="MPI-based REDI parallel runner")
-    p.add_argument("--filelist", required=True,
-                   help="Text file with one input path per line")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--filelist",
+                     help="Text file with one input path per line (used by gnu backend)")
+    src.add_argument("--input",
+                     help="Input directory or glob pattern (e.g. /data/nc/ or '/data/*.nc')")
     p.add_argument("--output", required=True,
                    help="Base output directory")
+    p.add_argument("--n-files", type=int, default=None, metavar="N",
+                   help="Limit to first N files when using --input (default: all)")
+    p.add_argument("--glob", default=None,
+                   help="Glob pattern when --input is a directory (default: auto by domain)")
     p.add_argument("--domain",
                    help="Domain override passed to redi run")
     p.add_argument("--format", dest="output_format", default="npz",
@@ -41,6 +51,42 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--style", default="simple",
                    help="redi output style: simple, rich, json (default: simple)")
     return p.parse_args()
+
+
+# Default glob patterns per domain (used when --input is a directory)
+_DOMAIN_GLOBS = {
+    "climate":      "*.nc",
+    "fusion":       "*.bp",
+    "materials":    "*.lmdb",
+    "life_sciences": "*",   # protein directories
+    "hpc":          "*.csv",
+    "geospatial":   "*.geojson",
+}
+
+
+def discover_files(args: argparse.Namespace) -> list:
+    """
+    Rank 0: return the list of input file paths from either --filelist or --input.
+    """
+    import glob as _glob
+
+    if args.filelist:
+        paths = [line.strip() for line in Path(args.filelist).read_text().splitlines()
+                 if line.strip()]
+        return paths
+
+    # --input: directory or glob pattern
+    input_path = Path(args.input)
+    if input_path.is_dir():
+        pattern = args.glob or _DOMAIN_GLOBS.get(args.domain or "", "*")
+        paths = sorted(str(p) for p in input_path.glob(pattern))
+    else:
+        paths = sorted(_glob.glob(str(args.input)))
+
+    if args.n_files:
+        paths = paths[: args.n_files]
+
+    return paths
 
 
 def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
@@ -272,15 +318,13 @@ def main():
 
     args = parse_args()
 
-    # ── Rank 0: read file list and broadcast ────────────────────────────
+    # ── Rank 0: discover files and broadcast ────────────────────────────
     if rank == 0:
-        filelist_path = Path(args.filelist)
-        if not filelist_path.exists():
-            print(f"Error: filelist not found: {filelist_path}", file=sys.stderr, flush=True)
+        all_files = discover_files(args)
+        if not all_files:
+            print(f"Error: no files found for input={args.input!r}", file=sys.stderr, flush=True)
             comm.Abort(1)
-        all_files = [line.strip() for line in filelist_path.read_text().splitlines()
-                     if line.strip()]
-        print(f"[rank 0] {len(all_files)} file(s) → {size} rank(s), "
+        print(f"[rank 0] {len(all_files)} file(s) discovered → {size} rank(s), "
               f"shards={args.shards}, merge={args.merge}", flush=True)
     else:
         all_files = None
