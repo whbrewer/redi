@@ -62,7 +62,7 @@ DOMAIN_TITLES = {
     "fusion":        "Fusion\n(XGC1, plasma timesteps)",
 }
 
-DOMAIN_ORDER = ["life_sciences", "materials", "climate", "fusion"]
+DOMAIN_ORDER = ["climate", "life_sciences", "materials", "fusion"]
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--results-dir", default="/lustre/orion/scratch/whbrewer/stf053/openfold_io_bench",
                         help="Directory containing per-domain result subdirs")
-    parser.add_argument("--out", default="benchmarks/results/io_benchmark.pdf",
+    parser.add_argument("--out", default="benchmarks/io/results/io_benchmark.png",
                         help="Output file (.pdf or .png)")
     args = parser.parse_args()
 
