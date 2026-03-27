@@ -72,6 +72,15 @@ hdf5 = [
     "h5py>=3.7.0",
 ]
 
+# MPI parallelism (mpi backend)
+# NOTE: On HPC systems (Frontier, Summit, etc.) mpi4py must be built against
+# the system MPI (e.g., Cray MPICH). In that case, install manually:
+#   MPICC=cc pip install --no-binary mpi4py mpi4py
+# rather than relying on this extra.
+mpi = [
+    "mpi4py>=3.1.0",
+]
+
 # Deep learning dependencies
 torch = [
     "torch>=1.12.0",
@@ -88,7 +97,7 @@ all-domains = [
 
 # Install everything
 all = [
-    "redi[all-domains,parquet,hdf5,torch-geometric]",
+    "redi[all-domains,parquet,hdf5,mpi,torch-geometric]",
 ]
 
 # Development dependencies
