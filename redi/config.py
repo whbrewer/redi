@@ -68,7 +68,7 @@ DEFAULTS: Dict[str, Any] = {
 
     'parallel': {
         'enabled': False,
-        'backend': 'local',  # local (GNU parallel) or slurm
+        'backend': 'local',  # local (GNU parallel, no SLURM), gnu (SLURM+GNU parallel), mpi (SLURM+mpi4py)
         'workers': None,  # None = auto-detect CPU count
         'batch_size': 4,  # Files per worker batch
         'distribution': 'round_robin',  # round_robin or balanced
@@ -83,6 +83,11 @@ DEFAULTS: Dict[str, Any] = {
             'constraint': 'nvme',
             'modules': ['miniforge3/23.11.0-0', 'parallel'],
             'conda_env': 'conda-redi',
+        },
+        'mpi': {
+            'ntasks_per_node': 1,
+            'merge': True,           # Gather results and write unified DataCard on rank 0
+            'merge_format': 'npz',   # Output format for merged file: npz, hdf5, zarr
         },
     },
 }
@@ -223,7 +228,7 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     parallel = config.get('parallel', {})
     if parallel.get('enabled'):
         # Validate backend
-        valid_backends = ['local', 'slurm']
+        valid_backends = ['local', 'gnu', 'mpi']
         if parallel.get('backend') not in valid_backends:
             issues.append(
                 f"Unknown parallel backend: {parallel.get('backend')}. "
@@ -252,8 +257,8 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
                 f"Invalid batch_size: {batch_size}. Must be a positive integer."
             )
 
-        # Validate SLURM config if using slurm backend
-        if parallel.get('backend') == 'slurm':
+        # Validate SLURM config if using a SLURM-based backend
+        if parallel.get('backend') in ('gnu', 'mpi'):
             slurm = parallel.get('slurm', {})
             if slurm.get('nodes') and (not isinstance(slurm['nodes'], int) or slurm['nodes'] < 1):
                 issues.append(f"Invalid slurm.nodes: {slurm['nodes']}. Must be positive integer.")
@@ -352,7 +357,7 @@ climax_output:
 # Parallel execution settings
 parallel:
   enabled: false             # Enable parallel processing across files
-  backend: local             # local (GNU parallel) or slurm (HPC cluster)
+  backend: local             # local (GNU parallel, no SLURM), gnu (SLURM+GNU parallel), mpi (SLURM+mpi4py)
   workers: null              # null = auto-detect cores, or integer
   batch_size: 4              # Files per worker batch
   distribution: round_robin  # round_robin or balanced (by file size)

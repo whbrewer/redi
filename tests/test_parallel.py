@@ -17,7 +17,7 @@ from redi.parallel import (
     ChunkStrategy,
     ChunkSpec,
 )
-from redi.parallel.backends import get_backend, LocalBackend, SlurmBackend
+from redi.parallel.backends import get_backend, LocalBackend, GnuBackend, MpiBackend
 from redi.parallel.chunking import TimeChunkStrategy, RowChunkStrategy, get_chunk_strategy
 
 
@@ -153,26 +153,34 @@ class TestParallelConfig:
         assert config.style == "simple"
         assert config.distribution == "round_robin"
 
-    def test_slurm_defaults(self):
-        """Test SLURM default configuration."""
-        config = ParallelConfig(backend="slurm")
+    def test_gnu_defaults(self):
+        """Test GNU backend default SLURM configuration."""
+        config = ParallelConfig(backend="gnu")
 
         assert config.slurm_nodes == 4
         assert config.slurm_cores_per_node == 56
         assert config.slurm_time == "0:30:00"
         assert config.slurm_partition == "batch"
 
+    def test_mpi_defaults(self):
+        """Test MPI backend default configuration."""
+        config = ParallelConfig(backend="mpi")
+
+        assert config.mpi_ntasks_per_node == 1
+        assert config.mpi_merge is True
+        assert config.mpi_merge_format == "npz"
+
     def test_custom_config(self):
         """Test custom configuration."""
         config = ParallelConfig(
-            backend="slurm",
+            backend="gnu",
             workers=8,
             batch_size=2,
             slurm_nodes=10,
             slurm_account="myaccount",
         )
 
-        assert config.backend == "slurm"
+        assert config.backend == "gnu"
         assert config.workers == 8
         assert config.batch_size == 2
         assert config.slurm_nodes == 10
@@ -275,20 +283,20 @@ class TestLocalBackend:
             mock_run.assert_called_once()
 
 
-class TestSlurmBackend:
-    """Tests for SlurmBackend."""
+class TestGnuBackend:
+    """Tests for GnuBackend (SLURM + GNU parallel)."""
 
     def test_generate_scripts(self):
-        """Test generating SLURM scripts."""
+        """Test generating SLURM + GNU parallel scripts."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ParallelConfig(
-                backend="slurm",
+                backend="gnu",
                 output_dir=tmpdir,
                 slurm_nodes=4,
                 slurm_account="testacct",
                 slurm_time="1:00:00",
             )
-            backend = SlurmBackend(config)
+            backend = GnuBackend(config)
 
             files = [Path(f"/data/file{i}.nc") for i in range(100)]
             script_dir = Path(tmpdir) / "slurm_scripts"
@@ -307,7 +315,7 @@ class TestSlurmBackend:
             assert "#SBATCH -N 4" in content
             assert "#SBATCH -t 1:00:00" in content
 
-            # Check driver script
+            # Check driver script uses GNU parallel
             driver_script = scripts["driver.sh"]
             driver_content = driver_script.read_text()
             assert "SLURM_NODEID" in driver_content
@@ -324,6 +332,49 @@ class TestSlurmBackend:
             assert len(lines) == 100
 
 
+class TestMpiBackend:
+    """Tests for MpiBackend (SLURM + mpi4py)."""
+
+    def test_generate_scripts(self):
+        """Test generating SLURM + mpi4py scripts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(
+                backend="mpi",
+                output_dir=tmpdir,
+                slurm_nodes=4,
+                slurm_account="testacct",
+                slurm_time="1:00:00",
+                mpi_ntasks_per_node=1,
+                mpi_merge=True,
+                mpi_merge_format="npz",
+            )
+            backend = MpiBackend(config)
+
+            files = [Path(f"/data/file{i}.nc") for i in range(100)]
+            script_dir = Path(tmpdir) / "mpi_scripts"
+
+            scripts = backend.generate_scripts(files, script_dir, config)
+
+            assert "multinodejob.sh" in scripts
+            assert "inputdatalist.txt" in scripts
+            # MPI backend does not generate driver.sh or payload.sh
+            assert "driver.sh" not in scripts
+
+            # Check job script uses srun + mpi_runner
+            job_script = scripts["multinodejob.sh"]
+            content = job_script.read_text()
+            assert "#SBATCH -A testacct" in content
+            assert "#SBATCH -N 4" in content
+            assert "srun" in content
+            assert "mpi_runner" in content
+            assert "--merge" in content
+
+            # Check file list
+            file_list = scripts["inputdatalist.txt"]
+            lines = file_list.read_text().strip().split("\n")
+            assert len(lines) == 100
+
+
 class TestBackendRegistry:
     """Tests for backend registry."""
 
@@ -333,11 +384,27 @@ class TestBackendRegistry:
         backend = get_backend("local", config)
         assert isinstance(backend, LocalBackend)
 
-    def test_get_slurm_backend(self):
-        """Test getting SLURM backend."""
-        config = ParallelConfig(backend="slurm")
-        backend = get_backend("slurm", config)
-        assert isinstance(backend, SlurmBackend)
+    def test_get_gnu_backend(self):
+        """Test getting GNU backend."""
+        config = ParallelConfig(backend="gnu")
+        backend = get_backend("gnu", config)
+        assert isinstance(backend, GnuBackend)
+
+    def test_get_mpi_backend(self):
+        """Test getting MPI backend."""
+        config = ParallelConfig(backend="mpi")
+        backend = get_backend("mpi", config)
+        assert isinstance(backend, MpiBackend)
+
+    def test_slurm_deprecated_alias(self):
+        """Test that 'slurm' still works as a deprecated alias for 'gnu'."""
+        import warnings
+        config = ParallelConfig()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            backend = get_backend("slurm", config)
+        assert isinstance(backend, GnuBackend)
+        assert any("deprecated" in str(warning.message).lower() for warning in w)
 
     def test_get_unknown_backend(self):
         """Test getting unknown backend raises error."""
@@ -450,6 +517,29 @@ class TestConfigIntegration:
                 "enabled": True,
                 "backend": "local",
                 "workers": 4,
+                "distribution": "round_robin",
+            }
+        }
+        issues = validate_config(config)
+        assert len(issues) == 0
+
+        # Valid gnu backend
+        config = {
+            "parallel": {
+                "enabled": True,
+                "backend": "gnu",
+                "workers": 4,
+                "distribution": "round_robin",
+            }
+        }
+        issues = validate_config(config)
+        assert len(issues) == 0
+
+        # Valid mpi backend
+        config = {
+            "parallel": {
+                "enabled": True,
+                "backend": "mpi",
                 "distribution": "round_robin",
             }
         }
