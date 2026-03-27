@@ -1,0 +1,38 @@
+=== REDI OC22 Benchmark  Mon Mar 23 23:45:43 EDT 2026 ===
+  Node:    andes141.olcf.ornl.gov
+  Job ID:  3245769
+
+OC22 / HydraGNN Stage Timing Benchmark
+  LMDB root: /lustre/orion/gen053/world-shared/HydraGNN/data/oc22/s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total
+  Split:     train  (41 shards)
+  Samples:   all
+
+  [ingest]  loading from LMDB …
+    loaded 8,225,334 structures  (6090.8s)
+  [preprocess]  validating structures …
+    preprocess: dropped 41 invalid structures
+    8,225,293 valid  (118.8s)
+  [transform]  normalising positions / energies / forces …
+    done  (1280.9s)
+  [structure]  assembling batch tensors …
+    656,545,105 atoms total  (59.1s)
+  [output]  saving NPZ …
+    /lustre/orion/stf053/scratch/whbrewer/redi_oc22_bench_output/oc22_redi_output.npz  (13964 MB)  (779.4s)
+
+Results → benchmarks/results/bench_oc22.json
+
+=================================================================
+OC22 TIMING SUMMARY  (8,225,293 structures, split=train)
+=================================================================
+  Stage                    s       %
+  ----------------  --------  ------
+  ingest              6090.8   73.1%
+  preprocess           118.8    1.4%
+  transform           1280.9   15.4%
+  structure             59.1    0.7%
+  output               779.4    9.4%
+  TOTAL               8329.0  100.0%
+
+  Throughput: 987.54 structs/s
+=================================================================
+=== Done  Tue Mar 24 02:05:30 EDT 2026 ===

@@ -1,0 +1,38 @@
+=== REDI ClimaX Benchmark  Mon Mar 23 23:45:43 EDT 2026 ===
+  Node:    andes24.olcf.ornl.gov
+  Job ID:  3245766
+
+ClimaX/TaiESM1 Stage Timing Benchmark
+  NC dir:    /lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/TaiESM1/raw/2m_temperature
+  Files:     5 × 10-year 2m_temperature chunks
+  Config:    /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/configs/bench_climax.yaml
+
+  [file 1] 2m_temperature_185001010000-186001010000_raw.nc  (1.7 GiB)
+    127.8s  ingest=8.4s  preprocess=22.5s  transform=3.4s  structure=1.6s  output=87.1s
+  [file 2] 2m_temperature_186001010600-187001010000_raw.nc  (1.7 GiB)
+    122.4s  ingest=5.5s  preprocess=22.1s  transform=3.4s  structure=0.9s  output=86.5s
+  [file 3] 2m_temperature_187001010600-188001010000_raw.nc  (1.7 GiB)
+    124.6s  ingest=8.0s  preprocess=21.2s  transform=3.4s  structure=0.9s  output=87.2s
+  [file 4] 2m_temperature_188001010600-189001010000_raw.nc  (1.7 GiB)
+    122.5s  ingest=6.0s  preprocess=21.2s  transform=3.4s  structure=0.9s  output=87.0s
+  [file 5] 2m_temperature_189001010600-190001010000_raw.nc  (1.7 GiB)
+    124.5s  ingest=8.1s  preprocess=21.2s  transform=3.4s  structure=0.9s  output=87.2s
+
+Results → benchmarks/results/bench_climax.json
+
+======================================================================
+CLIMAX TIMING SUMMARY  (5 TaiESM1 2m_temp files)
+======================================================================
+  Input:  8.6 GiB total
+  Stage                  s       %
+  --------------  --------  ------
+  ingest              36.0    5.8%
+  preprocess         108.3   17.4%
+  transform           17.1    2.8%
+  structure            5.1    0.8%
+  output             434.9   69.9%
+  TOTAL              621.8  100.0%
+
+  Throughput: 3,847,120 grid-pts/s
+======================================================================
+=== Done  Mon Mar 23 23:56:06 EDT 2026 ===
