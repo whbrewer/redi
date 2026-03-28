@@ -32,7 +32,7 @@ DOMAIN_META = {
         "color": "#2ca02c",   # green
         "marker": "o",
         "file": "speedup_climax.json",
-        "xlabel": "MPI Workers",
+        "xlabel": "Processes",
     },
     "xgc1": {
         "title": "Fusion\n(XGC1, 32 snapshots, 177 GiB)",
@@ -40,21 +40,21 @@ DOMAIN_META = {
         "marker": "s",
         "file": "speedup_xgc1.json",
         "weak_file": "speedup_xgc1_weak.json",
-        "xlabel": "Nodes (56 MPI ranks/node)",
+        "xlabel": "Nodes (56 processes/node)",
     },
     "openfold": {
         "title": "Life Sciences\n(OpenFold, 128 proteins)",
         "color": "#d62728",   # red
         "marker": "^",
         "file": "speedup_openfold.json",
-        "xlabel": "Workers",
+        "xlabel": "Threads",
     },
     "oc22": {
         "title": "Materials\n(OC22, 32 LMDB shards, 47 GiB)",
         "color": "#ff7f0e",   # orange
         "marker": "D",
         "file": "speedup_oc22.json",
-        "xlabel": "Workers",
+        "xlabel": "Threads",
     },
 }
 
@@ -193,10 +193,10 @@ def plot(data: dict, out_path: Path):
         ax.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.6)
         ax.grid(True, which="minor", linestyle=":",  linewidth=0.3, alpha=0.4)
 
-    fig.suptitle(
-        "REDI Parallel Speedup — Measured vs Ideal (efficiency annotated)",
-        fontsize=11, fontweight="bold", y=0.97,
-    )
+    #fig.suptitle(
+    #    "REDI Parallel Speedup — Measured vs Ideal (efficiency annotated)",
+    #    fontsize=11, fontweight="bold", y=0.97,
+    #)
 
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     print(f"Saved: {out_path}")

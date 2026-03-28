@@ -156,10 +156,10 @@ def plot(data: dict, out_path: Path):
         ax.legend(fontsize=7.5, loc="upper left", framealpha=0.85,
                   handlelength=1.8, borderpad=0.5)
 
-    fig.suptitle(
-        "REDI I/O Benchmark — Read Throughput vs DataLoader Workers",
-        fontsize=11, fontweight="bold", y=0.97,
-    )
+    #fig.suptitle(
+    #    "REDI I/O Benchmark — Read Throughput vs DataLoader Workers",
+    #    fontsize=11, fontweight="bold", y=0.97,
+    #)
 
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     print(f"Saved: {out_path}")
