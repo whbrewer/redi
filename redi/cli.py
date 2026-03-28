@@ -2716,6 +2716,32 @@ Examples::
                                help="Output style (default: rich)")
     assess_parser.add_argument("-c", "--config", help="YAML config file (supports multi-file comparison)")
 
+    # --- install ---
+    install_parser = subparsers.add_parser(
+        'install',
+        help='Install a REDI plugin from a URL, local path, or PyPI package',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples::
+
+  redi install git+https://github.com/org/redi-xgc1
+  redi install ./redi-xgc1            # local directory
+  redi install redi-xgc1==1.0.0       # PyPI package
+  redi install ./plugin.tar.gz --upgrade
+        """
+    )
+    install_parser.add_argument("target", help="pip-compatible install target")
+    install_parser.add_argument("--upgrade", action="store_true",
+                                help="Upgrade if already installed")
+
+    # --- plugins ---
+    plugins_parser = subparsers.add_parser(
+        'plugins',
+        help='List installed REDI plugins',
+    )
+    plugins_parser.add_argument("--json", action="store_true",
+                                help="Output as JSON")
+
     return parser
 
 
@@ -2753,6 +2779,10 @@ def main():
         _handle_validate_command(args)
     elif args.command == 'assess':
         _handle_assess_command(args)
+    elif args.command == 'install':
+        _handle_install_command(args)
+    elif args.command == 'plugins':
+        _handle_plugins_command(args)
     else:
         parser.print_help()
 
@@ -3709,6 +3739,65 @@ def _generate_validation_markdown(result, elapsed: float) -> str:
 
     lines.append(f"*Elapsed: {elapsed:.1f}s*")
     return "\n".join(lines) + "\n"
+
+
+def _handle_install_command(args):
+    """Handle the 'install' subcommand."""
+    from .plugins import install, reload_registry
+
+    pip_args = ["--upgrade"] if args.upgrade else []
+
+    print(f"{Colors.BOLD}Installing plugin:{Colors.END} {args.target}")
+    rc = install(args.target, pip_args=pip_args)
+
+    if rc != 0:
+        print(f"{Colors.RED}Installation failed (pip exit code {rc}).{Colors.END}")
+        sys.exit(rc)
+
+    print(f"\n{Colors.GREEN}Installation successful.{Colors.END}")
+
+    # Show newly available plugins
+    plugins = reload_registry()
+    if plugins:
+        print(f"\n{Colors.BOLD}Installed REDI plugins:{Colors.END}")
+        for p in plugins.values():
+            print(f"  {Colors.CYAN}{p.domain}{Colors.END}  {p.version}  — {p.description}")
+    else:
+        print(f"\n{Colors.DIM}No redi.plugins entry points found in the installed package.{Colors.END}")
+        print(f"{Colors.DIM}Make sure the package declares [project.entry-points.\"redi.plugins\"] in its pyproject.toml.{Colors.END}")
+
+
+def _handle_plugins_command(args):
+    """Handle the 'plugins' subcommand."""
+    from .plugins import list_plugins
+    import json as _json
+
+    plugins = list_plugins()
+
+    if getattr(args, "json", False):
+        data = [
+            {"name": p.name, "domain": p.domain,
+             "version": p.version, "description": p.description}
+            for p in plugins
+        ]
+        print(_json.dumps(data, indent=2))
+        return
+
+    if not plugins:
+        print(f"{Colors.DIM}No REDI plugins installed.{Colors.END}")
+        print(f"\nInstall a plugin with:  {Colors.CYAN}redi install <url|path|package>{Colors.END}")
+        return
+
+    print(f"{Colors.BOLD}Installed REDI plugins:{Colors.END}\n")
+    for p in plugins:
+        print(f"  {Colors.CYAN}{Colors.BOLD}{p.domain}{Colors.END}  "
+              f"{Colors.DIM}v{p.version}{Colors.END}")
+        if p.description:
+            print(f"    {p.description}")
+        steps = p.get_full_pipeline()
+        if steps:
+            print(f"    {Colors.DIM}{len(steps)} pipeline steps{Colors.END}")
+        print()
 
 
 if __name__ == "__main__":

@@ -132,6 +132,16 @@ include = ["redi*"]
 [tool.setuptools.package-data]
 redi = ["*.md"]
 
+# Plugin authors: register your plugin under this entry point group.
+# In your plugin's pyproject.toml:
+#
+#   [project.entry-points."redi.plugins"]
+#   xgc1 = "redi_xgc1"
+#
+# Then install with: redi install git+https://github.com/org/redi-xgc1
+[project.entry-points."redi.plugins"]
+# (no built-in plugins — this section exists so the group is documented)
+
 [tool.black]
 line-length = 100
 target-version = ["py39", "py310", "py311", "py312"]

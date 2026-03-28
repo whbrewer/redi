@@ -131,3 +131,26 @@ def get_domain_pipeline(domain: Domain):
     }
 
     return domain_modules.get(domain)
+
+
+def get_domain_pipeline_by_name(domain_name: str):
+    """
+    Get pipeline for a domain specified by string name.
+
+    Checks installed plugins first, then falls back to built-in domains.
+    This allows plugin domains (e.g. "xgc1") that are not in the Domain enum.
+    """
+    from ..plugins import get_plugin
+
+    # Plugins take priority — they can override or extend built-in domains
+    plugin = get_plugin(domain_name)
+    if plugin is not None:
+        return plugin
+
+    # Fall back to built-in domains
+    domain_map = {d.value: d for d in Domain}
+    domain = domain_map.get(domain_name)
+    if domain is not None:
+        return get_domain_pipeline(domain)
+
+    return None
