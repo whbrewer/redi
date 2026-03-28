@@ -619,8 +619,12 @@ def load_ground_truth(path: str, fmt: Optional[str] = None, variable: Optional[s
             import torch
         except ImportError as exc:
             raise ImportError("torch is required to load .pt files") from exc
-        payload = torch.load(path, weights_only=False)
-        if isinstance(payload, dict) and "X" in payload:
+        payload = torch.load(path, weights_only=False, map_location="cpu")
+        # PyTorch Geometric Data object — extract named attribute (default: "x")
+        if hasattr(payload, "x") and isinstance(payload.x, torch.Tensor):
+            attr = variable if variable is not None else "x"
+            tensor = getattr(payload, attr, payload.x)
+        elif isinstance(payload, dict) and "X" in payload:
             tensor = payload["X"]
         elif isinstance(payload, torch.Tensor):
             tensor = payload
