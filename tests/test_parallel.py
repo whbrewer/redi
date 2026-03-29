@@ -494,6 +494,290 @@ class TestChunking:
             get_chunk_strategy("unknown")
 
 
+class TestParallelConfigAutoWorkers:
+    """Tests for auto-derived worker counts in ParallelConfig."""
+
+    def test_local_auto_workers(self):
+        """Local backend auto-detects CPU count."""
+        config = ParallelConfig(backend="local")
+        assert config.workers is not None
+        assert config.workers > 0
+
+    def test_mpi_auto_workers(self):
+        """MPI backend derives workers from slurm_nodes * mpi_ntasks_per_node."""
+        config = ParallelConfig(backend="mpi", slurm_nodes=4, mpi_ntasks_per_node=2)
+        assert config.workers == 8
+
+    def test_gnu_auto_workers(self):
+        """GNU backend derives workers from slurm_nodes."""
+        config = ParallelConfig(backend="gnu", slurm_nodes=6)
+        assert config.workers == 6
+
+    def test_explicit_workers_not_overridden(self):
+        """Explicit workers value is never overridden."""
+        config = ParallelConfig(backend="mpi", workers=3, slurm_nodes=10)
+        assert config.workers == 3
+
+
+class TestMpiRunner:
+    """Tests for mpi_runner module functions (no actual MPI required)."""
+
+    def test_discover_files_from_directory(self):
+        """discover_files finds files matching domain glob in a directory."""
+        import argparse
+        from redi.parallel.mpi_runner import discover_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i in range(4):
+                (Path(tmpdir) / f"data{i}.nc").write_text("")
+            (Path(tmpdir) / "README.txt").write_text("")
+
+            args = argparse.Namespace(
+                filelist=None,
+                input=tmpdir,
+                domain="climate",
+                glob=None,
+                n_files=None,
+            )
+            files = discover_files(args)
+
+        assert len(files) == 4
+        assert all(f.endswith(".nc") for f in files)
+
+    def test_discover_files_n_files_limit(self):
+        """discover_files respects --n-files limit."""
+        import argparse
+        from redi.parallel.mpi_runner import discover_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i in range(10):
+                (Path(tmpdir) / f"data{i}.nc").write_text("")
+
+            args = argparse.Namespace(
+                filelist=None,
+                input=tmpdir,
+                domain="climate",
+                glob=None,
+                n_files=3,
+            )
+            files = discover_files(args)
+
+        assert len(files) == 3
+
+    def test_discover_files_from_filelist(self):
+        """discover_files reads paths from a filelist."""
+        import argparse
+        from redi.parallel.mpi_runner import discover_files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filelist = Path(tmpdir) / "files.txt"
+            filelist.write_text("/data/a.nc\n/data/b.nc\n\n/data/c.nc\n")
+
+            args = argparse.Namespace(filelist=str(filelist), input=None, n_files=None)
+            files = discover_files(args)
+
+        assert files == ["/data/a.nc", "/data/b.nc", "/data/c.nc"]
+
+    def test_merge_npz_shards(self):
+        """merge_npz_shards concatenates NPZ files into N shards."""
+        import numpy as np
+        from redi.parallel.mpi_runner import merge_npz_shards
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            for i in range(2):
+                np.savez(tmpdir / f"file{i}.npz", x=np.arange(10), y=np.ones(10) * i)
+            results = [
+                {"errors": [], "npz_files": [str(tmpdir / "file0.npz")]},
+                {"errors": [], "npz_files": [str(tmpdir / "file1.npz")]},
+            ]
+            shard_paths = merge_npz_shards(results, tmpdir, n_shards=1)
+            assert len(shard_paths) == 1
+            assert len(np.load(shard_paths[0])["x"]) == 20
+
+    def test_merge_npz_shards_multiple(self):
+        """merge_npz_shards splits into multiple shards."""
+        import numpy as np
+        from redi.parallel.mpi_runner import merge_npz_shards
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            np.savez(tmpdir / "file0.npz", x=np.arange(100))
+            results = [{"errors": [], "npz_files": [str(tmpdir / "file0.npz")]}]
+            shard_paths = merge_npz_shards(results, tmpdir, n_shards=4)
+            assert len(shard_paths) == 4
+            assert sum(len(np.load(p)["x"]) for p in shard_paths) == 100
+
+    def test_merge_npz_skips_errors(self):
+        """merge_npz_shards ignores results with errors."""
+        import numpy as np
+        from redi.parallel.mpi_runner import merge_npz_shards
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            np.savez(tmpdir / "good.npz", x=np.arange(5))
+            results = [
+                {"errors": ["something failed"], "npz_files": []},
+                {"errors": [], "npz_files": [str(tmpdir / "good.npz")]},
+            ]
+            shard_paths = merge_npz_shards(results, tmpdir, n_shards=1)
+            assert len(np.load(shard_paths[0])["x"]) == 5
+
+    @patch("redi.parallel.mpi_runner.subprocess.run")
+    def test_process_file_success(self, mock_run):
+        """process_file returns correct result on success."""
+        import argparse
+        from redi.parallel.mpi_runner import process_file
+
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                output=tmpdir,
+                domain="climate",
+                stages=None,
+                output_format="npz",
+                style="simple",
+                provenance=False,
+            )
+            result = process_file("/data/file.nc", args, rank=0)
+
+        assert result["input"] == "/data/file.nc"
+        assert result["rank"] == 0
+        assert result["errors"] == []
+
+    @patch("redi.parallel.mpi_runner.subprocess.run")
+    def test_process_file_failure(self, mock_run):
+        """process_file captures stderr on non-zero exit."""
+        import argparse
+        from redi.parallel.mpi_runner import process_file
+
+        mock_run.return_value = MagicMock(returncode=1, stderr="pipeline failed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                output=tmpdir,
+                domain=None,
+                stages=None,
+                output_format="npz",
+                style="simple",
+                provenance=False,
+            )
+            result = process_file("/data/missing.nc", args, rank=1)
+
+        assert len(result["errors"]) == 1
+        assert "pipeline failed" in result["errors"][0]
+
+    @patch("redi.parallel.mpi_runner.subprocess.run")
+    def test_process_file_provenance_flag(self, mock_run):
+        """process_file passes --provenance to subprocess when enabled."""
+        import argparse
+        from redi.parallel.mpi_runner import process_file
+
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = argparse.Namespace(
+                output=tmpdir,
+                domain="climate",
+                stages=None,
+                output_format="npz",
+                style="simple",
+                provenance=True,
+            )
+            process_file("/data/file.nc", args, rank=0)
+
+        cmd = mock_run.call_args[0][0]
+        assert "--provenance" in cmd
+
+
+class TestProvenanceMerge:
+    """Tests for merge_flowcept_buffers and aggregate_parallel_timings."""
+
+    def _write_buffer(self, path: Path, records: list) -> None:
+        import json
+        with open(path, "w") as f:
+            for r in records:
+                f.write(json.dumps(r) + "\n")
+
+    def test_merge_flowcept_buffers(self):
+        """Concatenates multiple JSONL files into one."""
+        from redi.provenance_card import merge_flowcept_buffers
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            b1 = tmpdir / "b1.jsonl"
+            b2 = tmpdir / "b2.jsonl"
+            self._write_buffer(b1, [{"task_id": "a"}, {"task_id": "b"}])
+            self._write_buffer(b2, [{"task_id": "c"}])
+            out = tmpdir / "merged.jsonl"
+            n = merge_flowcept_buffers([b1, b2], out)
+            assert n == 3
+            assert len(out.read_text().strip().splitlines()) == 3
+
+    def test_merge_skips_missing(self):
+        """merge_flowcept_buffers skips non-existent paths."""
+        from redi.provenance_card import merge_flowcept_buffers
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            b1 = tmpdir / "exists.jsonl"
+            self._write_buffer(b1, [{"task_id": "x"}])
+            out = tmpdir / "merged.jsonl"
+            n = merge_flowcept_buffers([b1, tmpdir / "missing.jsonl"], out)
+            assert n == 1
+
+    def test_aggregate_timings(self):
+        """aggregate_parallel_timings computes wall/compute/per-stage correctly."""
+        from redi.provenance_card import aggregate_parallel_timings
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            buf = Path(tmpdir) / "buf.jsonl"
+            self._write_buffer(buf, [
+                {"tags": ["ingest"],     "started_at": 0.0,  "ended_at": 2.0},
+                {"tags": ["ingest"],     "started_at": 1.0,  "ended_at": 4.0},
+                {"tags": ["preprocess"], "started_at": 4.0,  "ended_at": 9.0},
+                {"tags": ["preprocess"], "started_at": 5.0,  "ended_at": 8.0},
+            ])
+            result = aggregate_parallel_timings(buf)
+
+        assert result["wall_time_s"] == pytest.approx(9.0)   # max(end) - min(start)
+        assert result["total_compute_s"] == pytest.approx(2.0 + 3.0 + 5.0 + 3.0)
+        assert result["n_tasks"] == 4
+        assert "ingest" in result["per_stage"]
+        assert "preprocess" in result["per_stage"]
+        assert result["per_stage"]["ingest"]["count"] == 2
+        assert result["per_stage"]["ingest"]["max_s"] == pytest.approx(3.0)
+        assert result["per_stage"]["preprocess"]["mean_s"] == pytest.approx(4.0)
+
+    def test_aggregate_empty_buffer(self):
+        """aggregate_parallel_timings handles empty file gracefully."""
+        from redi.provenance_card import aggregate_parallel_timings
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            buf = Path(tmpdir) / "empty.jsonl"
+            buf.write_text("")
+            result = aggregate_parallel_timings(buf)
+
+        assert result["wall_time_s"] == 0.0
+        assert result["n_tasks"] == 0
+
+    def test_aggregate_skips_incomplete_records(self):
+        """Records missing started_at or ended_at are skipped."""
+        from redi.provenance_card import aggregate_parallel_timings
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            buf = Path(tmpdir) / "buf.jsonl"
+            self._write_buffer(buf, [
+                {"tags": ["ingest"], "started_at": 0.0, "ended_at": 5.0},
+                {"tags": ["ingest"], "started_at": 1.0},          # missing ended_at
+                {"tags": ["ingest"]},                              # missing both
+            ])
+            result = aggregate_parallel_timings(buf)
+
+        assert result["n_tasks"] == 1
+
+
 class TestConfigIntegration:
     """Tests for config.py parallel integration."""
 
