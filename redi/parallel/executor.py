@@ -69,7 +69,7 @@ class ParallelConfig:
         default_factory=lambda: ["miniforge3/23.11.0-0", "parallel"]
     )
     slurm_conda_env: str = "conda-redi"
-    slurm_constraint: Optional[str] = "nvme"
+    slurm_constraint: Optional[str] = None
     slurm_final_output: Optional[str] = None
 
     # MPI-specific options
