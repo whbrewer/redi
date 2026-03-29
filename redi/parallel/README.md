@@ -1,6 +1,6 @@
 # REDI Parallel Execution
 
-This module enables parallel processing of multiple files across CPU cores and HPC cluster nodes using GNU parallel.
+This module enables parallel processing of multiple files across CPU cores and HPC cluster nodes.
 
 ## Overview
 
@@ -8,12 +8,22 @@ REDI supports two types of parallelism:
 
 | Type | Description | Status |
 |------|-------------|--------|
-| **Type 1** | Multiple files distributed across workers/nodes | ✅ Implemented |
-| **Type 2** | Single large file chunked across workers | 🔮 Future |
+| **Type 1** | Multiple files distributed across workers/nodes | Implemented |
+| **Type 2** | Single large file chunked across workers | Future |
+
+Three backends are available:
+
+| Backend | Description | Use Case |
+|---------|-------------|----------|
+| `local` | GNU parallel on a single machine | Workstation / login node |
+| `gnu` | SLURM + GNU parallel across nodes | HPC, no inter-rank communication needed |
+| `mpi` | SLURM + mpi4py across nodes | HPC, unified output with allreduce/gather |
+
+> **Note:** `--backend slurm` is a deprecated alias for `--backend gnu`.
 
 ## Requirements
 
-### Local Execution
+### Local Backend
 
 **GNU Parallel** must be installed:
 
@@ -28,16 +38,12 @@ brew install parallel
 sudo yum install parallel
 ```
 
-Verify installation:
-```bash
-parallel --version
-```
-
-### HPC/SLURM Execution
+### GNU / MPI Backends (HPC)
 
 - SLURM workload manager
-- GNU parallel module (typically `module load parallel`)
-- Conda environment with REDI installed
+- GNU parallel module for the `gnu` backend (`module load parallel`)
+- `mpi4py` for the `mpi` backend: `pip install mpi4py`
+- Python environment with REDI installed on all nodes
 
 ## Quick Start
 
@@ -54,38 +60,48 @@ redi run data/*.nc --parallel --workers 4
 redi run data/*.nc --parallel --distribution balanced
 ```
 
-#### Example: CMIP6 TaiESM1 2m temperature (17 files, 4 workers)
+### MPI Runner (Recommended for HPC)
+
+The MPI runner is the primary interface for multi-node parallel execution. Launch it directly with `srun`:
 
 ```bash
-redi run /path/to/CMIP6/TaiESM1/raw/2m_temperature/*.nc \
-  --parallel --domain climate --workers 4 \
-  -o ./output/taiesm1_2m_temperature
+# Point at a directory — rank 0 discovers files, all ranks process in parallel
+srun python -m redi.parallel.mpi_runner \
+    --input /data/nc/ --output /path/to/output --domain climate --merge
+
+# Limit to first N files
+srun python -m redi.parallel.mpi_runner \
+    --input /data/nc/ --output /path/out --n-files 16 --shards 4 --merge
+
+# Use a pre-built file list
+srun python -m redi.parallel.mpi_runner \
+    --filelist files.txt --output /path/out --merge
 ```
 
-Output — one directory per file:
-```
-output/taiesm1_2m_temperature/
-├── 2m_temperature_185001010000-186001010000_raw.out/
-│   ├── train.npz
-│   ├── val.npz
-│   ├── test.npz
-│   └── DATA_CARD.md
-├── 2m_temperature_186001010600-187001010000_raw.out/
-│   └── ...
-└── ... (17 directories total)
-```
+After processing, rank 0:
+- Aggregates global statistics via `allreduce`
+- Gathers per-file results via `gather`
+- Merges per-file NPZ outputs into N shard files (if `--merge`)
+- Writes `metadata.json` and `datacard.json`
 
-### SLURM Cluster Processing
+### MPI Backend via CLI (generates SLURM scripts)
 
 ```bash
-# Generate SLURM scripts without submitting
-redi run data/*.nc --parallel --backend slurm --slurm-account myacct --generate-only
+# Generate SLURM scripts and submit
+redi run data/*.nc --parallel --backend mpi --slurm-account myacct
 
-# Generate and submit job
-redi run data/*.nc --parallel --backend slurm --slurm-account myacct
+# Generate scripts only (review before submitting)
+redi run data/*.nc --parallel --backend mpi --slurm-account myacct --generate-only
+```
 
-# Full SLURM configuration
-redi run data/*.nc --parallel --backend slurm \
+### GNU Backend via CLI
+
+```bash
+# Generate SLURM scripts and submit (GNU parallel across nodes)
+redi run data/*.nc --parallel --backend gnu --slurm-account myacct
+
+# Full configuration
+redi run data/*.nc --parallel --backend gnu \
     --slurm-account myacct \
     --slurm-nodes 4 \
     --slurm-cores 56 \
@@ -102,21 +118,37 @@ redi run data/*.nc --parallel --backend slurm \
 |--------|---------|-------------|
 | `-p, --parallel` | - | Enable parallel execution |
 | `-w, --workers` | auto | Number of parallel workers |
-| `--backend` | local | Backend: `local` or `slurm` |
+| `--backend` | local | Backend: `local`, `gnu`, or `mpi` |
 | `--batch-size` | 4 | Files per worker batch |
 | `--distribution` | round_robin | Distribution: `round_robin` or `balanced` |
 | `--generate-only` | - | Generate scripts without executing |
 
-### SLURM Options
+### SLURM Options (gnu and mpi backends)
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--slurm-nodes` | 4 | Number of compute nodes |
-| `--slurm-cores` | 56 | CPU cores per node |
+| `--slurm-cores` | 56 | CPU cores per node (gnu backend) |
 | `--slurm-time` | 0:30:00 | Time limit (HH:MM:SS) |
 | `--slurm-account` | - | SLURM account/allocation |
 | `--slurm-partition` | batch | SLURM partition |
 | `--slurm-output` | - | Final output directory |
+
+### MPI Runner Options (`python -m redi.parallel.mpi_runner`)
+
+| Option | Description |
+|--------|-------------|
+| `--input DIR` | Input directory or glob pattern (mutually exclusive with `--filelist`) |
+| `--filelist FILE` | Text file with one input path per line |
+| `--output DIR` | Base output directory (required) |
+| `--domain DOMAIN` | Domain override passed to `redi run` |
+| `--format FORMAT` | Output format: `npz`, `hdf5`, `zarr` (default: `npz`) |
+| `--stages STAGES` | Comma-separated pipeline stages |
+| `--n-files N` | Limit to first N files when using `--input` |
+| `--glob PATTERN` | Glob pattern when `--input` is a directory |
+| `--merge` | Gather per-rank results on rank 0 and write unified outputs |
+| `--shards N` | Number of output shard files to write (default: 1) |
+| `--style STYLE` | redi output style: `simple`, `rich`, `json` (default: `simple`) |
 
 ## YAML Configuration
 
@@ -128,7 +160,7 @@ domain: climate
 
 parallel:
   enabled: true
-  backend: local           # local | slurm
+  backend: mpi             # local | gnu | mpi
   workers: auto            # auto | integer
   batch_size: 4
   distribution: round_robin  # round_robin | balanced
@@ -139,7 +171,6 @@ parallel:
     time_limit: "0:30:00"
     account: "myacct"
     partition: batch
-    burst_buffer: "/mnt/bb/$USER"
     final_output: "/lustre/project/results"
     constraint: nvme
     modules:
@@ -148,16 +179,11 @@ parallel:
     conda_env: conda-redi
 ```
 
-Run with:
-```bash
-redi pipeline.yaml
-```
-
 ## Distribution Strategies
 
 ### Round Robin (default)
 
-Files are distributed cyclically across workers, matching the AWK modulo approach:
+Files are distributed cyclically across workers:
 
 ```
 Worker 0: files 0, 3, 6, 9, ...
@@ -178,27 +204,43 @@ Worker 1: medium1.nc, medium2.nc          (total: ~500MB)
 
 Best for: Files with varying sizes.
 
-## Generated SLURM Scripts
+## Generated Scripts
 
-When using `--backend slurm --generate-only`, four files are created:
+### MPI Backend
+
+When using `--backend mpi`, two files are created in `<output>/mpi_scripts/`:
+
+```
+mpi_scripts/
+├── multinodejob.sh     # SLURM batch script (uses srun to launch mpi_runner)
+└── inputdatalist.txt   # Flat file list consumed by mpi_runner rank 0
+```
+
+Submit manually:
+```bash
+cd output/mpi_scripts
+sbatch multinodejob.sh
+```
+
+### GNU Backend
+
+When using `--backend gnu`, four files are created in `<output>/parallel_scripts/`:
 
 ```
 parallel_scripts/
 ├── multinodejob.sh     # SLURM batch submission script
-├── driver.sh           # Per-node work distributor
+├── driver.sh           # Per-node work distributor (AWK + GNU parallel)
 ├── payload.sh          # Single job executor
 └── inputdatalist.txt   # List of input files
 ```
 
-### Submit manually:
-
+Submit manually:
 ```bash
 cd output/parallel_scripts
 sbatch multinodejob.sh
 ```
 
-### Monitor job:
-
+Monitor:
 ```bash
 squeue -u $USER
 tail -f redi-parallel-*.out
@@ -209,14 +251,16 @@ tail -f redi-parallel-*.out
 ```
 redi/parallel/
 ├── __init__.py           # Exports: ParallelExecutor, FileDistributor, etc.
-├── executor.py           # Main ParallelExecutor class
+├── executor.py           # ParallelExecutor, ParallelConfig, ParallelResult
 ├── distribution.py       # File distribution strategies
+├── mpi_runner.py         # MPI entry point (python -m redi.parallel.mpi_runner)
 ├── chunking.py           # Type 2 chunking interface (future)
 ├── backends/
-│   ├── __init__.py       # Backend registry
+│   ├── __init__.py       # Backend registry (local, gnu, mpi)
 │   ├── base.py           # Abstract ParallelBackend
-│   ├── local.py          # LocalBackend (GNU parallel)
-│   └── slurm.py          # SlurmBackend (script generation)
+│   ├── local.py          # LocalBackend (GNU parallel, single machine)
+│   ├── gnu.py            # GnuBackend (SLURM + GNU parallel across nodes)
+│   └── mpi.py            # MpiBackend (SLURM + mpi4py)
 └── README.md             # This file
 ```
 
@@ -238,13 +282,8 @@ result = executor.execute([Path("file1.nc"), Path("file2.nc")])
 ```python
 from redi.parallel import FileDistributor
 
-# Round-robin across 4 workers
 batches = FileDistributor.round_robin(files, num_workers=4)
-
-# Balance by file size
 batches = FileDistributor.balanced(files, num_workers=4)
-
-# Fixed-size batches
 batches = FileDistributor.batched(files, batch_size=4)
 ```
 
@@ -257,7 +296,32 @@ print(f"Failed: {result.failed}")
 print(f"Errors: {result.errors}")
 ```
 
-## Multi-Node Execution Flow
+## Execution Flow
+
+### MPI Backend
+
+```
+SLURM Job (multinodejob.sh)
+    │
+    ▼
+srun python -m redi.parallel.mpi_runner --filelist ... --merge
+    │
+    ├── Rank 0: discovers/broadcasts file list
+    │
+    ├── All ranks: round-robin file assignment (rank i processes files i, i+size, ...)
+    │       │
+    │       ▼
+    │   redi run <file> -o per_rank/rankNNNN/<stem>/  (subprocess, no MPI init)
+    │
+    ├── All ranks: allreduce → global sample counts, success/failure totals
+    │
+    └── Rank 0 (--merge):
+            gather() ← per-rank results
+            merge per-file NPZ → shard_NNNN.npz
+            write metadata.json + datacard.json
+```
+
+### GNU Backend
 
 ```
 SLURM Job (multinodejob.sh)
@@ -266,26 +330,15 @@ SLURM Job (multinodejob.sh)
 srun launches 1 task per node
     │
     ├── Node 0: driver.sh
-    │       │
-    │       ▼
-    │   AWK: NR % 4 == 0 (selects files 0, 4, 8, ...)
-    │       │
-    │       ▼
-    │   parallel -j56 payload.sh (56 concurrent jobs)
-    │       │
-    │       ▼
-    │   redi --style=simple file1.nc file2.nc ... -o /mnt/bb/
+    │       AWK: NR % 4 == 0  → files 0, 4, 8, ...
+    │       parallel -j56 payload.sh
+    │       redi run <files> -o /mnt/bb/
     │
     ├── Node 1: driver.sh
-    │       │
-    │       ▼
-    │   AWK: NR % 4 == 1 (selects files 1, 5, 9, ...)
+    │       AWK: NR % 4 == 1  → files 1, 5, 9, ...
     │       ...
     │
-    └── (Nodes 2, 3 similar)
-
-    ▼
-Results copied to final output directory
+    └── Results copied to final output directory
 ```
 
 ## Type 2 Parallelism (Future)
@@ -299,40 +352,41 @@ class TimeChunkStrategy(ChunkStrategy):
     """Split NetCDF by time dimension."""
 
     def chunk(self, file_path: Path, num_chunks: int) -> List[ChunkSpec]:
-        # Future: Use xarray to split by time
-        pass
+        pass  # Future: split by time via xarray
 
     def merge(self, chunk_results: List[Path], output_path: Path) -> Path:
-        # Future: Concatenate results along time dimension
-        pass
+        pass  # Future: concatenate along time dimension
 ```
 
-Planned chunking strategies:
-- **TimeChunkStrategy**: Split NetCDF/Zarr by time dimension
-- **RowChunkStrategy**: Split tabular data (CSV, Parquet) by row ranges
-- **SpatialChunkStrategy**: Split gridded data by lat/lon regions
+Planned strategies: `TimeChunkStrategy`, `RowChunkStrategy`, `SpatialChunkStrategy`.
 
 ## Performance Tips
 
-1. **Batch size**: Set `--batch-size` to balance overhead vs. parallelism
-   - Small files: Use larger batch size (8-16)
-   - Large files: Use smaller batch size (1-4)
+1. **MPI vs GNU**: Use `mpi` when you need a unified merged output (single `datacard.json`, merged NPZ shards). Use `gnu` when outputs can remain per-file and you don't need inter-rank communication.
 
-2. **Distribution**: Use `--distribution balanced` when file sizes vary significantly
+2. **Batch size**: Set `--batch-size` to balance overhead vs. parallelism.
+   - Small files: Use larger batch size (8–16)
+   - Large files: Use smaller batch size (1–4)
 
-3. **SLURM burst buffer**: Use node-local NVMe storage (`/mnt/bb/$USER`) for fast I/O, then copy results to shared storage
+3. **Distribution**: Use `--distribution balanced` when file sizes vary significantly.
 
-4. **Workers vs. cores**: For I/O-bound tasks, workers can exceed physical cores. For CPU-bound tasks, match workers to cores.
+4. **Burst buffer**: Use node-local NVMe (`/mnt/bb/$USER`) for fast I/O, then copy results to shared storage.
 
 ## Troubleshooting
 
+### "mpi4py not installed"
+
+```bash
+MPICC=cc pip install --no-binary mpi4py mpi4py
+```
+
 ### "GNU parallel is not installed"
 
-Install GNU parallel (see Requirements section above).
+Install GNU parallel (see Requirements above).
 
 ### "sbatch is not available"
 
-You're trying to use `--backend slurm` on a non-SLURM system. Use `--generate-only` to create scripts for transfer to an HPC cluster.
+Use `--generate-only` to create scripts for transfer to an HPC cluster.
 
 ### Jobs fail with "conda: command not found"
 
@@ -340,20 +394,11 @@ Ensure the SLURM modules list includes your conda module:
 ```yaml
 slurm:
   modules:
-    - miniforge3/23.11.0-0  # Adjust for your system
+    - miniforge3/23.11.0-0
     - parallel
 ```
 
-### Output files missing
-
-Check the burst buffer path and ensure the final copy step completed:
-```bash
-ls /mnt/bb/$USER/
-```
-
 ## Testing
-
-Run the parallel module tests:
 
 ```bash
 pytest tests/test_parallel.py -v
@@ -363,9 +408,11 @@ pytest tests/test_parallel.py -v
 
 | File | Purpose |
 |------|---------|
-| `executor.py` | ParallelExecutor, ParallelConfig, ParallelResult |
-| `distribution.py` | FileDistributor (round_robin, balanced, batched) |
-| `chunking.py` | ChunkStrategy, ChunkSpec (Type 2 stubs) |
-| `backends/base.py` | Abstract ParallelBackend |
-| `backends/local.py` | LocalBackend (GNU parallel subprocess) |
-| `backends/slurm.py` | SlurmBackend (script generation) |
+| `executor.py` | `ParallelExecutor`, `ParallelConfig`, `ParallelResult` |
+| `distribution.py` | `FileDistributor` (round_robin, balanced, batched) |
+| `mpi_runner.py` | MPI entry point (`python -m redi.parallel.mpi_runner`) |
+| `chunking.py` | `ChunkStrategy`, `ChunkSpec` (Type 2 stubs) |
+| `backends/base.py` | Abstract `ParallelBackend` |
+| `backends/local.py` | `LocalBackend` (GNU parallel, single machine) |
+| `backends/gnu.py` | `GnuBackend` (SLURM + GNU parallel across nodes) |
+| `backends/mpi.py` | `MpiBackend` (SLURM + mpi4py) |
