@@ -460,7 +460,16 @@ def run_pipeline(
         elif domain == "combustion":
             from .domains.combustion import get_full_pipeline
         else:
-            get_full_pipeline = None
+            # Check installed plugins before falling back to generic pipeline
+            try:
+                from .plugins import get_plugin
+                _plugin = get_plugin(domain) if domain else None
+            except Exception:
+                _plugin = None
+            if _plugin is not None:
+                get_full_pipeline = _plugin.get_full_pipeline
+            else:
+                get_full_pipeline = None
 
         if get_full_pipeline:
             pipeline = Pipeline(domain)
@@ -2501,8 +2510,15 @@ Download examples (climate domain)::
         """
     )
     run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
+    _builtin_domains = ["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "combustion", "general"]
+    try:
+        from .plugins import get_registry
+        _plugin_domains = [p.domain for p in get_registry().values()]
+    except Exception:
+        _plugin_domains = []
+    _all_domains = _builtin_domains + [d for d in _plugin_domains if d not in _builtin_domains]
     run_parser.add_argument("-d", "--domain",
-                           choices=["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "combustion", "general"],
+                           choices=_all_domains,
                            help="Scientific domain (auto-detected if not specified)")
     run_parser.add_argument("-o", "--output", help="Output directory (disables hash-based naming)")
     run_parser.add_argument("--unique", action="store_true",
