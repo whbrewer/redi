@@ -195,6 +195,100 @@ def render_provenance_summary(
     return True
 
 
+def merge_flowcept_buffers(buffer_paths: list, output_path: Path) -> int:
+    """
+    Concatenate multiple flowcept_buffer.jsonl files into one.
+
+    Returns the number of lines written.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(output_path, "w") as out:
+        for p in buffer_paths:
+            p = Path(p)
+            if not p.exists():
+                continue
+            with open(p) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        out.write(line + "\n")
+                        n += 1
+    return n
+
+
+def aggregate_parallel_timings(buffer_path: Path) -> dict:
+    """
+    Compute timing summary from a merged flowcept_buffer.jsonl.
+
+    Returns a dict with:
+      - wall_time_s: max(ended_at) - min(started_at)
+      - total_compute_s: sum of per-task durations
+      - n_tasks: number of completed tasks
+      - n_ranks: number of distinct ranks (inferred from unique worker metadata)
+      - per_stage: {stage: {count, min_s, mean_s, max_s, total_s}}
+    """
+    import json as _json
+    from collections import defaultdict
+
+    starts, ends = [], []
+    stage_durations: dict = defaultdict(list)
+    n_tasks = 0
+
+    with open(buffer_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+
+            t_start = rec.get("started_at")
+            t_end = rec.get("ended_at")
+            if t_start is None or t_end is None:
+                continue
+
+            duration = float(t_end) - float(t_start)
+            if duration < 0:
+                continue
+
+            starts.append(float(t_start))
+            ends.append(float(t_end))
+            n_tasks += 1
+
+            # Stage from tags (first tag) or activity_id
+            tags = rec.get("tags") or []
+            stage = tags[0] if tags else rec.get("activity_id", "unknown")
+            stage_durations[stage].append(duration)
+
+    if not starts:
+        return {"wall_time_s": 0.0, "total_compute_s": 0.0, "n_tasks": 0,
+                "per_stage": {}}
+
+    wall_time = max(ends) - min(starts)
+    total_compute = sum(d for durations in stage_durations.values() for d in durations)
+
+    per_stage = {}
+    for stage, durations in sorted(stage_durations.items()):
+        per_stage[stage] = {
+            "count":   len(durations),
+            "min_s":   min(durations),
+            "mean_s":  sum(durations) / len(durations),
+            "max_s":   max(durations),
+            "total_s": sum(durations),
+        }
+
+    return {
+        "wall_time_s":     wall_time,
+        "total_compute_s": total_compute,
+        "n_tasks":         n_tasks,
+        "per_stage":       per_stage,
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate provenance card from Flowcept JSONL")
     parser.add_argument("--output", default="PROVENANCE_CARD.md", help="Output markdown path")

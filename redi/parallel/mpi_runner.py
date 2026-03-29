@@ -63,6 +63,8 @@ def parse_args() -> argparse.Namespace:
                    help="Number of output shard files to write on rank 0 (default: 1)")
     p.add_argument("--style", default="simple",
                    help="redi output style: simple, rich, json (default: simple)")
+    p.add_argument("--provenance", action="store_true",
+                   help="Enable FlowCept provenance tracking per file; merge buffers on rank 0")
     return p.parse_args()
 
 
@@ -119,6 +121,8 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
         cmd += ["-s", args.stages]
     if args.output_format:
         cmd += ["-f", args.output_format]
+    if getattr(args, "provenance", False):
+        cmd += ["--provenance"]
 
     result = {
         "input": filepath,
@@ -127,6 +131,7 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
         "npz_files": [],
         "errors": [],
         "metadata": {},
+        "flowcept_buffer": None,
     }
 
     try:
@@ -143,6 +148,11 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
         if meta_path.exists():
             with open(meta_path) as f:
                 result["metadata"] = json.load(f)
+
+        # Capture FlowCept buffer path if provenance was enabled
+        buffer_path = output_dir / "flowcept_buffer.jsonl"
+        if buffer_path.exists():
+            result["flowcept_buffer"] = str(buffer_path)
 
     except Exception as e:
         result["errors"].append(str(e))
@@ -232,6 +242,51 @@ def merge_npz_shards(all_results: list, output_dir: Path, n_shards: int) -> list
         print(f"[rank 0]   {shard_path.name}  ({end - start} samples)", flush=True)
 
     return shard_paths
+
+
+def merge_provenance(all_results: list, output_dir: Path) -> dict:
+    """
+    Merge per-file flowcept_buffer.jsonl files into one and generate
+    a unified provenance card + timing summary (rank 0 only).
+
+    Returns a dict with keys: buffer_path, timing, card_path, error.
+    """
+    from redi.provenance_card import (
+        aggregate_parallel_timings,
+        generate_provenance_artifacts,
+        merge_flowcept_buffers,
+    )
+
+    buffer_paths = [
+        r["flowcept_buffer"]
+        for r in all_results
+        if r.get("flowcept_buffer")
+    ]
+    if not buffer_paths:
+        return {"buffer_path": None, "timing": None, "card_path": None,
+                "error": "no flowcept buffers found"}
+
+    merged_path = output_dir / "flowcept_buffer.jsonl"
+    n_lines = merge_flowcept_buffers(buffer_paths, merged_path)
+    print(f"[rank 0] merged {len(buffer_paths)} FlowCept buffer(s) → {n_lines} records", flush=True)
+
+    timing = aggregate_parallel_timings(merged_path)
+    print(f"[rank 0] timing: wall={timing['wall_time_s']:.1f}s  "
+          f"compute={timing['total_compute_s']:.1f}s  tasks={timing['n_tasks']}", flush=True)
+    for stage, s in timing["per_stage"].items():
+        print(f"[rank 0]   {stage:20s}  n={s['count']}  "
+              f"mean={s['mean_s']:.2f}s  max={s['max_s']:.2f}s", flush=True)
+
+    try:
+        artifacts = generate_provenance_artifacts(output_dir=output_dir)
+        card_path = artifacts.get("card_file")
+        print(f"[rank 0] PROVENANCE_CARD.md → {card_path}", flush=True)
+    except Exception as exc:
+        card_path = None
+        print(f"[rank 0] WARNING: could not generate provenance card: {exc}", flush=True)
+
+    return {"buffer_path": str(merged_path), "timing": timing, "card_path": card_path,
+            "error": None}
 
 
 def write_metadata(all_results: list, global_stats: dict,
@@ -383,6 +438,10 @@ def main():
         # Write unified metadata.json and datacard.json
         write_metadata(all_results, global_stats, shard_paths, args, size)
         write_datacard(all_results, global_stats, shard_paths, args)
+
+        # Merge FlowCept provenance buffers if provenance was enabled
+        if getattr(args, "provenance", False):
+            merge_provenance(all_results, output_dir)
 
         print(f"\n[rank 0] == All done ==", flush=True)
         print(f"[rank 0]   output: {output_dir}", flush=True)

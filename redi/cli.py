@@ -2537,6 +2537,8 @@ Download examples (climate domain)::
                            help="Optimize pipeline for array data (skip DataFrame-specific steps)")
     run_parser.add_argument("--normalize", choices=["minmax", "zscore"],
                            help="Normalization method for array data")
+    run_parser.add_argument("--provenance", action="store_true",
+                           help="Enable FlowCept provenance tracking and generate PROVENANCE_CARD.md")
     run_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     run_parser.add_argument("--verify", action="store_true",
                            help="Run verification checks after each pipeline step")
@@ -3165,6 +3167,8 @@ def _handle_run_command(args):
         config['verbose'] = True
     if args.stages:
         config['stages'] = args.stages.split(',')
+    if getattr(args, 'provenance', False):
+        config['provenance'] = True
 
     if 'output_format' not in config:
         config['output_format'] = args.format
