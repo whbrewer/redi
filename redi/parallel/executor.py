@@ -78,8 +78,13 @@ class ParallelConfig:
     mpi_merge_format: str = "npz"
 
     def __post_init__(self):
-        if self.workers is None and self.backend == "local":
-            self.workers = os.cpu_count() or 4
+        if self.workers is None:
+            if self.backend == "local":
+                self.workers = os.cpu_count() or 4
+            elif self.backend == "mpi":
+                self.workers = self.slurm_nodes * self.mpi_ntasks_per_node
+            else:  # gnu
+                self.workers = self.slurm_nodes
 
 
 @dataclass
