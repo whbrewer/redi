@@ -1,0 +1,12 @@
+=== REDI OpenFold Benchmark  Sun Mar 29 18:34:34 EDT 2026 ===
+  Node:    andes594.olcf.ornl.gov
+  Job ID:  3249700
+
+OpenFold / OpenProteinSet Stage Timing Benchmark
+  OPS root:  /lustre/orion/gen053/world-shared/openfold/data
+  Proteins:  5,000
+  Workers:   32
+  Config:    /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/io/configs/bench_openfold.yaml
+
+  Running: redi run /lustre/orion/gen053/world-shared/openfold/data -c /tmp/redi_openfold_bench.yaml
+slurmstepd: error: *** JOB 3249700 ON andes594 CANCELLED AT 2026-03-29T18:35:03 ***
