@@ -594,6 +594,12 @@ def get_structure_steps():
                     "dimensions": list(ds.dims.keys())
                 }
 
+                # Store lat/lon for ClimaX-compatible output
+                if 'lat' in ds.coords:
+                    ctx.metadata["lat"] = ds.lat.values.astype(np.float32)
+                if 'lon' in ds.coords:
+                    ctx.metadata["lon"] = ds.lon.values.astype(np.float32)
+
                 # Note if some variables were excluded
                 excluded = [v for v in ds.data_vars if v not in var_names]
                 if excluded:
@@ -710,6 +716,59 @@ def get_output_steps():
                 np.savez_compressed(path, X=X, variable_names=var_names)
             return str(path)
 
+        def _save_climax(self, ctx, X, var_names, splits):
+            """Save NPZ files in ClimaX-compatible format.
+
+            Layout:
+              <output_dir>/train/train.npz   — per-variable keys, shape (T, 1, H, W)
+              <output_dir>/val/val.npz
+              <output_dir>/test/test.npz
+              <output_dir>/normalize_mean.npz
+              <output_dir>/normalize_std.npz
+              <output_dir>/lat.npy
+              <output_dir>/lon.npy
+            """
+            import numpy as np
+
+            output_dir = ctx.output_dir
+            saved_files = []
+
+            for split_name, idx in splits.items():
+                split_X = X[idx]  # (T_split, H, W) or (T_split, H, W, n_vars)
+                split_dir = output_dir / split_name
+                split_dir.mkdir(parents=True, exist_ok=True)
+
+                # Build per-variable dict with shape (T, 1, H, W)
+                if split_X.ndim == 3:
+                    # Single variable: (T, H, W) → (T, 1, H, W)
+                    var_dict = {var_names[0]: split_X[:, np.newaxis, :, :]}
+                else:
+                    # Multiple variables stacked on last axis: (T, H, W, n_vars)
+                    var_dict = {v: split_X[..., i][:, np.newaxis, :, :] for i, v in enumerate(var_names)}
+
+                path = split_dir / f"{split_name}.npz"
+                np.savez_compressed(str(path), **var_dict)
+                saved_files.append(str(path))
+                logger.info(f"Saved ClimaX NPZ: {path}  vars={list(var_dict.keys())}")
+
+            # Normalization stats
+            stats = ctx.metadata.get("normalization_stats", {})
+            if stats:
+                means = {v: np.array(s["mean"]) for v, s in stats.items() if "mean" in s}
+                stds  = {v: np.array(s["std"])  for v, s in stats.items() if "std"  in s}
+                if means:
+                    np.savez_compressed(str(output_dir / "normalize_mean.npz"), **means)
+                if stds:
+                    np.savez_compressed(str(output_dir / "normalize_std.npz"),  **stds)
+
+            # Lat / lon
+            if "lat" in ctx.metadata:
+                np.save(str(output_dir / "lat.npy"), ctx.metadata["lat"])
+            if "lon" in ctx.metadata:
+                np.save(str(output_dir / "lon.npy"), ctx.metadata["lon"])
+
+            return saved_files
+
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
                 import numpy as np
@@ -739,18 +798,22 @@ def get_output_steps():
                     else:
                         splits["data"] = np.arange(len(X))
 
-                    for split_name, idx in splits.items():
-                        split_data = X[idx]
-                        if n_shards > 1:
-                            shard_indices = np.array_split(np.arange(len(split_data)), n_shards)
-                            for i, shard_idx in enumerate(shard_indices):
-                                shard_name = f"{split_name}_shard_{i:04d}"
-                                path = self._save_split(split_data[shard_idx], var_names, shard_name, ctx.output_dir, fmt)
+                    climax_cfg = ctx.config.get("climax_output", {})
+                    if climax_cfg.get("enabled", False) and fmt == "npz":
+                        saved_files = self._save_climax(ctx, X, var_names, splits)
+                    else:
+                        for split_name, idx in splits.items():
+                            split_data = X[idx]
+                            if n_shards > 1:
+                                shard_indices = np.array_split(np.arange(len(split_data)), n_shards)
+                                for i, shard_idx in enumerate(shard_indices):
+                                    shard_name = f"{split_name}_shard_{i:04d}"
+                                    path = self._save_split(split_data[shard_idx], var_names, shard_name, ctx.output_dir, fmt)
+                                    saved_files.append(path)
+                                logger.info(f"Saved {n_shards} {fmt.upper()} shards for {split_name}")
+                            else:
+                                path = self._save_split(split_data, var_names, split_name, ctx.output_dir, fmt)
                                 saved_files.append(path)
-                            logger.info(f"Saved {n_shards} {fmt.upper()} shards for {split_name}")
-                        else:
-                            path = self._save_split(split_data, var_names, split_name, ctx.output_dir, fmt)
-                            saved_files.append(path)
 
                     n_files = len(saved_files)
                     logger.info(f"Saved {n_files} {fmt.upper()} file(s)")
