@@ -153,6 +153,12 @@ class PipelineContext:
 
     def mark_complete(self, stage: PipelineStage):
         """Mark a stage as completed"""
+        # Normalise string → enum (plugin steps declare stage as a string)
+        if isinstance(stage, str):
+            try:
+                stage = PipelineStage(stage)
+            except ValueError:
+                return
         if stage not in self.completed_stages:
             self.completed_stages.append(stage)
         # Advance to next stage

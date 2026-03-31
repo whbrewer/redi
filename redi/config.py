@@ -207,8 +207,13 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
             f"Valid options: {valid_formats}"
         )
 
-    # Validate domain
+    # Validate domain (built-ins + installed plugins)
     valid_domains = ['climate', 'materials', 'life_sciences', 'fusion', 'hpc', 'geospatial', 'nuclear_physics', 'combustion', 'general', None]
+    try:
+        from .plugins import get_registry
+        valid_domains += [p.domain for p in get_registry().values()]
+    except Exception:
+        pass
     if config.get('domain') not in valid_domains:
         issues.append(
             f"Unknown domain: {config.get('domain')}. "
