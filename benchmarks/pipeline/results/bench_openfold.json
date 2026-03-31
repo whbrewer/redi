@@ -1,24 +1,32 @@
 {
   "case": "openfold_ops",
   "domain": "life_sciences",
-  "n_proteins": 5000,
-  "n_workers": 16,
+  "n_proteins": 4994,
+  "n_workers": 32,
   "stages_ms": {
-    "ingest": 256000,
-    "preprocess": 572000,
-    "transform": 0,
-    "structure": 0,
-    "output": 10000
+    "ingest": 70574,
+    "preprocess": 132031,
+    "transform": 116502,
+    "structure": 3060,
+    "output": 77140
   },
-  "total_ms": 838000,
-  "total_s": 838.0,
-  "throughput_proteins_per_s": 5.967,
+  "total_ms": 403860,
+  "total_s": 403.9,
+  "throughput_proteins_per_s": 12.366,
   "throughput_label": "proteins/s",
   "step_timings_ms": {
-    "load_open_protein_set": 256000,
-    "streaming_npz_processor": 572000,
-    "write_checksums": 9500,
-    "save_metadata": 500
+    "load_open_protein_set": 70574,
+    "streaming_npz_processor": 323159,
+    "write_checksums": 5571,
+    "save_metadata": 6
   },
-  "_note": "Extrapolated from full Frontier run (job 3244341): 131315 proteins in 15285s at 8.74 proteins/s avg. Directory scan always costs ~252s (full 131k-entry Lustre scan regardless of cap). Benchmark job 3245767 ran on Andes with only partial OPS data access (2 proteins visible); those numbers were discarded."
+  "substep_timings_ms_per_protein": {
+    "cif_parse": 448.5,
+    "msa_parse": 358.3,
+    "encode": 711.9,
+    "assemble": 18.7,
+    "save": 437.3
+  },
+  "avg_residues": 222.0,
+  "avg_msa_depth": 9014.0
 }

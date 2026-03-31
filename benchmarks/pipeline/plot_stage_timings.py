@@ -31,9 +31,9 @@ RESULTS_DIR = str(Path(__file__).parent / "results")
 OUT_BASE    = str(Path(__file__).parent / "results" / "stage_timings")
 
 CASES = [
-    ("bench_openfold.json",  "OpenFold\n(life sciences)"),
-    ("bench_oc22.json",      "OC22 / HydraGNN\n(materials)"),
     ("bench_xgc1.json",      "XGC1\n(fusion)"),
+    ("bench_oc22.json",      "OC22 / HydraGNN\n(materials)"),
+    ("bench_openfold.json",  "OpenFold\n(life sciences)"),
     ("bench_climax.json",    "ClimaX / TaiESM1\n(climate)"),
 ]
 

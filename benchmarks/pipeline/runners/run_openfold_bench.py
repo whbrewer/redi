@@ -71,19 +71,44 @@ def parse_timings(output: str) -> dict:
     return timings
 
 
-def aggregate_stages(step_timings: dict) -> dict:
+def aggregate_stages(step_timings: dict, substep_ms: dict = None) -> dict:
     stages = {"ingest": 0, "preprocess": 0, "transform": 0, "structure": 0, "output": 0}
     for step, ms in step_timings.items():
         stage = STAGE_MAP.get(step)
         if stage:
             stages[stage] += ms
+
+    # streaming_npz_processor bundles preprocess/transform/structure/output work.
+    # Redistribute its wall-clock time using substep ratios so all 5 stages appear.
+    #   cif_parse + msa_parse → preprocess
+    #   encode               → transform
+    #   assemble             → structure
+    #   save                 → output
+    snpz_ms = step_timings.get("streaming_npz_processor", 0)
+    if snpz_ms and substep_ms:
+        keys = ["cif_parse", "msa_parse", "encode", "assemble", "save"]
+        substep_stage = {
+            "cif_parse": "preprocess",
+            "msa_parse": "preprocess",
+            "encode":    "transform",
+            "assemble":  "structure",
+            "save":      "output",
+        }
+        total_sub = sum(substep_ms.get(k, 0) for k in keys)
+        if total_sub > 0:
+            # Remove snpz from preprocess (where it was lumped), then redistribute
+            stages["preprocess"] -= snpz_ms
+            for k in keys:
+                frac = substep_ms.get(k, 0) / total_sub
+                stages[substep_stage[k]] += int(snpz_ms * frac)
+
     return stages
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-proteins", type=int, default=5000,
-                        help="Number of proteins to process (default: 5000)")
+    parser.add_argument("--n-proteins", type=int, default=None,
+                        help="Number of proteins to process (default: all)")
     parser.add_argument("--num-workers", type=int, default=16,
                         help="Parallel workers (default: 16)")
     parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
@@ -91,14 +116,18 @@ def main():
 
     print(f"\nOpenFold / OpenProteinSet Stage Timing Benchmark")
     print(f"  OPS root:  {OPS_ROOT}")
-    print(f"  Proteins:  {args.n_proteins:,}")
+    n_label = f"{args.n_proteins:,}" if args.n_proteins else "all"
+    print(f"  Proteins:  {n_label}")
     print(f"  Workers:   {args.num_workers}")
     print(f"  Config:    {CFG_TPL}")
     print()
 
     with open(CFG_TPL) as f:
         cfg = yaml.safe_load(f)
-    cfg["max_proteins"] = args.n_proteins
+    if args.n_proteins is not None:
+        cfg["max_proteins"] = args.n_proteins
+    else:
+        cfg.pop("max_proteins", None)  # remove cap — run full dataset
     cfg["num_workers"] = args.num_workers
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -121,11 +150,30 @@ def main():
         print(result.stdout[-3000:])
 
     step_t = parse_timings(result.stdout)
-    stage_t = aggregate_stages(step_t)
+
+    # Parse substep breakdown printed by StreamingNPZProcessor (needed before stage aggregation)
+    substep_ms: dict = {}
+    avg_residues = avg_msa_depth = None
+    substep_re = re.compile(r"(cif_parse|msa_parse|encode|assemble|save)\s*:\s*([\d.]+)\s*ms/protein")
+    res_re  = re.compile(r"avg residues\s*:\s*([\d.]+)")
+    msa_re  = re.compile(r"avg MSA depth\s*:\s*([\d.]+)")
+    for line in result.stdout.splitlines():
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
+        sm = substep_re.search(clean)
+        if sm:
+            substep_ms[sm.group(1)] = float(sm.group(2))
+        rm = res_re.search(clean)
+        if rm:
+            avg_residues = float(rm.group(1))
+        mm = msa_re.search(clean)
+        if mm:
+            avg_msa_depth = float(mm.group(1))
+
+    stage_t = aggregate_stages(step_t, substep_ms)
 
     # Estimate how many proteins were actually processed.
     # Parse from the streaming_npz_processor step detail: "N files"
-    n_actual = args.n_proteins
+    n_actual = args.n_proteins or 0
     m = re.search(r"streaming_npz_processor.*?(\d[\d,]*)\s+files", result.stdout)
     if m:
         n_actual = int(m.group(1).replace(",", ""))
@@ -149,6 +197,12 @@ def main():
         "throughput_label": "proteins/s",
         "step_timings_ms": step_t,
     }
+    if substep_ms:
+        result_dict["substep_timings_ms_per_protein"] = substep_ms
+    if avg_residues is not None:
+        result_dict["avg_residues"] = avg_residues
+    if avg_msa_depth is not None:
+        result_dict["avg_msa_depth"] = avg_msa_depth
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:
@@ -167,6 +221,16 @@ def main():
         print(f"  {stage:<16}  {ms/1000:>8.1f}  {pct:>5.1f}%")
     print(f"  {'TOTAL':<16}  {total_ms/1000:>8.1f}  100.0%")
     print(f"\n  Throughput: {throughput:.3f} proteins/s")
+    if substep_ms:
+        print(f"\n  Preprocess substep breakdown (avg per protein):")
+        if avg_residues is not None:
+            print(f"    avg residues : {avg_residues:.0f}")
+        if avg_msa_depth is not None:
+            print(f"    avg MSA depth: {avg_msa_depth:.0f}")
+        total_sub = sum(substep_ms.values())
+        for k, v in substep_ms.items():
+            pct_sub = 100 * v / total_sub if total_sub else 0
+            print(f"    {k:<12s}: {v:7.1f} ms/protein  ({pct_sub:.1f}%)")
     print("=" * W)
 
 

@@ -310,28 +310,36 @@ def _save_npz_worker(args: Tuple) -> str:
     return out_path_str
 
 
-def _process_and_save_protein_worker(args: Tuple) -> Tuple[str, str, Optional[str]]:
+def _process_and_save_protein_worker(args: Tuple) -> Tuple[str, str, Optional[str], Optional[dict]]:
     """ProcessPoolExecutor worker: full per-protein pipeline in one call.
 
     Parses mmCIF → parses MSA → encodes features → saves NPZ.
     All large arrays live only in this worker process; the parent receives
-    only (chain_id, out_path_str, error_or_None), keeping parent memory bounded.
+    only (chain_id, out_path_str, error_or_None, substep_timings), keeping
+    parent memory bounded.
 
     Skips proteins whose NPZ already exists (enables restart after a killed job).
+    Returns substep_timings dict (keys: cif_parse, msa_parse, encode, save) in
+    seconds; None on skip or error.
     """
+    import time as _time
     chain_id, cif_path_str, alignment_dir_str, has_msa, out_path_str = args
     from pathlib import Path as _P
 
     if _P(out_path_str).exists():
-        return chain_id, out_path_str, None  # already done — skip
+        return chain_id, out_path_str, None, None  # already done — skip
 
     try:
+        t0 = _time.perf_counter()
         seq, positions, mask, resolution = _parse_mmcif(_P(cif_path_str))
         n_res = len(seq)
+        t_cif = _time.perf_counter() - t0
 
+        t1 = _time.perf_counter()
         raw_seqs: List[str] = [seq]
         raw_dels: List[List[int]] = [[0] * n_res]
         seen: set = {seq}
+        n_a3m_seqs = 0
         if has_msa and alignment_dir_str:
             aln_dir = _P(alignment_dir_str)
             for a3m_path in sorted(aln_dir.glob("*.a3m")):
@@ -343,9 +351,12 @@ def _process_and_save_protein_worker(args: Tuple) -> Tuple[str, str, Optional[st
                         seen.add(s)
                         raw_seqs.append(s)
                         raw_dels.append(d)
+                        n_a3m_seqs += 1
                 except Exception:
                     pass
+        t_msa = _time.perf_counter() - t1
 
+        t2 = _time.perf_counter()
         aatype = _sequence_to_aatype(seq)
         encoded_rows: List[np.ndarray] = []
         encoded_dels_: List[np.ndarray] = []
@@ -360,11 +371,13 @@ def _process_and_save_protein_worker(args: Tuple) -> Tuple[str, str, Optional[st
                            else np.pad(del_arr, (0, n_res - len(del_arr))))
             encoded_rows.append(enc)
             encoded_dels_.append(del_arr)
+        t_enc = _time.perf_counter() - t2
 
+        # Assemble per-protein feature dict (structure stage)
+        t3 = _time.perf_counter()
         msa_arr = np.stack(encoded_rows, axis=0)
         del_mat = np.stack(encoded_dels_, axis=0)
         n_seq   = msa_arr.shape[0]
-
         features = {
             "aatype":                   aatype,
             "between_segment_residues": np.zeros(n_res, dtype=np.int32),
@@ -378,10 +391,24 @@ def _process_and_save_protein_worker(args: Tuple) -> Tuple[str, str, Optional[st
             "resolution":               np.array([resolution], dtype=np.float32),
             "is_distillation":          np.array(0.0, dtype=np.float32),
         }
+        t_assemble = _time.perf_counter() - t3
+
+        t4 = _time.perf_counter()
         np.savez_compressed(out_path_str, **features)
-        return chain_id, out_path_str, None
+        t_save = _time.perf_counter() - t4
+
+        timings = {
+            "cif_parse": t_cif,
+            "msa_parse":  t_msa,
+            "encode":     t_enc,
+            "assemble":   t_assemble,
+            "save":       t_save,
+            "n_res":      n_res,
+            "n_msa_seqs": n_seq,
+        }
+        return chain_id, out_path_str, None, timings
     except Exception as exc:
-        return chain_id, out_path_str, str(exc)
+        return chain_id, out_path_str, str(exc), None
 
 
 # ---------------------------------------------------------------------------
@@ -1166,8 +1193,17 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
             saved = failed = 0
             saved_files: List[str] = []
 
+            # Accumulators for substep timings
+            substep_sums: Dict[str, float] = {
+                "cif_parse": 0.0, "msa_parse": 0.0, "encode": 0.0,
+                "assemble": 0.0, "save": 0.0,
+            }
+            substep_counts = 0
+            total_n_res = 0
+            total_n_msa = 0
+
             with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-                for done, (chain_id, out_path, error) in enumerate(
+                for done, (chain_id, out_path, error, timings) in enumerate(
                     executor.map(_process_and_save_protein_worker, worker_args, chunksize=10),
                     start=1,
                 ):
@@ -1177,6 +1213,12 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
                     else:
                         saved_files.append(out_path)
                         saved += 1
+                    if timings is not None:
+                        for k in substep_sums:
+                            substep_sums[k] += timings[k]
+                        substep_counts += 1
+                        total_n_res += timings["n_res"]
+                        total_n_msa += timings["n_msa_seqs"]
                     if done % progress_every == 0 or done == total:
                         elapsed = time.perf_counter() - started_at
                         rate    = done / elapsed if elapsed > 0 else 0.0
@@ -1192,6 +1234,29 @@ def get_openfold_ops_pipeline(output_format: str = "npz", max_proteins: Optional
                 s: sum(1 for v in split_map.values() if v == s)
                 for s in ("train", "val", "test")
             }
+
+            # Report substep timing breakdown
+            if substep_counts > 0:
+                total_worker_s = sum(substep_sums.values())
+                avg_res  = total_n_res / substep_counts
+                avg_msa  = total_n_msa / substep_counts
+                lines = [
+                    f"\n  Substep timing breakdown (avg per protein, n={substep_counts:,}):",
+                    f"    avg residues : {avg_res:.0f}",
+                    f"    avg MSA depth: {avg_msa:.0f}",
+                ]
+                for k, v in substep_sums.items():
+                    avg_ms = 1000 * v / substep_counts
+                    pct_s  = 100 * v / total_worker_s if total_worker_s > 0 else 0
+                    lines.append(f"    {k:<12s}: {avg_ms:7.1f} ms/protein  ({pct_s:.1f}%)")
+                print("\n".join(lines), file=sys.stderr)
+                ctx.metadata["substep_timings_ms"] = {
+                    k: round(1000 * v / substep_counts, 2)
+                    for k, v in substep_sums.items()
+                }
+                ctx.metadata["avg_residues"]  = round(avg_res, 1)
+                ctx.metadata["avg_msa_depth"] = round(avg_msa, 1)
+
             logger.info(
                 f"Saved {saved}/{total} NPZ files — "
                 f"train={split_counts['train']}, val={split_counts['val']}, "
