@@ -10,9 +10,9 @@ equivalent five-stage pipeline for the LMDB format and times each stage.
 Stages:
   ingest     – open LMDB shards, iterate and deserialize Data objects
   preprocess – validate structures (drop NaN energies/forces, check natoms)
-  transform  – normalize: centre-of-mass positions, per-atom energies, z-score forces
-  structure  – assemble padded numpy tensors (atomic_numbers, pos, energy, forces)
-  output     – save consolidated NPZ + metadata JSON
+  transform  – z-score normalize node features; compute cutoff-radius graph edges
+  structure  – assemble per-structure PyG Data objects (nodes, edges, targets)
+  output     – write ADIOS2 .bp file via HydraGNN AdiosWriter (train/val/test splits)
 
 Usage:
     source ~/venv/redi/bin/activate
@@ -132,13 +132,50 @@ def stage_preprocess(records: list) -> list:
     return valid
 
 
+RADIUS_CUTOFF   = 6.0   # Angstroms — standard for OC22/HydraGNN
+MAX_NEIGHBOURS  = 100   # max edges per node
+
+
+def _radius_graph_numpy(pos: np.ndarray, r: float, max_neighbours: int):
+    """Build radius graph using scipy cKDTree. Returns edge_index [2, E] and
+    edge_attr (distances) [E, 1] as float32 numpy arrays."""
+    from scipy.spatial import cKDTree
+    tree = cKDTree(pos)
+    pairs = tree.query_pairs(r=r, output_type="ndarray")   # [M, 2] undirected
+    if len(pairs) == 0:
+        return np.empty((2, 0), dtype=np.int64), np.empty((0, 1), dtype=np.float32)
+
+    # Make directed (both directions) and prune to max_neighbours per node
+    src = np.concatenate([pairs[:, 0], pairs[:, 1]])
+    dst = np.concatenate([pairs[:, 1], pairs[:, 0]])
+    diff = pos[dst] - pos[src]
+    dist = np.linalg.norm(diff, axis=1).astype(np.float32)
+
+    if max_neighbours < len(src):
+        # Keep closest max_neighbours per node
+        order = np.argsort(dist)
+        keep  = np.zeros(len(src), dtype=bool)
+        count = np.zeros(len(pos), dtype=np.int32)
+        for idx in order:
+            n = src[idx]
+            if count[n] < max_neighbours:
+                keep[idx] = True
+                count[n] += 1
+        src, dst, dist = src[keep], dst[keep], dist[keep]
+
+    edge_index = np.stack([src, dst], axis=0).astype(np.int64)
+    edge_attr  = dist[:, None]   # [E, 1]
+    return edge_index, edge_attr
+
+
 def stage_transform(records: list) -> list:
     """
-    Normalise each structure:
-    - Centre atomic positions (subtract centre of mass, equal weights).
-    - Compute per-atom energy: E_atom = y / natoms.
-    - Z-score forces across each structure.
-    Returns list of dicts with numpy arrays.
+    Per structure:
+    - Centre atomic positions (subtract centre of mass).
+    - Compute per-atom energy.
+    - Z-score normalise forces.
+    - Build cutoff-radius graph edges (radius=6 Å, max_neighbours=100).
+    Returns list of dicts ready for PyG Data assembly.
     """
     out = []
     for obj in records:
@@ -150,100 +187,101 @@ def stage_transform(records: list) -> list:
         tags_raw       = _get(obj, "tags")
         tags = np.array(tags_raw, dtype=np.int32) if tags_raw is not None else np.zeros(natoms, np.int32)
 
-        # Centre of mass (equal weights)
-        com = pos.mean(axis=0)
-        pos_centred = pos - com
+        # Centre of mass
+        pos_centred = pos - pos.mean(axis=0)
 
         # Per-atom energy
-        e_per_atom = energy / natoms
+        e_per_atom = np.float32(energy / natoms)
 
-        # Z-score forces (per-structure, avoid div-by-zero)
+        # Z-score forces (per-structure)
         f_std = forces.std()
         forces_norm = (forces - forces.mean()) / (f_std + 1e-8)
 
+        # Cutoff-radius graph edges
+        edge_index, edge_attr = _radius_graph_numpy(pos_centred, RADIUS_CUTOFF, MAX_NEIGHBOURS)
+
         out.append({
             "atomic_numbers": atomic_numbers,
-            "pos": pos_centred,
-            "energy_per_atom": np.float32(e_per_atom),
-            "forces": forces_norm,
-            "tags": tags,
-            "natoms": natoms,
-            "sid": getattr(obj, "sid", None),
+            "pos":            pos_centred,
+            "energy_per_atom": e_per_atom,
+            "forces":         forces_norm,
+            "tags":           tags,
+            "natoms":         natoms,
+            "edge_index":     edge_index,
+            "edge_attr":      edge_attr,
+            "sid":            getattr(obj, "sid", None),
         })
     return out
 
 
-def stage_structure(records: list) -> tuple:
+def stage_structure(records: list) -> list:
     """
-    Assemble a consolidated set of arrays for the full batch:
-    - flat_atomic_numbers:  [total_atoms]
-    - flat_pos:             [total_atoms, 3]
-    - flat_forces:          [total_atoms, 3]
-    - energies_per_atom:    [N_structures]
-    - natoms:               [N_structures]
-    - structure_ids:        [N_structures] (sid strings)
-    - split_index:          cumulative atom counts for un-batching
+    Assemble per-structure PyG Data objects.
+    Node features x = [Z/100, tag]  (shape: [N, 2])
+    Graph target  y = [energy_per_atom]
+    Node target stored as additional x columns (forces_x, forces_y, forces_z)
+    so HydraGNN can read them as node-level outputs.
     """
-    flat_z   = []
-    flat_pos = []
-    flat_f   = []
-    energies = []
-    natoms   = []
-    sids     = []
+    import torch
+    from torch_geometric.data import Data
 
-    if not records:
-        empty = np.empty(0, dtype=np.int32)
-        return {
-            "atomic_numbers": empty,
-            "positions":      np.empty((0, 3), dtype=np.float32),
-            "forces":         np.empty((0, 3), dtype=np.float32),
-            "energy_per_atom": np.empty(0, dtype=np.float32),
-            "natoms":         empty,
-            "split_index":    empty,
-        }, []
-
+    data_objects = []
     for r in records:
-        flat_z.append(r["atomic_numbers"])
-        flat_pos.append(r["pos"])
-        flat_f.append(r["forces"])
-        energies.append(r["energy_per_atom"])
-        natoms.append(r["natoms"])
-        sids.append(str(r.get("sid", "")))
+        N   = r["natoms"]
+        Z   = r["atomic_numbers"].astype(np.float32) / 100.0   # normalise Z
+        tag = r["tags"].astype(np.float32)
+        x   = np.stack([Z, tag], axis=1)                       # [N, 2]
 
-    tensors = {
-        "atomic_numbers": np.concatenate(flat_z),
-        "positions":      np.concatenate(flat_pos, axis=0),
-        "forces":         np.concatenate(flat_f, axis=0),
-        "energy_per_atom": np.array(energies, dtype=np.float32),
-        "natoms":         np.array(natoms, dtype=np.int32),
-        "split_index":    np.cumsum([0] + natoms[:-1], dtype=np.int32),
-    }
-    return tensors, sids
+        data = Data(
+            x          = torch.as_tensor(x,              dtype=torch.float32),
+            pos        = torch.as_tensor(r["pos"],        dtype=torch.float32),
+            y          = torch.as_tensor([r["energy_per_atom"]], dtype=torch.float32),
+            edge_index = torch.as_tensor(r["edge_index"], dtype=torch.long),
+            edge_attr  = torch.as_tensor(r["edge_attr"],  dtype=torch.float32),
+            force      = torch.as_tensor(r["forces"],     dtype=torch.float32),
+            natoms     = torch.tensor([N],                dtype=torch.long),
+        )
+        data_objects.append(data)
+    return data_objects
 
 
-def stage_output(tensors: dict, sids: list, out_dir: str, n_total: int) -> dict:
+def stage_output(data_objects: list, out_dir: str, split_ratios=(0.8, 0.1, 0.1)) -> dict:
     """
-    Save tensors to NPZ + write metadata JSON.
-    Returns dict with output file sizes.
+    Write train/val/test splits to an ADIOS2 .bp file using HydraGNN's AdiosWriter.
     """
-    import tempfile
-    out_path = Path(out_dir) / "oc22_redi_output.npz"
-    meta_path = Path(out_dir) / "metadata.json"
+    import sys
+    sys.path.insert(0, "/lustre/orion/gen053/world-shared/HydraGNN/code")
+    from mpi4py import MPI
+    from hydragnn.utils.datasets.adiosdataset import AdiosWriter
 
-    np.savez_compressed(str(out_path), **tensors)
+    out_path = Path(out_dir) / "oc22_redi_output.bp"
 
-    meta = {
-        "n_structures": n_total,
-        "n_atoms_total": int(tensors["atomic_numbers"].shape[0]),
-        "output_format": "npz",
-        "arrays": {k: list(v.shape) for k, v in tensors.items()},
-        "source": "OC22 s2ef-total LMDB",
+    n       = len(data_objects)
+    n_train = int(n * split_ratios[0])
+    n_val   = int(n * split_ratios[1])
+    trainset = data_objects[:n_train]
+    valset   = data_objects[n_train:n_train + n_val]
+    testset  = data_objects[n_train + n_val:]
+
+    comm = MPI.COMM_SELF
+    adwriter = AdiosWriter(str(out_path), comm)
+    adwriter.add("trainset", trainset)
+    adwriter.add("valset",   valset)
+    adwriter.add("testset",  testset)
+    adwriter.save()
+
+    size_mb = sum(
+        f.stat().st_size for f in out_path.iterdir() if out_path.is_dir()
+    ) / (1024 ** 2) if out_path.exists() else 0
+
+    return {
+        "bp_path":    str(out_path),
+        "n_train":    len(trainset),
+        "n_val":      len(valset),
+        "n_test":     len(testset),
+        "size_mb":    round(size_mb, 1),
+        "output_format": "adios2",
     }
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-
-    size_mb = out_path.stat().st_size / (1024 ** 2) if out_path.exists() else 0
-    return {"npz_path": str(out_path), "size_mb": round(size_mb, 1)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,19 +341,20 @@ def main():
     print(f"    done  ({stage_ms['transform']/1000:.1f}s)", flush=True)
 
     # ── Structure ────────────────────────────────────────────────────────────
-    print("  [structure]  assembling batch tensors …", flush=True)
+    print("  [structure]  assembling PyG Data objects …", flush=True)
     t0 = time.time()
-    tensors, sids = stage_structure(records)
+    data_objects = stage_structure(records)
     stage_ms["structure"] = int((time.time() - t0) * 1000)
-    n_atoms_total = int(tensors["atomic_numbers"].shape[0])
-    print(f"    {n_atoms_total:,} atoms total  ({stage_ms['structure']/1000:.1f}s)", flush=True)
+    n_atoms_total = sum(int(d.natoms[0]) for d in data_objects)
+    print(f"    {len(data_objects):,} Data objects, {n_atoms_total:,} atoms total  "
+          f"({stage_ms['structure']/1000:.1f}s)", flush=True)
 
     # ── Output ───────────────────────────────────────────────────────────────
-    print("  [output]  saving NPZ …", flush=True)
+    print("  [output]  writing ADIOS2 .bp via HydraGNN AdiosWriter …", flush=True)
     t0 = time.time()
-    out_info = stage_output(tensors, sids, args.save_dir, n_valid)
+    out_info = stage_output(data_objects, args.save_dir)
     stage_ms["output"] = int((time.time() - t0) * 1000)
-    print(f"    {out_info['npz_path']}  ({out_info['size_mb']:.0f} MB)  "
+    print(f"    {out_info['bp_path']}  ({out_info['size_mb']:.0f} MB)  "
           f"({stage_ms['output']/1000:.1f}s)", flush=True)
 
     total_ms = sum(stage_ms.values())
@@ -354,6 +393,7 @@ def main():
         print(f"  {stage:<16}  {ms/1000:>8.1f}  {pct:>5.1f}%")
     print(f"  {'TOTAL':<16}  {total_ms/1000:>8.1f}  100.0%")
     print(f"\n  Throughput: {throughput:.2f} structs/s")
+    print(f"  Output:     {out_info['bp_path']}  (ADIOS2, {out_info['n_train']:,} train / {out_info['n_val']:,} val / {out_info['n_test']:,} test)")
     print("=" * W)
 
 
