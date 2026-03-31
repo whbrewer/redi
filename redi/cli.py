@@ -467,7 +467,13 @@ def run_pipeline(
             except Exception:
                 _plugin = None
             if _plugin is not None:
-                get_full_pipeline = _plugin.get_full_pipeline
+                _plugin_fmt = config.get("output_format", "npz") if config else "npz"
+                import inspect as _inspect
+                _sig = _inspect.signature(_plugin.get_full_pipeline)
+                if "output_format" in _sig.parameters:
+                    get_full_pipeline = lambda: _plugin.get_full_pipeline(output_format=_plugin_fmt)
+                else:
+                    get_full_pipeline = _plugin.get_full_pipeline
             else:
                 get_full_pipeline = None
 

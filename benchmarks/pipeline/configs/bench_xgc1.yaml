@@ -1,33 +1,19 @@
-# REDI Benchmark Config — XGC1 ITER fusion simulation
+# REDI Benchmark Config — XGC1 ITER fusion simulation (xgc1 plugin)
 #
 # SC26 paper: pipeline stage timing benchmark
-# Input: 5 ADIOS2 BP5 directory snapshots from n560fr_ITER_PFPO_W_Ne
+# Input: XGC1 root directory containing case subdirectories
 #   /lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data/
-#       n560fr_ITER_PFPO_W_Ne/xgc.3d.000{02,04,06,08,10}.bp
+#     n560fr_ITER_PFPO_W_Ne/
+#       fort.input.used
+#       xgc.mesh.bp
+#       xgc.3d.000{02,04,06,08,10}.bp
 #
-# input_path is overridden at runtime by the benchmark runner (glob).
+# case_filter and max_timesteps are overridden at runtime by the benchmark runner.
 
-domain: fusion
-output_format: npz
+domain: xgc1
+output_format: pt
 provenance: true
 
-variables:
-  select: null   # load all variables (dpot, eden, iden, dBphi, ...)
-
-normalize:
-  enabled: true
-  method: zscore
-
-split:
-  method: random
-  ratios:
-    train: 0.8
-    val:   0.1
-    test:  0.1
-  shuffle: true
-  random_seed: 42
-
-fusion:
-  device: ITER
-  code: XGC
-  data_type: 3d_fields
+# Limit to one case and N timesteps for the benchmark
+case_filter: n560fr_ITER_PFPO_W_Ne
+max_timesteps: 5

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-XGC1 ITER fusion pipeline stage timing benchmark.
+XGC1 ITER fusion pipeline stage timing benchmark (xgc1 plugin).
 
-Runs REDI on N ADIOS2 BP5 snapshot directories from the n560fr_ITER_PFPO_W_Ne
-simulation, parses per-step timings, and writes a JSON summary for the SC26 plot.
-
-Each .bp directory is a single time-step snapshot (~5.5 GiB, 560-node ITER mesh).
+Runs REDI using the redi-xgc1 plugin (--domain xgc1) on the
+n560fr_ITER_PFPO_W_Ne case, limited to N timesteps.
 
 Usage:
     source ~/venv/redi/bin/activate
-    python benchmarks/runners/run_xgc1_bench.py [--n-files N] [--out FILE]
+    python benchmarks/pipeline/runners/run_xgc1_bench.py [--n-timesteps N] [--out FILE]
 """
 
 import argparse
@@ -23,33 +21,22 @@ from pathlib import Path
 import yaml
 
 # ── Data locations ─────────────────────────────────────────────────────────────
-BP_DIR  = ("/lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data"
-           "/n560fr_ITER_PFPO_W_Ne")
-CFG_TPL = str(Path(__file__).parent.parent / "configs" / "bench_xgc1.yaml")
-OUT_JSON = str(Path(__file__).parent.parent / "results" / "bench_xgc1.json")
+XGC1_ROOT   = "/lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data"
+CASE_FILTER = "n560fr_ITER_PFPO_W_Ne"
+CFG_TPL     = str(Path(__file__).parent.parent / "configs" / "bench_xgc1.yaml")
+OUT_JSON    = str(Path(__file__).parent.parent / "results" / "bench_xgc1.json")
 
-# ── Step → stage mapping ───────────────────────────────────────────────────────
+# ── Step → stage mapping (xgc1 plugin step names) ──────────────────────────────
+# build_xgc1_mesh and process_xgc1_timesteps are redistributed using substep
+# ratios (read_mesh→preprocess, build_graph→structure, read_fields→preprocess,
+# assemble→transform, write→output).
 STAGE_MAP = {
-    "detect_format":        "ingest",
-    "load_adios":           "ingest",
-    "load_fusion_hdf5":     "ingest",
-    "align_signals":        "preprocess",
-    "handle_shots":         "preprocess",
-    "engineer_plasma":      "preprocess",
-    "EngineerPlasmaFeatures": "preprocess",
-    "normalize_signals":    "transform",
-    "NormalizeSignals":     "transform",
-    "label_disruptions":    "transform",
-    "LabelDisruptions":     "transform",
-    "create_sequences":     "structure",
-    "CreateSequences":      "structure",
-    "fusion_to_tensor":     "structure",
-    "FusionToTensor":       "structure",
-    "train_val_test_split": "structure",
-    "save_npz":             "output",
-    "save_hdf5":            "output",
-    "write_checksums":      "output",
-    "save_metadata":        "output",
+    "load_xgc1_cases":        "ingest",
+    "build_xgc1_mesh":        "structure",          # redistributed: read_mesh→ingest, build_graph→preprocess
+    "process_xgc1_timesteps": "output",             # redistributed: read_fields→ingest, assemble→structure, write→output
+    "normalize_xgc1_outputs": "transform",          # direct
+    "write_checksums":        "output",
+    "save_metadata":          "output",
 }
 
 STEP_RE = re.compile(r"(\w+)\s+.*?\((\d+)ms\)")
@@ -67,122 +54,153 @@ def parse_timings(output: str) -> dict:
     return timings
 
 
-def aggregate_stages(step_timings: dict) -> dict:
+def parse_substeps(output: str) -> dict:
+    """Parse substep timing lines printed by the xgc1 plugin steps."""
+    substeps: dict = {}
+
+    # ProcessXGC1Timesteps: "read_fields : NNN ms/timestep"
+    ts_re   = re.compile(r"(read_fields|assemble|write)\s*:\s*([\d.]+)\s*ms/timestep")
+    # BuildXGC1Mesh: "read_mesh  : NNN ms" / "build_graph: NNN ms"
+    mesh_re = re.compile(r"(read_mesh|build_graph)\s*:\s*([\d.]+)\s*ms\b")
+
+    for line in output.splitlines():
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", line)
+        for pat in (ts_re, mesh_re):
+            m = pat.search(clean)
+            if m:
+                substeps[m.group(1)] = float(m.group(2))
+
+    return substeps
+
+
+def aggregate_stages(step_timings: dict, substeps: dict) -> dict:
     stages = {"ingest": 0, "preprocess": 0, "transform": 0, "structure": 0, "output": 0}
+
     for step, ms in step_timings.items():
         stage = STAGE_MAP.get(step)
         if stage:
             stages[stage] += ms
+
+    # Redistribute process_xgc1_timesteps wall time:
+    #   read_fields → ingest    (ADIOS BP read of timestep data)
+    #   assemble    → structure (feature matrix assembly → particle-mesh graph)
+    #   write       → output    (shards)
+    proc_ms  = step_timings.get("process_xgc1_timesteps", 0)
+    ts_keys  = ["read_fields", "assemble", "write"]
+    ts_sub   = {k: substeps.get(k, 0) for k in ts_keys}
+    ts_total = sum(ts_sub.values())
+    if proc_ms and ts_total > 0:
+        ts_stage = {"read_fields": "ingest", "assemble": "structure", "write": "output"}
+        stages["output"] -= proc_ms
+        for k in ts_keys:
+            stages[ts_stage[k]] += int(proc_ms * ts_sub[k] / ts_total)
+
+    # Redistribute build_xgc1_mesh wall time:
+    #   read_mesh   → ingest    (ADIOS BP read of mesh file)
+    #   build_graph → preprocess (mesh projection: 2D → 3D toroidal)
+    mesh_ms    = step_timings.get("build_xgc1_mesh", 0)
+    mesh_read  = substeps.get("read_mesh", 0)
+    mesh_bld   = substeps.get("build_graph", 0)
+    mesh_total = mesh_read + mesh_bld
+    if mesh_ms and mesh_total > 0:
+        stages["structure"] -= mesh_ms
+        stages["ingest"]    += int(mesh_ms * mesh_read / mesh_total)
+        stages["preprocess"] += int(mesh_ms * mesh_bld  / mesh_total)
+
     return stages
 
 
-def run_one_file(bp_path: str, cfg_tpl: dict, run_idx: int) -> tuple:
-    """Run REDI on a single .bp directory; return (step_timings, total_ms, size_gib)."""
-    bp = Path(bp_path)
-    try:
-        size_bytes = sum(f.stat().st_size for f in bp.iterdir() if f.is_file())
-    except Exception:
-        size_bytes = 0
-    size_gib = size_bytes / (1024 ** 3)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n-timesteps", type=int, default=5,
+                        help="Max timesteps per case (default: 5)")
+    parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
+    args = parser.parse_args()
 
-    cfg = dict(cfg_tpl)
-    cfg["input_path"] = str(bp_path)
+    # Check data size
+    case_dir = Path(XGC1_ROOT) / CASE_FILTER
+    bp_dirs  = sorted(case_dir.glob("xgc.3d.*.bp"))[:args.n_timesteps]
+    total_gib = 0.0
+    for bp in bp_dirs:
+        try:
+            total_gib += sum(f.stat().st_size for f in bp.iterdir() if f.is_file()) / (1024**3)
+        except Exception:
+            pass
+
+    print(f"\nXGC1 Plugin Stage Timing Benchmark")
+    print(f"  Root:       {XGC1_ROOT}")
+    print(f"  Case:       {CASE_FILTER}")
+    print(f"  Timesteps:  {args.n_timesteps}  ({total_gib:.1f} GiB)")
+    print()
+
+    with open(CFG_TPL) as f:
+        cfg = yaml.safe_load(f)
+    cfg["case_filter"]    = CASE_FILTER
+    cfg["max_timesteps"]  = args.n_timesteps
 
     with tempfile.TemporaryDirectory() as tmpdir:
         cfg["output_dir"] = tmpdir
-        tmp_cfg = f"/tmp/redi_xgc1_bench_{run_idx}.yaml"
+        tmp_cfg = "/tmp/redi_xgc1_bench.yaml"
         with open(tmp_cfg, "w") as f:
             yaml.dump(cfg, f)
 
-        print(f"  [file {run_idx+1}] {bp.name}  ({size_gib:.1f} GiB)", flush=True)
+        print(f"  Running: redi run {XGC1_ROOT} --domain xgc1 -c {tmp_cfg}", flush=True)
         t0 = time.time()
         result = subprocess.run(
-            ["redi", "run", str(bp_path), "--domain", "fusion", "-c", tmp_cfg],
+            ["redi", "run", XGC1_ROOT, "--domain", "xgc1", "-c", tmp_cfg],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         total_ms = int((time.time() - t0) * 1000)
         Path(tmp_cfg).unlink(missing_ok=True)
 
     if result.returncode != 0:
-        print(f"    WARNING: redi exited {result.returncode}")
-        print(result.stdout[-2000:])
+        print(f"  WARNING: redi exited {result.returncode}")
+        print(result.stdout[-3000:])
 
-    step_t = parse_timings(result.stdout)
-    return step_t, total_ms, size_gib
+    step_t   = parse_timings(result.stdout)
+    substeps = parse_substeps(result.stdout)
+    stage_t  = aggregate_stages(step_t, substeps)
 
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n-files", type=int, default=5,
-                        help="Number of .bp snapshot dirs to process (default: 5)")
-    parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
-    args = parser.parse_args()
-
-    bp_dirs = sorted(Path(BP_DIR).glob("xgc.3d.*.bp"))
-    if not bp_dirs:
-        raise SystemExit(f"No xgc.3d.*.bp directories found in {BP_DIR}")
-    bp_dirs = bp_dirs[: args.n_files]
-
-    print(f"\nXGC1 ITER Stage Timing Benchmark")
-    print(f"  BP dir:    {BP_DIR}")
-    print(f"  Files:     {len(bp_dirs)} × xgc.3d snapshots")
-    for bp in bp_dirs:
-        print(f"    {bp.name}")
-    print()
-
-    with open(CFG_TPL) as f:
-        cfg_tpl = yaml.safe_load(f)
-
-    all_step_t: dict = {}
-    total_ms = 0
-    total_gib = 0.0
-
-    for i, bp_path in enumerate(bp_dirs):
-        step_t, file_ms, size_gib = run_one_file(str(bp_path), cfg_tpl, i)
-        total_ms += file_ms
-        total_gib += size_gib
-        for k, v in step_t.items():
-            all_step_t[k] = all_step_t.get(k, 0) + v
-        stage_t = aggregate_stages(step_t)
-        print(f"    {file_ms/1000:.1f}s  " +
-              "  ".join(f"{k}={v/1000:.1f}s" for k, v in stage_t.items() if v > 0))
-
-    stage_totals = aggregate_stages(all_step_t)
-
-    # Throughput: data bytes read per second
     throughput_gib_s = total_gib / (total_ms / 1000) if total_ms > 0 else 0
 
-    result = {
-        "case": "xgc1_iter",
-        "domain": "fusion",
-        "n_files": len(bp_dirs),
-        "files": [bp.name for bp in bp_dirs],
-        "total_input_gib": round(total_gib, 2),
-        "stages_ms": stage_totals,
-        "total_ms": total_ms,
-        "total_s": round(total_ms / 1000, 1),
+    result_dict = {
+        "case":              "xgc1_iter",
+        "domain":            "xgc1",
+        "n_files":           len(bp_dirs),
+        "files":             [bp.name for bp in bp_dirs],
+        "total_input_gib":   round(total_gib, 2),
+        "stages_ms":         stage_t,
+        "total_ms":          total_ms,
+        "total_s":           round(total_ms / 1000, 1),
         "throughput_gib_per_s": round(throughput_gib_s, 3),
-        "throughput_label": "GiB/s",
-        "step_timings_ms": all_step_t,
+        "throughput_label":  "GiB/s",
+        "step_timings_ms":   step_t,
     }
+    if substeps:
+        result_dict["substep_timings_ms_per_timestep"] = substeps
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:
-        json.dump(result, f, indent=2)
+        json.dump(result_dict, f, indent=2)
     print(f"\nResults → {args.out}")
 
     W = 65
     print("\n" + "=" * W)
-    print(f"XGC1 TIMING SUMMARY  ({len(bp_dirs)} ITER snapshots, {total_gib:.1f} GiB)")
+    print(f"XGC1 PLUGIN TIMING SUMMARY  ({len(bp_dirs)} timesteps, {total_gib:.1f} GiB)")
     print("=" * W)
     print(f"  {'Stage':<16}  {'s':>8}  {'%':>6}")
     print(f"  {'-'*16}  {'-'*8}  {'-'*6}")
     for stage in ["ingest", "preprocess", "transform", "structure", "output"]:
-        ms = stage_totals[stage]
+        ms  = stage_t[stage]
         pct = 100 * ms / total_ms if total_ms else 0
         print(f"  {stage:<16}  {ms/1000:>8.1f}  {pct:>5.1f}%")
     print(f"  {'TOTAL':<16}  {total_ms/1000:>8.1f}  100.0%")
     print(f"\n  Throughput: {throughput_gib_s:.3f} GiB/s")
+    if substeps:
+        print(f"\n  Timestep substep breakdown:")
+        for k in ["read_fields", "assemble", "write"]:
+            if k in substeps:
+                print(f"    {k:<14s}: {substeps[k]:7.1f} ms/timestep")
     print("=" * W)
 
 
