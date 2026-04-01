@@ -64,16 +64,16 @@ SEGMENT_LABELS = {
         "output":     "Write NPZ",
     },
     "bench_openfold_quick.json": {
-        "ingest":     "Scan",
-        "preprocess": "Parse",
-        "transform":  "Encode",
-        "structure":  "Assemble",
-        "output":     "Serialize",
+        "ingest":     "Enum. PDBs",
+        "preprocess": "Parse mmCIF",
+        "transform":  "Encode MSA",
+        "structure":  "Assemble Dict",
+        "output":     "Serialize NPZ",
     },
     "bench_oc22.json": {
         "ingest":     "LMDB Read",
         "preprocess": "Filter",
-        "transform":  "Graph Enc.",
+        "transform":  "Graph Encode",
         "structure":  "PyG Build",
         "output":     "Write BP",
     },
@@ -82,11 +82,11 @@ SEGMENT_LABELS = {
         "preprocess": "Mesh Proj.",
         "transform":  "",
         "structure":  "Graph",
-        "output":     "Write PT",
+        "output":     "PT",
     },
 }
 
-LABEL_THRESHOLD_PCT = 8.0   # minimum segment width as % of total bar to show label
+LABEL_THRESHOLD_PCT = 5.0   # minimum segment width as % of total bar to show label
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,7 +266,7 @@ def main():
         print(f"  {lbl.strip()}: total={data.get('total_s','?')}s")
     print()
 
-    modes = ["raw", "pct", "per_gib", "per_sample"] if args.all_modes else [args.normalize]
+    modes = ["raw", "pct", "per_gib", "per_sample"] if (args.all_modes or args.normalize == "raw") else [args.normalize]
     for mode in modes:
         print(f"Plotting mode={mode} …")
         make_plot(entries, mode, args.out)

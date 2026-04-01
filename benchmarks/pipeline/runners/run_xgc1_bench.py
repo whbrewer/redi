@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 # ── Data locations ─────────────────────────────────────────────────────────────
-XGC1_ROOT   = "/lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data"
+XGC1_ROOT   = "/lustre/orion/world-shared/fus184/jyc/fusiond-seed-xgc1-data-samples"
 CASE_FILTER = "n560fr_ITER_PFPO_W_Ne"
 CFG_TPL     = str(Path(__file__).parent.parent / "configs" / "bench_xgc1.yaml")
 OUT_JSON    = str(Path(__file__).parent.parent / "results" / "bench_xgc1.json")
