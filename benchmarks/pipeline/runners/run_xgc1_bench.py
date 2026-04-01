@@ -28,13 +28,12 @@ OUT_JSON    = str(Path(__file__).parent.parent / "results" / "bench_xgc1.json")
 
 # ── Step → stage mapping (xgc1 plugin step names) ──────────────────────────────
 # build_xgc1_mesh and process_xgc1_timesteps are redistributed using substep
-# ratios (read_mesh→preprocess, build_graph→structure, read_fields→preprocess,
-# assemble→transform, write→output).
+# ratios (read_mesh→ingest, build_graph→preprocess, read_fields→ingest,
+# assemble→structure, write→output).
 STAGE_MAP = {
     "load_xgc1_cases":        "ingest",
     "build_xgc1_mesh":        "structure",          # redistributed: read_mesh→ingest, build_graph→preprocess
     "process_xgc1_timesteps": "output",             # redistributed: read_fields→ingest, assemble→structure, write→output
-    "normalize_xgc1_outputs": "transform",          # direct
     "write_checksums":        "output",
     "save_metadata":          "output",
 }

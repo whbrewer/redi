@@ -4,9 +4,9 @@
 #SBATCH -J redi_bench_oc22
 #SBATCH -N 1
 #SBATCH -p batch
-#SBATCH -t 08:00:00
-#SBATCH -o /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/jobs/logs/bench_oc22_%j.out
-#SBATCH -e /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/jobs/logs/bench_oc22_%j.err
+#SBATCH -t 24:00:00
+#SBATCH -o /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/pipeline/logs/bench_oc22_%j.out
+#SBATCH -e /autofs/nccs-svm1_home1/whbrewer/drai/redi/benchmarks/pipeline/logs/bench_oc22_%j.out
 
 # Full OC22 train split: 41 shards × ~200 k structures = ~8.2 M structures (69 GiB).
 # Expected wall-clock: 3–8 h depending on Lustre throughput.
@@ -27,11 +27,11 @@ echo "  Job ID:  $SLURM_JOB_ID"
 source "$VENV"
 cd "$REDI_DIR"
 
-mkdir -p benchmarks/jobs/logs benchmarks/results "$SAVE_DIR"
+mkdir -p benchmarks/pipeline/logs benchmarks/pipeline/results "$SAVE_DIR"
 
-python benchmarks/runners/run_oc22_bench.py \
+python benchmarks/pipeline/runners/run_oc22_bench.py \
     --split train \
     --save-dir "$SAVE_DIR" \
-    --out benchmarks/results/bench_oc22.json
+    --out benchmarks/pipeline/results/bench_oc22.json
 
 echo "=== Done  $(date) ==="

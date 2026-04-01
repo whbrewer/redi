@@ -33,7 +33,7 @@ OUT_BASE    = str(Path(__file__).parent / "results" / "stage_timings")
 CASES = [
     ("bench_xgc1.json",      "XGC1\n(fusion)"),
     ("bench_oc22.json",      "OC22 / HydraGNN\n(materials)"),
-    ("bench_openfold.json",  "OpenFold\n(life sciences)"),
+    ("bench_openfold_quick.json",  "OpenFold\n(life sciences)"),
     ("bench_climax.json",    "ClimaX / TaiESM1\n(climate)"),
 ]
 
@@ -53,11 +53,46 @@ STAGE_LABELS = {
     "output":     "Output",
 }
 
+# Per-case abbreviated labels rendered inside each segment.
+# Keyed by JSON filename (basename).
+SEGMENT_LABELS = {
+    "bench_climax.json": {
+        "ingest":     "Ingest",
+        "preprocess": "Regrid",
+        "transform":  "Normalize",
+        "structure":  "Structure",
+        "output":     "Write NPZ",
+    },
+    "bench_openfold_quick.json": {
+        "ingest":     "Scan",
+        "preprocess": "Parse",
+        "transform":  "Encode",
+        "structure":  "Assemble",
+        "output":     "Serialize",
+    },
+    "bench_oc22.json": {
+        "ingest":     "LMDB Read",
+        "preprocess": "Filter",
+        "transform":  "Graph Enc.",
+        "structure":  "PyG Build",
+        "output":     "Write BP",
+    },
+    "bench_xgc1.json": {
+        "ingest":     "BP Read",
+        "preprocess": "Mesh Proj.",
+        "transform":  "",
+        "structure":  "Graph",
+        "output":     "Write PT",
+    },
+}
+
+LABEL_THRESHOLD_PCT = 8.0   # minimum segment width as % of total bar to show label
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_results(results_dir: str) -> list:
-    """Load available JSON result files; return list of (label, data) tuples."""
+    """Load available JSON result files; return list of (fname, label, data) tuples."""
     entries = []
     for fname, label in CASES:
         fpath = Path(results_dir) / fname
@@ -66,7 +101,7 @@ def load_results(results_dir: str) -> list:
             continue
         with open(fpath) as f:
             data = json.load(f)
-        entries.append((label, data))
+        entries.append((fname, label, data))
     return entries
 
 
@@ -121,21 +156,34 @@ def make_plot(entries: list, mode: str, out_base: str):
     y_positions = np.arange(n)
 
     # Normalise values
-    all_vals = [get_normalised_values(data, mode) for _, data in entries]
+    all_vals = [get_normalised_values(data, mode) for _, _, data in entries]
 
-    # Build stacked bars
+    # Build stacked bars and add in-segment labels
     left = np.zeros(n)
     for stage in STAGES:
         widths = np.array([v[stage] for v in all_vals])
-        bars = ax.barh(
+        ax.barh(
             y_positions, widths, left=left,
             height=bar_h, color=COLORS[stage], label=STAGE_LABELS[stage],
             edgecolor="white", linewidth=0.5,
         )
+        # In-segment labels
+        for i, (fname, lbl, data) in enumerate(entries):
+            w = widths[i]
+            total_bar = sum(all_vals[i][s] for s in STAGES)
+            if total_bar > 0 and (w / total_bar * 100) >= LABEL_THRESHOLD_PCT:
+                seg_label = SEGMENT_LABELS.get(fname, {}).get(stage, "")
+                if seg_label:
+                    ax.text(
+                        left[i] + w / 2, y_positions[i],
+                        seg_label, va="center", ha="center",
+                        fontsize=7, color="white", fontweight="normal",
+                        clip_on=True,
+                    )
         left += widths
 
     # Annotations
-    for i, (lbl, data) in enumerate(entries):
+    for i, (fname, lbl, data) in enumerate(entries):
         total = sum(all_vals[i][s] for s in STAGES)
         unit = {
             "raw":        "s",
@@ -156,7 +204,7 @@ def make_plot(entries: list, mode: str, out_base: str):
                     f"{total:.1f} {unit}", va="center", ha="left", fontsize=8)
 
     ax.set_yticks(y_positions)
-    ax.set_yticklabels([lbl for lbl, _ in entries], fontsize=10)
+    ax.set_yticklabels([lbl for _, lbl, _ in entries], fontsize=10)
     ax.set_xlabel(x_label(mode), fontsize=11)
     ax.set_title("REDI Pipeline Stage Timings", fontsize=13, fontweight="bold")
 
@@ -176,7 +224,7 @@ def make_plot(entries: list, mode: str, out_base: str):
     ax.margins(y=0.28 if mode == "pct" else 0.15)
 
     # Add sample-size annotations below each bar
-    for i, (lbl, data) in enumerate(entries):
+    for i, (fname, lbl, data) in enumerate(entries):
         n_str = ""
         if "n_proteins" in data:
             n_str = f"n={data['n_proteins']:,} proteins"
@@ -214,7 +262,7 @@ def main():
         return
 
     print(f"\nLoaded {len(entries)} result(s):")
-    for lbl, data in entries:
+    for fname, lbl, data in entries:
         print(f"  {lbl.strip()}: total={data.get('total_s','?')}s")
     print()
 
