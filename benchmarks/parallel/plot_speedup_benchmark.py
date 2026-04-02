@@ -48,14 +48,14 @@ DOMAIN_META = {
         "color": "#d62728",   # red
         "marker": "^",
         "file": "speedup_openfold.json",
-        "xlabel": "Threads",
+        "xlabel": "Workers",
     },
     "oc22": {
         "title": "Materials\n(HydraGNN/OC22, 160k LMDB structures)",
         "color": "#ff7f0e",   # orange
         "marker": "D",
         "file": "speedup_oc22.json",
-        "xlabel": "Threads",
+        "xlabel": "Workers",
     },
 }
 
