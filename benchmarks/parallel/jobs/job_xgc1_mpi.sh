@@ -6,7 +6,7 @@
 #   redi run <case_dir>/xgc.f3d.NNNNN.bp --domain xgc1 -c <cfg>
 #
 # 8 tasks/node keeps memory pressure low for the large xgc.f3d fields.
-# Outputs written to: /lustre/orion/scratch/whbrewer/stf053/redi-xgc1-mpi-$SLURM_JOB_ID/
+# Outputs written to: /lustre/orion/scratch/$USER/stf053/redi-xgc1-mpi-$SLURM_JOB_ID/
 #
 # Submit: sbatch benchmarks/parallel/jobs/job_xgc1_mpi.sh
 #
@@ -24,7 +24,7 @@ set -e
 source ~/venv/redi/bin/activate
 
 XGC1_CASE="/lustre/orion/world-shared/fus184/jyc/fusiond-seed-xgc1-data-samples/n560fr_ITER_PFPO_W_Ne"
-OUT_DIR="/lustre/orion/scratch/whbrewer/stf053/redi-xgc1-mpi-$SLURM_JOB_ID"
+OUT_DIR="/lustre/orion/scratch/$USER/stf053/redi-xgc1-mpi-$SLURM_JOB_ID"
 CFG="$OUT_DIR/bench_xgc1_mpi.yaml"
 
 mkdir -p "$OUT_DIR"
