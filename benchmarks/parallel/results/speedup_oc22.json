@@ -1,68 +1,74 @@
 {
   "case": "oc22_hydragnn",
-  "domain": "materials",
+  "domain": "hydragnn",
   "n_shards": 32,
-  "total_input_gib": 46.6,
+  "max_samples_per_shard": 5000,
   "runs": [
     {
       "workers": 1,
       "n_shards": 32,
+      "max_samples_per_shard": 5000,
       "n_ok": 32,
-      "total_ms": 16986,
-      "total_s": 17.0,
-      "throughput_shards_per_s": 1.884,
+      "total_s": 2323.3,
+      "total_ms": 2323272,
+      "throughput_structs_per_s": 68.9,
       "speedup": 1.0,
       "parallel_efficiency": 1.0
     },
     {
       "workers": 2,
       "n_shards": 32,
+      "max_samples_per_shard": 5000,
       "n_ok": 32,
-      "total_ms": 9337,
-      "total_s": 9.3,
-      "throughput_shards_per_s": 3.427,
-      "speedup": 1.819,
-      "parallel_efficiency": 0.909
+      "total_s": 1124.9,
+      "total_ms": 1124887,
+      "throughput_structs_per_s": 142.2,
+      "speedup": 2.065,
+      "parallel_efficiency": 1.032
     },
     {
       "workers": 4,
       "n_shards": 32,
+      "max_samples_per_shard": 5000,
       "n_ok": 32,
-      "total_ms": 4974,
-      "total_s": 5.0,
-      "throughput_shards_per_s": 6.433,
-      "speedup": 3.415,
-      "parallel_efficiency": 0.854
+      "total_s": 564.0,
+      "total_ms": 564019,
+      "throughput_structs_per_s": 283.7,
+      "speedup": 4.119,
+      "parallel_efficiency": 1.03
     },
     {
       "workers": 8,
       "n_shards": 32,
+      "max_samples_per_shard": 5000,
       "n_ok": 32,
-      "total_ms": 2712,
-      "total_s": 2.7,
-      "throughput_shards_per_s": 11.799,
-      "speedup": 6.263,
-      "parallel_efficiency": 0.783
+      "total_s": 286.6,
+      "total_ms": 286567,
+      "throughput_structs_per_s": 558.3,
+      "speedup": 8.107,
+      "parallel_efficiency": 1.013
     },
     {
       "workers": 16,
       "n_shards": 32,
+      "max_samples_per_shard": 5000,
       "n_ok": 32,
-      "total_ms": 1551,
-      "total_s": 1.6,
-      "throughput_shards_per_s": 20.632,
-      "speedup": 10.952,
-      "parallel_efficiency": 0.684
+      "total_s": 143.7,
+      "total_ms": 143711,
+      "throughput_structs_per_s": 1113.3,
+      "speedup": 16.166,
+      "parallel_efficiency": 1.01
     },
     {
       "workers": 32,
       "n_shards": 32,
+      "max_samples_per_shard": 5000,
       "n_ok": 32,
-      "total_ms": 1091,
-      "total_s": 1.1,
-      "throughput_shards_per_s": 29.331,
-      "speedup": 15.569,
-      "parallel_efficiency": 0.487
+      "total_s": 84.0,
+      "total_ms": 83999,
+      "throughput_structs_per_s": 1904.8,
+      "speedup": 27.658,
+      "parallel_efficiency": 0.864
     }
   ]
 }

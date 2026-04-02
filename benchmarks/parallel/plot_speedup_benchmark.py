@@ -36,7 +36,7 @@ DOMAIN_META = {
         "xlabel": "Workers",
     },
     "xgc1": {
-        "title": "Fusion\n(XGC1, 32 snapshots, 177 GiB)",
+        "title": "Fusion\n(XGC1, 1168 snapshots, 7.9 TB)",
         "color": "#9467bd",   # purple
         "marker": "s",
         "file": "speedup_xgc1.json",
@@ -44,14 +44,14 @@ DOMAIN_META = {
         "xlabel": "Nodes (56 processes/node)",
     },
     "openfold": {
-        "title": "Life Sciences\n(OpenFold, 128 proteins)",
+        "title": "Life Sciences\n(OpenFold/OPS, 4,096 mmCIF files)",
         "color": "#d62728",   # red
         "marker": "^",
         "file": "speedup_openfold.json",
         "xlabel": "Threads",
     },
     "oc22": {
-        "title": "Materials\n(OC22, 32 LMDB shards, 47 GiB)",
+        "title": "Materials\n(HydraGNN/OC22, 160k LMDB structures)",
         "color": "#ff7f0e",   # orange
         "marker": "D",
         "file": "speedup_oc22.json",

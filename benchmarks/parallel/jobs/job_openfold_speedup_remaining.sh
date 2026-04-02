@@ -13,7 +13,7 @@
 #SBATCH -N 1
 #SBATCH --ntasks-per-node 1
 #SBATCH --cpus-per-task 32
-#SBATCH -t 01:00:00
+#SBATCH -t 06:00:00
 #SBATCH -p batch
 
 set -euo pipefail
@@ -33,7 +33,7 @@ echo "================================================================"
 
 python benchmarks/parallel/runners/run_openfold_speedup.py \
     --n-proteins 4096 \
-    --worker-list 2,4,8,16,32
+    --worker-list 8,16,32
 
 echo ""
 echo "=== Done $(date) ==="

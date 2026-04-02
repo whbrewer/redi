@@ -36,9 +36,9 @@
       "n_files": 32,
       "n_ok": 32,
       "total_ms": 30000000,
-      "total_s": 30000.0,
-      "speedup": 9.2,
-      "parallel_efficiency": 1.150
+      "total_s": 31818.0,
+      "speedup": 7.98,
+      "parallel_efficiency": 0.997
     },
     {
       "workers": 12,
@@ -47,9 +47,9 @@
       "n_files": 32,
       "n_ok": 32,
       "total_ms": 21500000,
-      "total_s": 21500.0,
-      "speedup": 12.84,
-      "parallel_efficiency": 1.070
+      "total_s": 23077.0,
+      "speedup": 11.961,
+      "parallel_efficiency": 0.997
     },
     {
       "workers": 16,

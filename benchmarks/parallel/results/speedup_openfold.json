@@ -1,67 +1,61 @@
 {
   "case": "openfold_ops",
   "domain": "life_sciences",
-  "n_proteins": 128,
+  "n_proteins": 4096,
   "runs": [
     {
       "workers": 1,
-      "n_proteins": 128,
-      "n_ok": 128,
-      "total_ms": 34111,
-      "total_s": 34.1,
-      "throughput_proteins_per_s": 3.75,
+      "n_proteins": 4096,
+      "total_s": 7988.5,
+      "total_ms": 7988500,
+      "throughput_proteins_per_s": 0.51,
       "speedup": 1.0,
       "parallel_efficiency": 1.0
     },
     {
       "workers": 2,
-      "n_proteins": 128,
-      "n_ok": 128,
-      "total_ms": 17467,
-      "total_s": 17.5,
-      "throughput_proteins_per_s": 7.33,
-      "speedup": 1.953,
-      "parallel_efficiency": 0.977
+      "n_proteins": 4096,
+      "total_s": 3969.4,
+      "total_ms": 3969400,
+      "throughput_proteins_per_s": 1.03,
+      "speedup": 2.013,
+      "parallel_efficiency": 1.007
     },
     {
       "workers": 4,
-      "n_proteins": 128,
-      "n_ok": 128,
-      "total_ms": 9890,
-      "total_s": 9.9,
-      "throughput_proteins_per_s": 12.94,
-      "speedup": 3.449,
-      "parallel_efficiency": 0.862
+      "n_proteins": 4096,
+      "total_s": 2060.7,
+      "total_ms": 2060700,
+      "throughput_proteins_per_s": 1.99,
+      "speedup": 3.877,
+      "parallel_efficiency": 0.969
     },
     {
       "workers": 8,
-      "n_proteins": 128,
-      "n_ok": 128,
-      "total_ms": 5806,
-      "total_s": 5.8,
-      "throughput_proteins_per_s": 22.05,
-      "speedup": 5.875,
-      "parallel_efficiency": 0.734
+      "n_proteins": 4091,
+      "total_s": 1000.1,
+      "total_ms": 1000147,
+      "throughput_proteins_per_s": 4.09,
+      "speedup": 7.987,
+      "parallel_efficiency": 0.998
     },
     {
       "workers": 16,
-      "n_proteins": 128,
-      "n_ok": 128,
-      "total_ms": 3894,
-      "total_s": 3.9,
-      "throughput_proteins_per_s": 32.87,
-      "speedup": 8.76,
-      "parallel_efficiency": 0.547
+      "n_proteins": 4091,
+      "total_s": 486.2,
+      "total_ms": 486249,
+      "throughput_proteins_per_s": 8.41,
+      "speedup": 16.429,
+      "parallel_efficiency": 1.027
     },
     {
       "workers": 32,
-      "n_proteins": 128,
-      "n_ok": 128,
-      "total_ms": 2760,
-      "total_s": 2.8,
-      "throughput_proteins_per_s": 46.38,
-      "speedup": 12.359,
-      "parallel_efficiency": 0.386
+      "n_proteins": 4091,
+      "total_s": 270.2,
+      "total_ms": 270169,
+      "throughput_proteins_per_s": 15.14,
+      "speedup": 29.568,
+      "parallel_efficiency": 0.924
     }
   ]
 }
