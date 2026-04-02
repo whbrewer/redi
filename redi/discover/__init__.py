@@ -163,29 +163,58 @@ def _inspect_data(path: Path, style: str) -> dict:
         'discoveries': [],
     }
 
+    # Extensions that are directories treated as single logical files
+    _DIR_EXTENSIONS = {'.bp'}
+
     if path.is_file():
         files = [path]
+    elif path.is_dir() and path.suffix.lower() in _DIR_EXTENSIONS:
+        files = [path]
     else:
-        files = list(path.rglob('*'))
-        files = [f for f in files if f.is_file()]
+        files = []
+        for item in path.rglob('*'):
+            if item.is_dir() and item.suffix.lower() in _DIR_EXTENSIONS:
+                files.append(item)
+            elif item.is_file():
+                # Skip files that live inside a .bp directory
+                if not any(p.suffix.lower() in _DIR_EXTENSIONS for p in item.parents):
+                    files.append(item)
 
-    for f in files[:100]:  # Limit to first 100 files
+    # Full inventory: size + formats over all files
+    _ANALYSIS_CAP_PER_FORMAT = 10
+    for f in files:
+        if f.is_dir():
+            size = sum(c.stat().st_size for c in f.rglob('*') if c.is_file())
+        else:
+            size = f.stat().st_size
+        inspection['total_size'] += size
+        inspection['formats'].add(f.suffix.lower())
+
+    # Sample up to N files per format for analysis
+    from collections import defaultdict
+    _per_format: dict = defaultdict(list)
+    for f in files:
+        _per_format[f.suffix.lower()].append(f)
+    files_to_analyze = []
+    for fmt_files in _per_format.values():
+        files_to_analyze.extend(fmt_files[:_ANALYSIS_CAP_PER_FORMAT])
+
+    for f in files_to_analyze:
         file_info = {
             'path': str(f),
             'name': f.name,
             'suffix': f.suffix.lower(),
-            'size': f.stat().st_size,
+            'size': (sum(c.stat().st_size for c in f.rglob('*') if c.is_file())
+                     if f.is_dir() else f.stat().st_size),
         }
         inspection['files'].append(file_info)
-        inspection['total_size'] += file_info['size']
-        inspection['formats'].add(f.suffix.lower())
 
     inspection['formats'] = list(inspection['formats'])
     inspection['file_count'] = len(files)
 
-    # Run per-file processor for every file (up to the cap)
+    # Run per-file processor on sampled files
     processor_errors: list[ProcessorError] = []
-    for f in files[:100]:
+    for f in files_to_analyze:
         try:
             discovery = registry.analyze_file(f)
             inspection['discoveries'].append(discovery)
@@ -316,17 +345,54 @@ def _infer_characteristics(inspection: dict, style: str) -> dict:
     formats = inspection.get('formats', [])
     samples = inspection.get('sample_data', {})
 
-    # Infer modality
-    if '.nc' in formats or '.nc4' in formats or '.grib' in formats:
+    # Infer modality — also check discoveries for ADIOS2 BP fusion data
+    if '.lmdb' in formats or '.extxyz' in formats or '.xz' in formats:
+        inference['modality'] = 'graph'
+        inference['likely_domain'] = 'materials'
+        inference['suggested_format'] = 'hdf5'
+        # Check discoveries for energy/forces labels
+        for d in inspection.get('discoveries', []):
+            meta = d.metadata if hasattr(d, 'metadata') else {}
+            # extXYZ discoveries expose has_energy/has_forces directly
+            if meta.get('has_energy') or meta.get('has_forces'):
+                inference['has_labels'] = True
+                break
+            # LMDB discoveries expose schema.fields
+            schema = meta.get('schema', {})
+            fields = schema.get('fields', {})
+            if 'energy' in fields or 'forces' in fields or 'y' in fields:
+                inference['has_labels'] = True
+                break
+    elif '.bp' in formats:
+        inference['modality'] = 'simulation'
+        inference['suggested_format'] = 'hdf5'
+        # Check variable names from discoveries to confirm fusion domain
+        for d in inspection.get('discoveries', []):
+            meta = d.metadata if hasattr(d, 'metadata') else {}
+            if meta.get('has_electron_fields') or meta.get('has_ion_fields'):
+                inference['likely_domain'] = 'fusion'
+                break
+        else:
+            inference['likely_domain'] = 'fusion'  # .bp is most commonly fusion/HPC sim
+    elif '.nc' in formats or '.nc4' in formats or '.grib' in formats:
         inference['modality'] = 'gridded'
         inference['likely_domain'] = 'climate'
         inference['suggested_format'] = 'zarr'
-    elif '.cif' in formats or '.poscar' in formats:
+    elif '.fasta' in formats or '.pdb' in formats or '.a3m' in formats:
+        inference['modality'] = 'sequence'
+        inference['likely_domain'] = 'life_sciences'
+        inference['suggested_format'] = 'hdf5'
+        # .cif + .fasta + .a3m together is unambiguously protein structure
+        if '.cif' in formats and ('.fasta' in formats or '.a3m' in formats):
+            inference['confidence_override'] = 'high'
+    elif '.poscar' in formats:
         inference['modality'] = 'structured'
         inference['likely_domain'] = 'materials'
         inference['suggested_format'] = 'hdf5'
-    elif '.fasta' in formats or '.pdb' in formats:
-        inference['modality'] = 'sequence'
+    elif '.cif' in formats:
+        # .cif alone is ambiguous: mmCIF (life sciences) vs CIF (materials)
+        # Default to life sciences; user can override with --domain
+        inference['modality'] = 'structured'
         inference['likely_domain'] = 'life_sciences'
         inference['suggested_format'] = 'hdf5'
     elif '.npy' in formats or '.npz' in formats:
@@ -346,6 +412,9 @@ def _infer_characteristics(inspection: dict, style: str) -> dict:
             cols = sample.get('columns', [])
             cols_lower = [c.lower() for c in cols]
 
+            _hpc_keywords = ['job', 'queue', 'walltime', 'node', 'core', 'cpu', 'gpu',
+                              'wait', 'submit', 'partition', 'scheduler', 'slurm', 'pbs']
+
             if any(c in cols_lower for c in ['temperature', 'lat', 'lon', 'latitude', 'longitude']):
                 inference['likely_domain'] = 'climate'
             elif any(c in cols_lower for c in ['formula', 'lattice', 'spacegroup', 'energy']):
@@ -354,10 +423,12 @@ def _infer_characteristics(inspection: dict, style: str) -> dict:
                 inference['likely_domain'] = 'life_sciences'
             elif any(c in cols_lower for c in ['plasma', 'tokamak', 'disruption', 'ip']):
                 inference['likely_domain'] = 'fusion'
-            elif any(c in cols_lower for c in ['job', 'queue', 'walltime', 'nodes', 'cores']):
+            elif any(kw in col for col in cols_lower for kw in _hpc_keywords):
                 inference['likely_domain'] = 'hpc'
 
-            if any(c in cols_lower for c in ['label', 'target', 'y', 'class', 'category']):
+            _label_names = ['label', 'target', 'class', 'category', 'completed', 'success',
+                             'failed', 'outcome', 'result']
+            if any(any(ln in c for ln in _label_names) for c in cols_lower):
                 inference['has_labels'] = True
 
             if any(c in cols_lower for c in ['split', 'fold', 'train', 'test', 'val']):
@@ -377,7 +448,7 @@ def _propose_pipeline(inspection: dict, inference: dict, style: str) -> dict:
     proposal = {
         'pipeline_steps': [],
         'output_format': inference.get('suggested_format', 'npz'),
-        'confidence': 'medium',
+        'confidence': inference.get('confidence_override', 'medium'),
         'notes': [],
     }
 
@@ -390,7 +461,32 @@ def _propose_pipeline(inspection: dict, inference: dict, style: str) -> dict:
         'stage': 'ingest',
     })
 
-    if modality == 'tabular':
+    if modality == 'graph':
+        proposal['pipeline_steps'].append({
+            'name': 'build_graphs',
+            'description': 'Convert atomic structures to radius graphs with node/edge features',
+            'stage': 'preprocess',
+        })
+        proposal['pipeline_steps'].append({
+            'name': 'normalize_targets',
+            'description': 'Subtract reference energies, Z-score normalize energy and forces',
+            'stage': 'transform',
+        })
+        proposal['output_format'] = 'hdf5'
+        proposal['confidence'] = 'high'
+    elif modality == 'simulation':
+        proposal['pipeline_steps'].append({
+            'name': 'extract_fields',
+            'description': 'Extract and assemble physics field arrays from simulation output',
+            'stage': 'preprocess',
+        })
+        proposal['pipeline_steps'].append({
+            'name': 'normalize',
+            'description': 'Z-score normalize each field independently',
+            'stage': 'transform',
+        })
+        proposal['confidence'] = 'high'
+    elif modality == 'tabular':
         proposal['pipeline_steps'].append({
             'name': 'handle_missing',
             'description': 'Handle missing values (impute or drop)',
@@ -449,7 +545,7 @@ def _propose_pipeline(inspection: dict, inference: dict, style: str) -> dict:
         proposal['notes'].append("Could not confidently detect domain. Consider specifying with --domain.")
         proposal['confidence'] = 'low'
 
-    if not inference.get('has_labels'):
+    if not inference.get('has_labels') and modality not in ('simulation', 'graph', 'sequence', 'gridded'):
         proposal['notes'].append("No label column detected. This may be unsupervised or labels need to be added.")
 
     if style == "rich":

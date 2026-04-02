@@ -79,6 +79,14 @@ def _render_file_section(d: FileDiscovery) -> list[str]:
         lines += _render_csv_section(d)
     elif d.file_type == "Markdown":
         lines += _render_markdown_section(d)
+    elif d.file_type == "NetCDF":
+        lines += _render_netcdf_section(d)
+    elif d.file_type == "FASTA":
+        lines += _render_fasta_section(d)
+    elif d.file_type == "A3M":
+        lines += _render_a3m_section(d)
+    elif d.file_type == "mmCIF":
+        lines += _render_mmcif_section(d)
     else:
         if d.metadata:
             lines += ["**Metadata:**", ""]
@@ -126,6 +134,91 @@ def _render_csv_section(d: FileDiscovery) -> list[str]:
             stats = col_stats.get(col, {})
             stats_str = _fmt_stats(ctype, stats)
             lines.append(f"| `{col}` | {ctype} | {stats_str} |")
+        lines.append("")
+
+    return lines
+
+
+def _render_fasta_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+    lines.append(f"**Sequences:** {meta.get('n_sequences', '?')}  ")
+    lines.append(f"**Type:** {meta.get('sequence_type', 'unknown')}  ")
+    mn, mx, mean = meta.get('length_min'), meta.get('length_max'), meta.get('length_mean')
+    if mn is not None:
+        lines.append(f"**Length:** min={mn}, max={mx}, mean={mean} residues")
+    ids = meta.get("ids", [])
+    if ids:
+        lines.append(f"**Sample IDs:** {', '.join(ids)}")
+    lines.append("")
+    return lines
+
+
+def _render_a3m_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+    lines.append(f"**Query:** `{meta.get('query_id', '?')}`  ")
+    lines.append(f"**Query length:** {meta.get('query_length', '?')} residues  ")
+    lines.append(f"**Alignment depth:** {meta.get('alignment_depth', '?')} sequences")
+    lines.append("")
+    return lines
+
+
+def _render_mmcif_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+    if meta.get("pdb_id"):
+        lines.append(f"**PDB ID:** {meta['pdb_id']}  ")
+    if meta.get("experimental_method"):
+        lines.append(f"**Method:** {meta['experimental_method']}  ")
+    if meta.get("resolution_angstrom"):
+        lines.append(f"**Resolution:** {meta['resolution_angstrom']} Å  ")
+    if meta.get("n_chains"):
+        chains = ", ".join(meta.get("chains", []))
+        lines.append(f"**Chains:** {meta['n_chains']} ({chains})  ")
+    if meta.get("sequence_length_min") is not None:
+        mn, mx = meta["sequence_length_min"], meta["sequence_length_max"]
+        label = "residues" if mn == mx else f"{mn}–{mx} residues"
+        lines.append(f"**Sequence length:** {label}")
+    lines.append("")
+    return lines
+
+
+def _render_netcdf_section(d: FileDiscovery) -> list[str]:
+    meta = d.metadata
+    lines: list[str] = []
+
+    dims = meta.get("dimensions", {})
+    if dims:
+        dim_str = " × ".join(f"{k}={v}" for k, v in dims.items())
+        lines.append(f"**Dimensions:** {dim_str}")
+        lines.append("")
+
+    lat_range = meta.get("lat_range")
+    lon_range = meta.get("lon_range")
+    res = meta.get("resolution_deg")
+    if lat_range and lon_range:
+        lines.append(f"**Spatial:** lat {lat_range[0]}°–{lat_range[1]}°, lon {lon_range[0]}°–{lon_range[1]}°" +
+                     (f" at {res}° resolution" if res else ""))
+        lines.append("")
+
+    t_start = meta.get("time_start")
+    t_end = meta.get("time_end")
+    t_steps = meta.get("time_steps")
+    if t_start and t_end:
+        lines.append(f"**Time:** {t_start} → {t_end} ({t_steps} timesteps)")
+        lines.append("")
+
+    var_info = meta.get("variable_info", {})
+    if var_info:
+        lines += ["### Variables", ""]
+        lines += ["| Variable | Shape | Units | Long Name |",
+                  "|----------|-------|-------|-----------|"]
+        for var, info in var_info.items():
+            shape = "×".join(str(s) for s in info.get("shape", []))
+            units = info.get("units", "—")
+            long_name = info.get("long_name", "—")
+            lines.append(f"| `{var}` | {shape} | {units} | {long_name} |")
         lines.append("")
 
     return lines
