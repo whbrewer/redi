@@ -72,9 +72,9 @@ class Plugin:
     module: Any                          # the imported plugin module
     entry_point_name: str = ""           # name as registered in entry_points
 
-    def get_full_pipeline(self) -> List:
+    def get_full_pipeline(self, **kwargs) -> List:
         if hasattr(self.module, "get_full_pipeline"):
-            return self.module.get_full_pipeline()
+            return self.module.get_full_pipeline(**kwargs)
         # Assemble from stage functions if get_full_pipeline is absent
         steps = []
         for fn in ("get_ingest_steps", "get_preprocess_steps",

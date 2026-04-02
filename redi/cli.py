@@ -469,7 +469,9 @@ def run_pipeline(
             if _plugin is not None:
                 _plugin_fmt = config.get("output_format", "npz") if config else "npz"
                 import inspect as _inspect
-                _sig = _inspect.signature(_plugin.get_full_pipeline)
+                # Inspect the underlying module function, not the Plugin wrapper method
+                _module_fn = getattr(_plugin.module, "get_full_pipeline", None)
+                _sig = _inspect.signature(_module_fn) if _module_fn else _inspect.signature(_plugin.get_full_pipeline)
                 if "output_format" in _sig.parameters:
                     get_full_pipeline = lambda: _plugin.get_full_pipeline(output_format=_plugin_fmt)
                 else:
@@ -2535,7 +2537,7 @@ Download examples (climate domain)::
                            help="Comma-separated list of stages to run. "
                                 "Available: ingest, preprocess, transform, structure, output. "
                                 "Prerequisites are auto-included (e.g., -s preprocess runs ingest,preprocess)")
-    run_parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr"],
+    run_parser.add_argument("-f", "--format", choices=["npz", "parquet", "csv", "hdf5", "zarr", "pt"],
                            default="npz", help="Output format")
     run_parser.add_argument("--shards", type=int, default=1, metavar="N",
                            help="Number of output shards per split (e.g. match your training node count)")
