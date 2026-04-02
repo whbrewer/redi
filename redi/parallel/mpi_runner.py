@@ -81,7 +81,18 @@ _DOMAIN_GLOBS = {
     "life_sciences": "*",   # protein directories
     "hpc":          "*.csv",
     "geospatial":   "*.geojson",
+    # xgc1: case subdirectories identified by presence of fort.input.used
+    "xgc1":         "__xgc1_cases__",
 }
+
+
+def _discover_xgc1_cases(input_path: Path) -> list:
+    """Return subdirectories that look like XGC1 cases (contain fort.input.used)."""
+    cases = sorted(
+        str(p) for p in input_path.iterdir()
+        if p.is_dir() and (p / "fort.input.used").exists()
+    )
+    return cases
 
 
 def discover_files(args: argparse.Namespace) -> list:
@@ -99,7 +110,10 @@ def discover_files(args: argparse.Namespace) -> list:
     input_path = Path(args.input)
     if input_path.is_dir():
         pattern = args.glob or _DOMAIN_GLOBS.get(args.domain or "", "*")
-        paths = sorted(str(p) for p in input_path.glob(pattern))
+        if pattern == "__xgc1_cases__":
+            paths = _discover_xgc1_cases(input_path)
+        else:
+            paths = sorted(str(p) for p in input_path.glob(pattern))
     else:
         paths = sorted(_glob.glob(str(args.input)))
 
