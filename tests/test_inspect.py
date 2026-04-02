@@ -220,6 +220,14 @@ class TestNewFormatHandlers:
 
     def test_inspect_parquet(self, temp_dir):
         """Test Parquet file inspection."""
+        try:
+            import pyarrow  # noqa: F401
+        except ImportError:
+            try:
+                import fastparquet  # noqa: F401
+            except ImportError:
+                pytest.skip("pyarrow or fastparquet not available")
+
         import pandas as pd
         from redi.assess import DataAnalyzer
 
@@ -247,8 +255,8 @@ class TestNewFormatHandlers:
 
         try:
             import h5py
-        except ImportError:
-            pytest.skip("h5py not available")
+        except (ImportError, ValueError):
+            pytest.skip("h5py not available or HDF5 version conflict (pyarrow may have loaded an incompatible libhdf5)")
 
         h5_path = temp_dir / "test.h5"
         with h5py.File(h5_path, 'w') as f:

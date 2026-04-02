@@ -70,8 +70,8 @@ class CsvProcessor(BaseProcessor):
             return "boolean"
         if pd.api.types.is_numeric_dtype(series):
             return "numeric"
-        # Try datetime parse on a sample
-        if pd.api.types.is_object_dtype(series):
+        # Try datetime parse on a sample (pandas 3+ uses str dtype, not object)
+        if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
             sample = series.dropna().head(50)
             if len(sample) > 0:
                 try:
