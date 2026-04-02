@@ -15,6 +15,9 @@ Usage:
 
     # Use a pre-built file list (compatible with gnu backend):
     srun python -m redi.parallel.mpi_runner --filelist files.txt --output /path/out --merge
+
+    # Pass a YAML config to each redi run subprocess (e.g. for domain-specific settings):
+    srun python -m redi.parallel.mpi_runner --input /data/xgc1/ --output /path/out --domain xgc1 -c bench_xgc1.yaml --merge
 """
 
 import argparse
@@ -65,6 +68,8 @@ def parse_args() -> argparse.Namespace:
                    help="redi output style: simple, rich, json (default: simple)")
     p.add_argument("--provenance", action="store_true",
                    help="Enable FlowCept provenance tracking per file; merge buffers on rank 0")
+    p.add_argument("-c", "--config",
+                   help="YAML config file passed to each redi run subprocess")
     return p.parse_args()
 
 
@@ -123,6 +128,8 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
         cmd += ["-f", args.output_format]
     if getattr(args, "provenance", False):
         cmd += ["--provenance"]
+    if getattr(args, "config", None):
+        cmd += ["-c", args.config]
 
     result = {
         "input": filepath,
