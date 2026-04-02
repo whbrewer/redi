@@ -95,11 +95,16 @@ def _discover_xgc1_cases(input_path: Path) -> list:
 
 
 def _discover_xgc1_timesteps(case_path: Path) -> list:
-    """Return individual timestep .bp directories from a single XGC1 case."""
-    return sorted(
-        str(p) for p in case_path.glob("xgc.3d.*.bp")
-        if p.is_dir()
-    )
+    """Return individual plasma-field timestep .bp directories from a single XGC1 case.
+
+    XGC1 uses xgc.f3d.*.bp (3D cases) or xgc.f2d.*.bp (2D cases) for field data.
+    These match what discover_timestep_files() returns inside the plugin.
+    """
+    # Try 3D first, fall back to 2D
+    files = sorted(p for p in case_path.glob("xgc.f3d.*.bp") if p.is_dir())
+    if not files:
+        files = sorted(p for p in case_path.glob("xgc.f2d.*.bp") if p.is_dir())
+    return [str(p) for p in files]
 
 
 def discover_files(args: argparse.Namespace) -> list:
