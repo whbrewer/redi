@@ -24,8 +24,8 @@
       "processes": 224,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 69000000,
-      "total_s": 69000.0,
+      "total_ms": 68501000,
+      "total_s": 68501,
       "speedup": 4.0,
       "parallel_efficiency": 1.0
     },
@@ -35,8 +35,8 @@
       "processes": 448,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 30000000,
-      "total_s": 31818.0,
+      "total_ms": 29788000,
+      "total_s": 29788,
       "speedup": 7.98,
       "parallel_efficiency": 0.997
     },
@@ -46,8 +46,8 @@
       "processes": 672,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 21500000,
-      "total_s": 23077.0,
+      "total_ms": 21753000,
+      "total_s": 21753,
       "speedup": 11.961,
       "parallel_efficiency": 0.997
     },
@@ -57,8 +57,8 @@
       "processes": 896,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 20000000,
-      "total_s": 20000.0,
+      "total_ms": 20579000,
+      "total_s": 20579,
       "speedup": 13.8,
       "parallel_efficiency": 0.863
     },
@@ -68,8 +68,8 @@
       "processes": 1120,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 19800000,
-      "total_s": 19800.0,
+      "total_ms": 19971000,
+      "total_s": 19971,
       "speedup": 13.94,
       "parallel_efficiency": 0.697
     }
