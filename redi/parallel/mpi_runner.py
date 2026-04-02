@@ -175,7 +175,14 @@ def process_file(filepath: str, args: argparse.Namespace, rank: int) -> dict:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, env=_child_env())
         if proc.returncode != 0:
-            result["errors"].append(proc.stderr.strip() or f"redi exited {proc.returncode}")
+            out = proc.stdout.strip()
+            err = proc.stderr.strip()
+            msg = f"redi exited {proc.returncode}"
+            if out:
+                msg += f"\n  stdout: {out[:500]}"
+            if err:
+                msg += f"\n  stderr: {err[:500]}"
+            result["errors"].append(msg)
             return result
 
         # Collect any NPZ files written by the pipeline
