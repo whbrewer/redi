@@ -1,0 +1,71 @@
+{
+  "case": "climax_awi",
+  "domain": "climate",
+  "n_files": 800,
+  "runs": [
+{
+    "workers": 4,
+    "n_files": 444,
+    "n_ok": 444,
+    "total_s": 7206,
+    "speedup": 1.0,
+    "parallel_efficiency": 1.000
+  },
+  {
+    "workers": 8,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 6397,
+    "speedup": 2.030,
+    "parallel_efficiency": 1.015
+  },
+  {
+    "workers": 16,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 3408,
+    "speedup": 3.810,
+    "parallel_efficiency": 0.952
+  },
+  {
+    "workers": 32,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 1564,
+    "speedup": 8.302,
+    "parallel_efficiency": 1.038
+  },
+  {
+    "workers": 100,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 481,
+    "speedup": 26.993,
+    "parallel_efficiency": 1.080
+  },
+  {
+    "workers": 200,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 261,
+    "speedup": 49.746,
+    "parallel_efficiency": 0.995
+  },
+  {
+    "workers": 400,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 136,
+    "speedup": 95.469,
+    "parallel_efficiency": 0.955
+  },
+  {
+    "workers": 800,
+    "n_files": 800,
+    "n_ok": 800,
+    "total_s": 78,
+    "speedup": 166.459,
+    "parallel_efficiency": 0.832
+    }
+  ]
+}

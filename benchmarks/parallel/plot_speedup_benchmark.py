@@ -21,6 +21,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Style — matches plot_io_benchmark.py palette
@@ -28,11 +29,11 @@ import matplotlib.ticker as ticker
 
 DOMAIN_META = {
     "climax": {
-        "title": "Climate\n(ClimaX/CMCC, 32 NetCDF Files)",
+        "title": "Climate\n(ClimaX/AWI-ESM, 800 NetCDF Files)",
         "color": "#2ca02c",   # green
         "marker": "o",
-        "file": "speedup_climax.json",
-        "xlabel": "Processes",
+        "file": "speedup_climax-awi.json",
+        "xlabel": "Workers",
     },
     "xgc1": {
         "title": "Fusion\n(XGC1, 32 snapshots, 177 GiB)",
@@ -110,14 +111,14 @@ def _plot_standard(ax, domain, entries):
     max_w    = max(workers)
     min_w    = min(workers)
 
-    # Ideal line anchored to first data point
-    ax.plot([min_w, max_w], [min_w, max_w],
-            color="#aaaaaa", linewidth=1.2, linestyle="--",
-            label="Ideal", zorder=1)
-
     ax.plot(workers, speedups,
             color=meta["color"], marker=meta["marker"],
-            linewidth=1.8, markersize=6, label="Strong scaling", zorder=2)
+            linewidth=1.8, markersize=6, label="Strong scaling", zorder=1)
+
+    # Ideal line for every data point
+    ax.plot(workers, [w / workers[0] for w in workers],
+            color="#aaaaaa", linewidth=1.2, linestyle="--",
+            label="Ideal", zorder=2)
 
     for w, sp, eff in zip(workers, speedups, effs):
         ax.annotate(f"{eff:.2f}",
