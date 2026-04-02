@@ -14,7 +14,7 @@
 #SBATCH -o redi-xgc1-mpi-%j.out
 #SBATCH -N 2
 #SBATCH --ntasks-per-node 32
-#SBATCH --cpus-per-task 2
+#SBATCH --cpus-per-task 1
 #SBATCH -t 2:00:00
 #SBATCH -p batch
 
