@@ -88,11 +88,18 @@ _DOMAIN_GLOBS = {
 
 def _discover_xgc1_cases(input_path: Path) -> list:
     """Return subdirectories that look like XGC1 cases (contain fort.input.used)."""
-    cases = sorted(
+    return sorted(
         str(p) for p in input_path.iterdir()
         if p.is_dir() and (p / "fort.input.used").exists()
     )
-    return cases
+
+
+def _discover_xgc1_timesteps(case_path: Path) -> list:
+    """Return individual timestep .bp directories from a single XGC1 case."""
+    return sorted(
+        str(p) for p in case_path.glob("xgc.3d.*.bp")
+        if p.is_dir()
+    )
 
 
 def discover_files(args: argparse.Namespace) -> list:
@@ -111,7 +118,12 @@ def discover_files(args: argparse.Namespace) -> list:
     if input_path.is_dir():
         pattern = args.glob or _DOMAIN_GLOBS.get(args.domain or "", "*")
         if pattern == "__xgc1_cases__":
-            paths = _discover_xgc1_cases(input_path)
+            # If the input is itself a case dir (has fort.input.used), distribute
+            # individual timestep files across ranks; otherwise distribute cases.
+            if (input_path / "fort.input.used").exists():
+                paths = _discover_xgc1_timesteps(input_path)
+            else:
+                paths = _discover_xgc1_cases(input_path)
         else:
             paths = sorted(str(p) for p in input_path.glob(pattern))
     else:
