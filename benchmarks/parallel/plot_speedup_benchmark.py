@@ -133,7 +133,7 @@ def _plot_standard(ax, domain, entries, x_range=None):
     if use_procs and xs[0] != 1:
         ax.annotate(f"baseline\n{xs[0]} tasks\n({xs[0]//56} nodes)",
                     xy=(xs[0], speedups[0]),
-                    xytext=(8, -18), textcoords="offset points",
+                    xytext=(8, -12), textcoords="offset points",
                     ha="left", va="top",
                     fontsize=6, color="#666666",
                     arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.8))
