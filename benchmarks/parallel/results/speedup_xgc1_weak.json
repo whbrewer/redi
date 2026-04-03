@@ -12,8 +12,8 @@
       "processes": 56,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 18000000,
-      "total_s": 18000.0,
+      "total_ms": 17734000,
+      "total_s": 17734,
       "parallel_efficiency": 1.0
     },
     {
@@ -22,9 +22,9 @@
       "processes": 112,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 18500000,
-      "total_s": 18500.0,
-      "parallel_efficiency": 0.973
+      "total_ms": 18165000,
+      "total_s": 18165.0,
+      "parallel_efficiency": 0.976
     },
     {
       "workers": 3,
@@ -32,9 +32,9 @@
       "processes": 168,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 18000000,
-      "total_s": 18000.0,
-      "parallel_efficiency": 1.0
+      "total_ms": 17904000,
+      "total_s": 17904.0,
+      "parallel_efficiency": 0.990
     },
     {
       "workers": 4,
@@ -42,9 +42,9 @@
       "processes": 224,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 20000000,
-      "total_s": 20000.0,
-      "parallel_efficiency": 0.900
+      "total_ms": 20152000,
+      "total_s": 20152.0,
+      "parallel_efficiency": 0.880
     },
     {
       "workers": 8,
@@ -52,9 +52,9 @@
       "processes": 448,
       "n_files": 32,
       "n_ok": 32,
-      "total_ms": 20000000,
-      "total_s": 20000.0,
-      "parallel_efficiency": 0.900
+      "total_ms": 20180000,
+      "total_s": 20180.0,
+      "parallel_efficiency": 0.878
     }
   ]
 }

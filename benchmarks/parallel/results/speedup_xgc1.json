@@ -37,7 +37,7 @@
       "n_ok": 32,
       "total_ms": 29788000,
       "total_s": 29788,
-      "speedup": 7.98,
+      "speedup": 9.265,
       "parallel_efficiency": 0.997
     },
     {
@@ -48,7 +48,7 @@
       "n_ok": 32,
       "total_ms": 21753000,
       "total_s": 21753,
-      "speedup": 11.961,
+      "speedup": 12.687,
       "parallel_efficiency": 0.997
     },
     {
@@ -59,7 +59,7 @@
       "n_ok": 32,
       "total_ms": 20579000,
       "total_s": 20579,
-      "speedup": 13.8,
+      "speedup": 13.411,
       "parallel_efficiency": 0.863
     },
     {
@@ -70,7 +70,7 @@
       "n_ok": 32,
       "total_ms": 19971000,
       "total_s": 19971,
-      "speedup": 13.94,
+      "speedup": 13.82,
       "parallel_efficiency": 0.697
     }
   ]
