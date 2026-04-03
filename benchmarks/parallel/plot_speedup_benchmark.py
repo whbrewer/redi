@@ -36,12 +36,13 @@ DOMAIN_META = {
         "xlabel": "Workers",
     },
     "xgc1": {
-        "title": "Fusion\n(XGC1, 1168 snapshots, 7.9 TB)",
+        "title": "Fusion\n(XGC1, 474 snapshots, 7.9 TB)",
         "color": "#9467bd",   # purple
         "marker": "s",
         "file": "speedup_xgc1.json",
         "weak_file": "speedup_xgc1_weak.json",
-        "xlabel": "Nodes (56 processes/node)",
+        "xlabel": "MPI Tasks (CPU Cores)",
+        "use_processes": True,   # x-axis in processes, not workers/nodes
     },
     "openfold": {
         "title": "Life Sciences\n(OpenFold/OPS, 4,096 mmCIF files)",
@@ -72,7 +73,7 @@ def _parse_runs(raw):
     for e in entries:
         rows.append({
             "workers":    e["workers"],
-            "processes":  e.get("processes"),
+            "processes":  e.get("processes", e["workers"]),
             "speedup":    e.get("speedup"),
             "efficiency": e.get("parallel_efficiency", e.get("efficiency", 1.0)),
         })
@@ -102,36 +103,46 @@ def load_results(results_dir: Path) -> dict:
 # Plot helpers
 # ---------------------------------------------------------------------------
 
-def _plot_standard(ax, domain, entries):
-    """Speedup vs workers with ideal reference line and efficiency annotations."""
-    meta     = DOMAIN_META[domain]
-    workers  = [e["workers"]    for e in entries]
-    speedups = [e["speedup"]    for e in entries]
-    effs     = [e["efficiency"] for e in entries]
-    max_w    = max(workers)
-    min_w    = min(workers)
+def _plot_standard(ax, domain, entries, x_range=None):
+    """Speedup vs workers (or processes) with ideal reference line and efficiency annotations."""
+    meta        = DOMAIN_META[domain]
+    use_procs   = meta.get("use_processes", False)
+    xs          = [e["processes"] if use_procs else e["workers"] for e in entries]
+    speedups    = [e["speedup"]    for e in entries]
+    effs        = [e["efficiency"] for e in entries]
+    x_min, x_max = (min(xs), max(xs)) if x_range is None else x_range
 
-    ax.plot(workers, speedups,
+    ax.plot(xs, speedups,
             color=meta["color"], marker=meta["marker"],
             linewidth=1.8, markersize=6, label="Strong scaling", zorder=1)
 
-    # Ideal line for every data point
-    ax.plot(workers, [w / workers[0] for w in workers],
+    # Ideal line anchored to first data point
+    ax.plot(xs, [x / xs[0] for x in xs],
             color="#aaaaaa", linewidth=1.2, linestyle="--",
             label="Ideal", zorder=2)
 
-    for w, sp, eff in zip(workers, speedups, effs):
+    # Efficiency annotations above each point
+    for x, sp, eff in zip(xs, speedups, effs):
         ax.annotate(f"{eff:.2f}",
-                    xy=(w, sp),
+                    xy=(x, sp),
                     xytext=(0, 6), textcoords="offset points",
                     ha="center", va="bottom",
                     fontsize=6.5, color=meta["color"])
 
+    # Annotate non-unit baselines so readers know speedup is relative
+    if use_procs and xs[0] != 1:
+        ax.annotate(f"baseline\n{xs[0]} tasks\n({xs[0]//56} nodes)",
+                    xy=(xs[0], speedups[0]),
+                    xytext=(8, -18), textcoords="offset points",
+                    ha="left", va="top",
+                    fontsize=6, color="#666666",
+                    arrowprops=dict(arrowstyle="-", color="#aaaaaa", lw=0.8))
+
     ax.set_xscale("log", base=2)
-    ax.set_xlim(min_w * 0.8, max_w * 1.3)
+    ax.set_xlim(x_min * 0.75, x_max * 1.35)
     ax.set_ylim(bottom=0)
     ax.xaxis.set_minor_formatter(ticker.NullFormatter())
-    ax.set_xticks(workers)
+    ax.set_xticks(xs)
     ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: str(int(x))))
     ax.set_xlabel(meta.get("xlabel", "Workers"), fontsize=9)
     ax.set_ylabel("Speedup", fontsize=9)
@@ -139,23 +150,35 @@ def _plot_standard(ax, domain, entries):
 
 def _plot_with_weak(ax, domain, strong_entries, weak_entries):
     """Strong scaling speedup (left axis) + weak scaling efficiency (right axis)."""
-    meta = DOMAIN_META[domain]
+    meta      = DOMAIN_META[domain]
+    use_procs = meta.get("use_processes", False)
 
-    _plot_standard(ax, domain, strong_entries)
+    # Compute shared x-range across both series
+    strong_xs = [e["processes"] if use_procs else e["workers"] for e in strong_entries]
+    weak_xs   = [e["processes"] if use_procs else e["workers"] for e in weak_entries]
+    all_xs    = strong_xs + weak_xs
+    x_range   = (min(all_xs), max(all_xs))
+
+    _plot_standard(ax, domain, strong_entries, x_range=x_range)
 
     # Weak scaling on right y-axis
     ax2 = ax.twinx()
-    w_workers = [e["workers"]    for e in weak_entries]
-    w_effs    = [e["efficiency"] for e in weak_entries]
+    w_effs = [e["efficiency"] for e in weak_entries]
 
     weak_color = "#1f77b4"  # blue
-    ax2.plot(w_workers, w_effs,
+    ax2.plot(weak_xs, w_effs,
              color=weak_color, marker="o", linestyle="--",
              linewidth=1.4, markersize=5, label="Weak scaling (eff.)", zorder=3)
     ax2.axhline(1.0, color="#aaaaaa", linewidth=0.8, linestyle=":")
     ax2.set_ylim(0, 1.25)
     ax2.set_ylabel("Parallel Efficiency", fontsize=9, color=weak_color)
     ax2.tick_params(axis="y", labelsize=8, labelcolor=weak_color)
+
+    # Unified x-ticks covering both series
+    all_ticks = sorted(set(strong_xs + weak_xs))
+    ax.set_xticks(all_ticks)
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: str(int(x))))
+    ax.set_xlim(x_range[0] * 0.75, x_range[1] * 1.35)
 
     # Combine legends from both axes
     h1, l1 = ax.get_legend_handles_labels()

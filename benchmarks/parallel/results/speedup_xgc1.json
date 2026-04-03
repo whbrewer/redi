@@ -2,22 +2,12 @@
   "case": "xgc1_iter",
   "domain": "fusion",
   "scaling": "strong",
-  "note": "1-node baseline extrapolated from 4-node measurement (276000s = 69000s x 4). 2-node (112 processes) timed out.",
+  "note": "Baseline: 4 nodes / 224 MPI tasks (smallest measured run). Speedup and efficiency are process-normalised: S(p)=T_224/T_p, E(p)=S(p)/(p/224). 1-node run timed out; 2-node run timed out.",
   "n_files": 32,
   "total_input_gib": 176.5,
+  "baseline_processes": 224,
+  "baseline_nodes": 4,
   "runs": [
-    {
-      "workers": 1,
-      "nodes": 1,
-      "processes": 56,
-      "n_files": 32,
-      "n_ok": 32,
-      "total_ms": 276000000,
-      "total_s": 276000.0,
-      "speedup": 1.0,
-      "parallel_efficiency": 1.0,
-      "note": "extrapolated: 69000s x 4 nodes"
-    },
     {
       "workers": 4,
       "nodes": 4,
@@ -26,7 +16,7 @@
       "n_ok": 32,
       "total_ms": 68501000,
       "total_s": 68501,
-      "speedup": 4.0,
+      "speedup": 1.0,
       "parallel_efficiency": 1.0
     },
     {
@@ -37,8 +27,8 @@
       "n_ok": 32,
       "total_ms": 29788000,
       "total_s": 29788,
-      "speedup": 9.265,
-      "parallel_efficiency": 0.997
+      "speedup": 2.301,
+      "parallel_efficiency": 1.150
     },
     {
       "workers": 12,
@@ -48,8 +38,8 @@
       "n_ok": 32,
       "total_ms": 21753000,
       "total_s": 21753,
-      "speedup": 12.687,
-      "parallel_efficiency": 0.997
+      "speedup": 3.149,
+      "parallel_efficiency": 1.050
     },
     {
       "workers": 16,
@@ -59,8 +49,8 @@
       "n_ok": 32,
       "total_ms": 20579000,
       "total_s": 20579,
-      "speedup": 13.411,
-      "parallel_efficiency": 0.863
+      "speedup": 3.329,
+      "parallel_efficiency": 0.832
     },
     {
       "workers": 20,
@@ -70,8 +60,8 @@
       "n_ok": 32,
       "total_ms": 19971000,
       "total_s": 19971,
-      "speedup": 13.82,
-      "parallel_efficiency": 0.697
+      "speedup": 3.430,
+      "parallel_efficiency": 0.686
     }
   ]
 }
