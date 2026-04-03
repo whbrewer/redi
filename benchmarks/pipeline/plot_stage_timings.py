@@ -177,7 +177,7 @@ def make_plot(entries: list, mode: str, out_base: str):
                     ax.text(
                         left[i] + w / 2, y_positions[i],
                         seg_label, va="center", ha="center",
-                        fontsize=7, color="white", fontweight="normal",
+                        fontsize=10, color="white", fontweight="normal",
                         clip_on=True,
                     )
         left += widths

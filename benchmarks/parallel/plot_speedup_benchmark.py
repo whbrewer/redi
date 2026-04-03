@@ -36,12 +36,12 @@ DOMAIN_META = {
         "xlabel": "Workers",
     },
     "xgc1": {
-        "title": "Fusion\n(XGC1, 474 snapshots, 7.9 TB)",
+        "title": "Fusion\n(MATEY/XGC1, 1,168 snapshots, 7.9 TB)",
         "color": "#9467bd",   # purple
         "marker": "s",
         "file": "speedup_xgc1.json",
         "weak_file": "speedup_xgc1_weak.json",
-        "xlabel": "MPI Tasks (CPU Cores)",
+        "xlabel": "Workers",
         "use_processes": True,   # x-axis in processes, not workers/nodes
     },
     "openfold": {
@@ -174,10 +174,12 @@ def _plot_with_weak(ax, domain, strong_entries, weak_entries):
     ax2.set_ylabel("Parallel Efficiency", fontsize=9, color=weak_color)
     ax2.tick_params(axis="y", labelsize=8, labelcolor=weak_color)
 
-    # Unified x-ticks covering both series
+    # Unified x-ticks covering both series, dropping crowded labels
+    _skip = {168, 896}
     all_ticks = sorted(set(strong_xs + weak_xs))
     ax.set_xticks(all_ticks)
-    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: str(int(x))))
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(
+        lambda x, _: str(int(x)) if int(x) not in _skip else ""))
     ax.set_xlim(x_range[0] * 0.75, x_range[1] * 1.35)
 
     # Combine legends from both axes
