@@ -1062,6 +1062,9 @@ class DomainAssessor:
     # ------------------------------------------------------------------
 
     def _load(self):
+        # XGC1 directories are handled entirely by the plugin — skip pandas loading
+        if self.path.is_dir():
+            return
         ext = self.path.suffix.lower()
         try:
             import pandas as pd
@@ -1121,6 +1124,11 @@ class DomainAssessor:
     # ------------------------------------------------------------------
 
     def _infer_domain(self) -> str:
+        # XGC1 directories: output dir (index.json) or raw case dir (xgc.mesh.bp)
+        if self.path.is_dir():
+            if (self.path / "index.json").exists() or (self.path / "xgc.mesh.bp").exists():
+                return "xgc1"
+
         ext = self.path.suffix.lower()
         ext_map = {
             ".nc": "climate", ".nc4": "climate", ".grib": "climate",
@@ -1293,7 +1301,17 @@ class DomainAssessor:
             return self._life_sciences_metrics()
         elif domain == "geospatial":
             return self._geospatial_metrics()
+        elif domain == "xgc1":
+            return self._xgc1_metrics()
         return {}
+
+    def _xgc1_metrics(self) -> Dict[str, Any]:
+        """Delegate to redi-xgc1 plugin assess module if installed."""
+        try:
+            from redi_xgc1.assess import assess_xgc1
+        except ImportError:
+            return {"error": "redi-xgc1 plugin not installed (pip install redi-xgc1)"}
+        return assess_xgc1(str(self.path))
 
     def _find_col(self, aliases: List[str]) -> Optional[str]:
         """Return the first column matching any alias (case-insensitive)."""
