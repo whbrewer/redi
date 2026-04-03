@@ -1,0 +1,14 @@
+{
+  "n_structures": 10000,
+  "lmdb_shard": "/lustre/orion/gen053/world-shared/HydraGNN/data/oc22/s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total/train/data.0000.lmdb",
+  "npz_path": "/lustre/orion/scratch/whbrewer/stf053/redi_oc22_bench_output/oc22_redi_output.npz",
+  "energy_per_atom": {
+    "pearson_r": 1.0,
+    "mae_ev_per_atom": 1.2835e-07,
+    "max_err_ev_per_atom": 4.7649e-07
+  },
+  "forces": {
+    "mean_pearson_r_after_denorm": 1.0,
+    "pct_structures_r_gt_0p9999": 100.0
+  }
+}
