@@ -1464,10 +1464,14 @@ class DomainAssessor:
                                 )
                         break
 
-                # CF convention compliance: check key attributes on variables
+                # CF convention compliance: check key attributes on data variables.
+                # Exclude bounds variables (e.g. lat_bnds, lon_bnds) — these are
+                # auxiliary and are not expected to carry units/standard_name.
+                cf_vars = [v for v in variables
+                           if not v.endswith("_bnds") and not v.endswith("_bounds")]
                 cf_compliant = 0
                 cf_total = 0
-                for var in variables:
+                for var in cf_vars:
                     cf_total += 1
                     attrs = ds[var].attrs
                     has_units = "units" in attrs
@@ -1945,6 +1949,8 @@ class DomainAssessor:
             or specific.get("atom_count", 0) > 0       # PDB/mmCIF
             or specific.get("sequence_length", 0) > 0  # OpenFold NPZ
             or specific.get("msa_depth", 0) > 0        # OpenFold NPZ
+            or specific.get("temporal_steps", 0) > 0   # NetCDF climate
+            or bool(specific.get("variables"))          # NetCDF (any variables present)
         )
         if has_data:
             level = 2
@@ -1971,6 +1977,10 @@ class DomainAssessor:
             if specific.get("n_timesteps") or specific.get("array_shape"):
                 has_data = True
                 has_label = True  # variable_names define what each channel represents
+        # Climate NetCDF: standard_name / long_name on data variables serves as label
+        if domain == "climate" and self.path.suffix.lower() in (".nc", ".nc4", ".grib"):
+            if specific.get("cf_compliance_ratio", 0) or 0 > 0:
+                has_label = True  # at least one variable has standard_name/units
         if self._df is not None:
             label_kws = ("label", "target", "class", "formation_energy", "band_gap",
                          "enthalpy", "go_term", "function")
