@@ -28,7 +28,7 @@ from pathlib import Path
 import yaml
 
 NC_DIR  = "/lustre/orion/stf053/world-shared/vga/projects/ClimaX/data/CMCC/raw/temperature"
-CFG_TPL = str(Path(__file__).parent.parent.parent / "io" / "configs" / "bench_climax.yaml")
+CFG_TPL = str(Path(__file__).parent.parent.parent / "pipeline" / "configs" / "bench_climax.yaml")
 OUT_DIR = Path(__file__).parent.parent / "results"
 
 WORKER_SWEEP    = [1, 2, 4, 8, 16, 32]
@@ -75,20 +75,22 @@ def main():
                         help=f"Number of NC files in fixed workload (default: {DEFAULT_N_FILES})")
     parser.add_argument("--sweep", action="store_true",
                         help="Run full worker sweep: 1,2,4,8,16,32")
+    parser.add_argument("--data-dir", default=NC_DIR,
+                        help="Directory containing CMCC .nc files (default: OLCF Lustre path)")
     parser.add_argument("--out", default=str(OUT_DIR / "speedup_climax.json"),
                         help="Output JSON path")
     args = parser.parse_args()
 
-    nc_files = sorted(Path(NC_DIR).glob("*.nc"))[: args.n_files]
+    nc_files = sorted(Path(args.data_dir).glob("*.nc"))[: args.n_files]
     if not nc_files:
-        raise SystemExit(f"No .nc files found in {NC_DIR}")
+        raise SystemExit(f"No .nc files found in {args.data_dir}")
 
     with open(CFG_TPL) as f:
         cfg_tpl = yaml.safe_load(f)
 
     print(f"\nClimaX / CMCC Parallel Speedup Benchmark")
     print(f"  Files:   {len(nc_files)} NC files (of 165 available)")
-    print(f"  NC dir:  {NC_DIR}")
+    print(f"  NC dir:  {args.data_dir}")
     print()
 
     worker_list = WORKER_SWEEP if (args.sweep or args.workers is None) else [args.workers]

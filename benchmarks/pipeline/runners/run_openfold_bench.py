@@ -111,11 +111,13 @@ def main():
                         help="Number of proteins to process (default: all)")
     parser.add_argument("--num-workers", type=int, default=16,
                         help="Parallel workers (default: 16)")
+    parser.add_argument("--data-dir", default=OPS_ROOT,
+                        help="OpenProteinSet root directory (default: OLCF Lustre path)")
     parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
     args = parser.parse_args()
 
     print(f"\nOpenFold / OpenProteinSet Stage Timing Benchmark")
-    print(f"  OPS root:  {OPS_ROOT}")
+    print(f"  OPS root:  {args.data_dir}")
     n_label = f"{args.n_proteins:,}" if args.n_proteins else "all"
     print(f"  Proteins:  {n_label}")
     print(f"  Workers:   {args.num_workers}")
@@ -136,10 +138,10 @@ def main():
         with open(tmp_cfg, "w") as f:
             yaml.dump(cfg, f)
 
-        print(f"  Running: redi run {OPS_ROOT} -c {tmp_cfg}", flush=True)
+        print(f"  Running: redi run {args.data_dir} -c {tmp_cfg}", flush=True)
         t0 = time.time()
         result = subprocess.run(
-            ["redi", "run", OPS_ROOT, "--domain", "life_sciences", "-c", tmp_cfg],
+            ["redi", "run", args.data_dir, "--domain", "life_sciences", "-c", tmp_cfg],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         total_ms = int((time.time() - t0) * 1000)

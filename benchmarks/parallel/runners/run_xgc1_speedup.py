@@ -29,7 +29,7 @@ import yaml
 
 BP_DIR  = ("/lustre/orion/world-shared/fus184/fusiond-seed-xgc1-data"
            "/n560fr_ITER_PFPO_W_Ne")
-CFG_TPL = str(Path(__file__).parent.parent.parent / "io" / "configs" / "bench_xgc1.yaml")
+CFG_TPL = str(Path(__file__).parent.parent.parent / "pipeline" / "configs" / "bench_xgc1.yaml")
 OUT_DIR = Path(__file__).parent.parent / "results"
 
 WORKER_SWEEP = [1, 2, 4, 8, 16, 32]
@@ -76,13 +76,15 @@ def main():
                         help="Number of parallel workers (omit to run full sweep)")
     parser.add_argument("--sweep", action="store_true",
                         help="Run full worker sweep: 1,2,4,8,16,32")
+    parser.add_argument("--data-dir", default=BP_DIR,
+                        help="Directory containing xgc.3d.*.bp snapshot dirs (default: OLCF Lustre path)")
     parser.add_argument("--out", default=str(OUT_DIR / "speedup_xgc1.json"),
                         help="Output JSON path")
     args = parser.parse_args()
 
-    bp_dirs = sorted(Path(BP_DIR).glob("xgc.3d.*.bp"))[: args.n_files]
+    bp_dirs = sorted(Path(args.data_dir).glob("xgc.3d.*.bp"))[: args.n_files]
     if not bp_dirs:
-        raise SystemExit(f"No xgc.3d.*.bp directories found in {BP_DIR}")
+        raise SystemExit(f"No xgc.3d.*.bp directories found in {args.data_dir}")
 
     with open(CFG_TPL) as f:
         cfg_tpl = yaml.safe_load(f)
@@ -96,7 +98,7 @@ def main():
 
     print(f"\nXGC1 Parallel Speedup Benchmark")
     print(f"  Files:    {len(bp_dirs)} .bp snapshots  ({total_gib:.0f} GiB total)")
-    print(f"  BP dir:   {BP_DIR}")
+    print(f"  BP dir:   {args.data_dir}")
     print()
 
     worker_list = WORKER_SWEEP if (args.sweep or args.workers is None) else [args.workers]

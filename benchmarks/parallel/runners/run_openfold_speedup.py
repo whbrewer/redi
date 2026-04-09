@@ -36,7 +36,7 @@ WORKER_SWEEP       = [1, 2, 4, 8, 16, 32]
 DEFAULT_N_PROTEINS = 4096
 
 
-def run_redi(n_proteins: int, num_workers: int) -> tuple[float, int]:
+def run_redi(data_dir: str, n_proteins: int, num_workers: int) -> tuple[float, int]:
     """
     Run `redi run OPS_ROOT --workers num_workers --max-proteins n_proteins`.
     Returns (wall_time_s, n_processed).
@@ -56,7 +56,7 @@ def run_redi(n_proteins: int, num_workers: int) -> tuple[float, int]:
 
         t0 = time.time()
         result = subprocess.run(
-            ["redi", "run", OPS_ROOT, "--domain", "life_sciences",
+            ["redi", "run", data_dir, "--domain", "life_sciences",
              "-c", tmp_cfg, "--style", "simple"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
@@ -90,13 +90,15 @@ def main():
                         help="Comma-separated list of worker counts to run (e.g. 2,4,8,16,32)")
     parser.add_argument("--sweep", action="store_true",
                         help="Run full worker sweep: 1,2,4,8,16,32")
+    parser.add_argument("--data-dir", default=OPS_ROOT,
+                        help="OpenProteinSet root directory (default: OLCF Lustre path)")
     parser.add_argument("--out", default=str(OUT_DIR / "speedup_openfold.json"),
                         help="Output JSON path")
     args = parser.parse_args()
 
     print(f"\nOpenFold Parallel Speedup Benchmark")
     print(f"  Proteins:  {args.n_proteins:,}")
-    print(f"  OPS root:  {OPS_ROOT}")
+    print(f"  OPS root:  {args.data_dir}")
     print()
 
     if args.worker_list:
@@ -121,7 +123,7 @@ def main():
 
     for w in worker_list:
         print(f"  workers={w:2d} ...", end="  ", flush=True)
-        wall_s, n_actual = run_redi(args.n_proteins, w)
+        wall_s, n_actual = run_redi(args.data_dir, args.n_proteins, w)
 
         if w == 1:
             serial_s = wall_s

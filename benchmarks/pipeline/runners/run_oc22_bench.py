@@ -33,9 +33,13 @@ from pathlib import Path
 import numpy as np
 
 # ── Data locations ─────────────────────────────────────────────────────────────
-LMDB_ROOT = ("/lustre/orion/gen053/world-shared/HydraGNN/data/oc22"
-             "/s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total")
-OUT_JSON  = str(Path(__file__).parent.parent / "results" / "bench_oc22.json")
+LMDB_ROOT    = ("/lustre/orion/gen053/world-shared/HydraGNN/data/oc22"
+                "/s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total")
+HYDRAGNN_DIR = os.environ.get(
+    "HYDRAGNN_DIR",
+    "/lustre/orion/gen053/world-shared/HydraGNN/code",
+)
+OUT_JSON     = str(Path(__file__).parent.parent / "results" / "bench_oc22.json")
 
 STAGES = ["ingest", "preprocess", "transform", "structure", "output"]
 
@@ -245,12 +249,13 @@ def stage_structure(records: list) -> list:
     return data_objects
 
 
-def stage_output(data_objects: list, out_dir: str, split_ratios=(0.8, 0.1, 0.1)) -> dict:
+def stage_output(data_objects: list, out_dir: str, hydragnn_dir: str,
+                  split_ratios=(0.8, 0.1, 0.1)) -> dict:
     """
     Write train/val/test splits to an ADIOS2 .bp file using HydraGNN's AdiosWriter.
     """
     import sys
-    sys.path.insert(0, "/lustre/orion/gen053/world-shared/HydraGNN/code")
+    sys.path.insert(0, hydragnn_dir)
     from mpi4py import MPI
     from hydragnn.utils.datasets.adiosdataset import AdiosWriter
 
@@ -294,12 +299,16 @@ def main():
                         choices=["train", "val_id", "val_ood", "test_id", "test_ood"])
     parser.add_argument("--max-samples", type=int, default=None,
                         help="Cap number of structures (default: process all)")
+    parser.add_argument("--data-dir", default=LMDB_ROOT,
+                        help="OC22 LMDB root directory (default: OLCF Lustre path)")
+    parser.add_argument("--hydragnn-dir", default=HYDRAGNN_DIR,
+                        help="Path to HydraGNN source (overrides HYDRAGNN_DIR env var)")
     parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
     parser.add_argument("--save-dir", default="/tmp/redi_oc22_bench_output",
-                        help="Directory for NPZ output (default: /tmp/...)")
+                        help="Directory for ADIOS2 output (default: /tmp/...)")
     args = parser.parse_args()
 
-    split_dir = str(Path(LMDB_ROOT) / args.split)
+    split_dir = str(Path(args.data_dir) / args.split)
     shards = get_lmdb_shards(split_dir)
     if not shards:
         raise SystemExit(f"No .lmdb shards found in {split_dir}")
@@ -308,7 +317,7 @@ def main():
     sample_label = f"{args.max_samples:,}" if args.max_samples else "all"
 
     print(f"\nOC22 / HydraGNN Stage Timing Benchmark")
-    print(f"  LMDB root: {LMDB_ROOT}")
+    print(f"  LMDB root: {args.data_dir}")
     print(f"  Split:     {args.split}  ({n_shards} shards)")
     print(f"  Samples:   {sample_label}")
     print()
@@ -352,7 +361,7 @@ def main():
     # ── Output ───────────────────────────────────────────────────────────────
     print("  [output]  writing ADIOS2 .bp via HydraGNN AdiosWriter …", flush=True)
     t0 = time.time()
-    out_info = stage_output(data_objects, args.save_dir)
+    out_info = stage_output(data_objects, args.save_dir, args.hydragnn_dir)
     stage_ms["output"] = int((time.time() - t0) * 1000)
     print(f"    {out_info['bp_path']}  ({out_info['size_mb']:.0f} MB)  "
           f"({stage_ms['output']/1000:.1f}s)", flush=True)

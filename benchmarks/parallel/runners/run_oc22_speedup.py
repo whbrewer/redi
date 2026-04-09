@@ -88,24 +88,26 @@ def main():
                         help="Number of parallel workers (omit to run full sweep)")
     parser.add_argument("--sweep", action="store_true",
                         help="Run full worker sweep: 1,2,4,8,16,32")
+    parser.add_argument("--data-dir", default=LMDB_ROOT,
+                        help="OC22 LMDB train split directory (default: OLCF Lustre path)")
     parser.add_argument("--out", default=str(OUT_DIR / "speedup_oc22.json"),
                         help="Output JSON path")
     args = parser.parse_args()
 
     shards = sorted(
-        p for p in Path(LMDB_ROOT).iterdir()
+        p for p in Path(args.data_dir).iterdir()
         if p.suffix == ".lmdb" and not p.name.endswith("-lock")
     )[: args.n_shards]
 
     if not shards:
-        raise SystemExit(f"No .lmdb shards found in {LMDB_ROOT}")
+        raise SystemExit(f"No .lmdb shards found in {args.data_dir}")
 
     total_structures = len(shards) * args.max_samples_per_shard
 
     print(f"\nOC22 / HydraGNN Parallel Speedup Benchmark")
     print(f"  Shards:      {len(shards)}  ×  {args.max_samples_per_shard:,} structures each")
     print(f"  Total work:  {total_structures:,} structures")
-    print(f"  LMDB root:   {LMDB_ROOT}")
+    print(f"  LMDB root:   {args.data_dir}")
     print()
 
     worker_list = WORKER_SWEEP if (args.sweep or args.workers is None) else [args.workers]

@@ -113,11 +113,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-timesteps", type=int, default=5,
                         help="Max timesteps per case (default: 5)")
+    parser.add_argument("--data-dir", default=XGC1_ROOT,
+                        help="XGC1 data root directory (default: OLCF Lustre path)")
     parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
     args = parser.parse_args()
 
     # Check data size
-    case_dir = Path(XGC1_ROOT) / CASE_FILTER
+    case_dir = Path(args.data_dir) / CASE_FILTER
     bp_dirs  = sorted(case_dir.glob("xgc.3d.*.bp"))[:args.n_timesteps]
     total_gib = 0.0
     for bp in bp_dirs:
@@ -127,7 +129,7 @@ def main():
             pass
 
     print(f"\nXGC1 Plugin Stage Timing Benchmark")
-    print(f"  Root:       {XGC1_ROOT}")
+    print(f"  Root:       {args.data_dir}")
     print(f"  Case:       {CASE_FILTER}")
     print(f"  Timesteps:  {args.n_timesteps}  ({total_gib:.1f} GiB)")
     print()
@@ -143,10 +145,10 @@ def main():
         with open(tmp_cfg, "w") as f:
             yaml.dump(cfg, f)
 
-        print(f"  Running: redi run {XGC1_ROOT} --domain xgc1 -c {tmp_cfg}", flush=True)
+        print(f"  Running: redi run {args.data_dir} --domain xgc1 -c {tmp_cfg}", flush=True)
         t0 = time.time()
         result = subprocess.run(
-            ["redi", "run", XGC1_ROOT, "--domain", "xgc1", "-c", tmp_cfg],
+            ["redi", "run", args.data_dir, "--domain", "xgc1", "-c", tmp_cfg],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         total_ms = int((time.time() - t0) * 1000)

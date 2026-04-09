@@ -99,16 +99,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-files", type=int, default=5,
                         help="Number of 10-year NC chunks to process (default: 5)")
+    parser.add_argument("--data-dir", default=NC_DIR,
+                        help="Directory containing TaiESM1 .nc files (default: OLCF Lustre path)")
     parser.add_argument("--out", default=OUT_JSON, help="Output JSON path")
     args = parser.parse_args()
 
-    nc_files = sorted(Path(NC_DIR).glob("*.nc"))
+    nc_files = sorted(Path(args.data_dir).glob("*.nc"))
     if not nc_files:
-        raise SystemExit(f"No .nc files found in {NC_DIR}")
+        raise SystemExit(f"No .nc files found in {args.data_dir}")
     nc_files = nc_files[: args.n_files]
 
     print(f"\nClimaX/TaiESM1 Stage Timing Benchmark")
-    print(f"  NC dir:    {NC_DIR}")
+    print(f"  NC dir:    {args.data_dir}")
     print(f"  Files:     {len(nc_files)} × 10-year 2m_temperature chunks")
     print(f"  Config:    {CFG_TPL}")
     print()
