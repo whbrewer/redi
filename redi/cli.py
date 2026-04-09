@@ -2493,6 +2493,13 @@ For command-specific help::
         """
     )
 
+    try:
+        from importlib.metadata import version
+        _version = version("redi")
+    except Exception:
+        _version = "unknown"
+    parser.add_argument("--version", action="version", version=f"redi {_version}")
+
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
     # =========================================================================
