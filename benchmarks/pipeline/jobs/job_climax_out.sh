@@ -2,7 +2,7 @@
 # ── REDI Output Run: ClimaX / TaiESM1 ─────────────────────────────────────────
 # Runs the full REDI pipeline on all TaiESM1 2m_temperature NetCDF chunks and
 # writes DATA_CARD.md, metadata.json, and NPZ output to the shared Lustre path.
-#SBATCH -A stf249
+#SBATCH -A stf053
 #SBATCH -J redi_out_climax
 #SBATCH -N 1
 #SBATCH -p batch

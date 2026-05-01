@@ -2,7 +2,7 @@
 # ── REDI Output Run: OC22 / HydraGNN ─────────────────────────────────────────
 # Runs the full REDI pipeline via `redi run` on the OC22 LMDB train split and
 # writes data.npz, DATA_CARD.md, and metadata.json to the shared Lustre path.
-#SBATCH -A stf249
+#SBATCH -A stf053
 #SBATCH -J redi_out_oc22
 #SBATCH -N 1
 #SBATCH -p batch
