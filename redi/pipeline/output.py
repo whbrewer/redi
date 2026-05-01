@@ -293,6 +293,17 @@ class SaveNPZ(PipelineStep):
                             else:
                                 np.savez(file_path, **shard)
                             saved_files.append(str(file_path))
+                elif all(isinstance(v, np.ndarray) for v in ctx.data.values()):
+                    # Flat dict of numpy arrays (e.g. OC22 assembled tensors with split disabled)
+                    file_path = output_dir / "data.npz"
+                    if self.compress:
+                        np.savez_compressed(file_path, **ctx.data)
+                    else:
+                        np.savez(file_path, **ctx.data)
+                    file_size = file_path.stat().st_size
+                    size_str = f"{file_size / (1024*1024):.2f} MB"
+                    logger.debug(f"     Saved data.npz: {size_str}")
+                    saved_files.append(str(file_path))
                 else:
                     # Save splits directly, with optional sharding
                     n_shards = int(ctx.config.get("shards", 1))

@@ -6,20 +6,20 @@
     {
       "workers": 1,
       "n_proteins": 4096,
-      "total_s": 7988.5,
-      "total_ms": 7988500,
-      "throughput_proteins_per_s": 0.51,
+      "total_s": 6138.4,
+      "total_ms": 6138381,
+      "throughput_proteins_per_s": 0.67,
       "speedup": 1.0,
       "parallel_efficiency": 1.0
     },
     {
       "workers": 2,
       "n_proteins": 4096,
-      "total_s": 3969.4,
-      "total_ms": 3969400,
-      "throughput_proteins_per_s": 1.03,
-      "speedup": 2.013,
-      "parallel_efficiency": 1.007
+      "total_s": 5047.9,
+      "total_ms": 5047856,
+      "throughput_proteins_per_s": 0.81,
+      "speedup": 1.216,
+      "parallel_efficiency": 0.608
     },
     {
       "workers": 4,

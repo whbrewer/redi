@@ -1,0 +1,20 @@
+# REDI Run Config — OC22 / HydraGNN LMDB
+#
+# SC26 paper: full pipeline output run
+# Input: OC22 train split directory on Lustre/Orion
+#   /lustre/orion/gen053/world-shared/HydraGNN/data/oc22/
+#     s2ef_total_train_val_test_lmdbs/data/oc22/s2ef-total/train/
+#   (41 LMDB shards, ~8.2M structures, 69 GiB)
+#
+# OC22 is pre-split by directory, so train/val/test splitting is disabled
+# automatically by the LoadOC22LMDB step.
+
+domain: materials
+output_format: npz
+provenance: true
+
+# Uncomment to limit structures (useful for quick tests):
+# max_samples: 10000
+
+split:
+  enabled: false   # OC22 is pre-split by directory

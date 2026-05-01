@@ -4,20 +4,21 @@
   "n_proteins": 0,
   "n_workers": 32,
   "stages_ms": {
-    "ingest": 342331,
-    "preprocess": 11939268,
+    "ingest": 337216,
+    "preprocess": 0,
     "transform": 0,
     "structure": 0,
-    "output": 3
+    "output": 33
   },
-  "total_ms": 12285106,
-  "total_s": 12285.1,
+  "total_ms": 4602964,
+  "total_s": 4603.0,
   "throughput_proteins_per_s": 0.0,
   "throughput_label": "proteins/s",
   "step_timings_ms": {
-    "load_open_protein_set": 342331,
-    "streaming_npz_processor": 11939268,
-    "write_checksums": 1,
-    "save_metadata": 2
+    "load_open_protein_set": 337216,
+    "parse_mmcif_structures": 4256357,
+    "parse_msa_alignments": 427,
+    "encode_openfold_features": 1,
+    "save_per_protein_npz": 33
   }
 }

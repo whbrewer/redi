@@ -11,13 +11,13 @@
 
 domain: life_sciences
 input_path: /lustre/orion/gen053/world-shared/openfold/data
-output_format: npz
+output_format: hdf5
 provenance: true
 
 # Cap proteins for the timing benchmark; full dataset has 131,487.
 max_proteins: 5000
 
-# Parallel workers for mmCIF parsing and NPZ saving (I/O-bound).
+# Parallel workers for mmCIF parsing and HDF5 saving (I/O-bound).
 num_workers: 16
 
 split:

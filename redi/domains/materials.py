@@ -36,14 +36,22 @@ def get_ingest_steps():
     from ..pipeline.ingest import DetectFormat
 
     class LoadOC22LMDB(PipelineStep):
-        """Load an OC22 LMDB shard (PyG Data objects serialised with pickle)."""
+        """Load OC22 LMDB shards (PyG Data objects serialised with pickle).
+
+        Accepts either a single ``.lmdb`` file or a directory containing one
+        or more ``.lmdb`` shards (e.g. the OC22 ``train/`` split directory).
+        """
 
         name = "load_oc22_lmdb"
         stage = PipelineStage.INGEST
-        description = "Load OC22 structures from an LMDB shard"
+        description = "Load OC22 structures from an LMDB file or shard directory"
 
         def validate(self, ctx: PipelineContext) -> bool:
-            return ctx.metadata.get("file_format") == "lmdb"
+            if ctx.metadata.get("file_format") == "lmdb":
+                return True
+            # Also trigger when the input is a directory that contains .lmdb shards
+            path = ctx.input_path
+            return bool(path and path.is_dir() and any(path.glob("*.lmdb")))
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
@@ -51,27 +59,56 @@ def get_ingest_steps():
                 import pickle
 
                 path = ctx.input_path
-                env = lmdb.open(
-                    str(path), subdir=False, readonly=True, lock=False,
-                    meminit=False, map_size=int(1e12),
-                )
+                max_samples = ctx.config.get("max_samples")
+
+                # Resolve shards: single file or directory of shards
+                if path.is_dir():
+                    shards = sorted(
+                        p for p in path.iterdir()
+                        if p.suffix == ".lmdb" and not p.name.endswith("-lock")
+                    )
+                    if not shards:
+                        ctx.add_error(f"No .lmdb shards found in {path}")
+                        return ctx
+                    logger.info(f"Found {len(shards)} LMDB shards in {path.name}/")
+                else:
+                    shards = [path]
+
+                # Mark format so downstream OC22 steps activate
+                ctx.metadata["file_format"] = "lmdb"
+                ctx.metadata["lmdb_shards"] = [s.name for s in shards]
+
                 records = []
-                txn = env.begin()
-                cursor = txn.cursor()
-                cursor.first()
-                while True:
-                    records.append(pickle.loads(cursor.value()))
-                    if not cursor.next():
+                total_loaded = 0
+                for shard in shards:
+                    env = lmdb.open(
+                        str(shard), subdir=False, readonly=True, lock=False,
+                        meminit=False, map_size=int(1e12),
+                    )
+                    txn = env.begin()
+                    cursor = txn.cursor()
+                    cursor.first()
+                    while True:
+                        records.append(pickle.loads(cursor.value()))
+                        total_loaded += 1
+                        if max_samples is not None and total_loaded >= max_samples:
+                            txn.abort()
+                            env.close()
+                            break
+                        if not cursor.next():
+                            break
+                    else:
+                        txn.abort()
+                        env.close()
+
+                    if max_samples is not None and total_loaded >= max_samples:
                         break
-                txn.abort()
-                env.close()
 
                 ctx.data = records
                 ctx.metadata["n_structures_raw"] = len(records)
-                ctx.metadata["lmdb_shard"] = path.name
                 # OC22 is pre-split by directory — disable the train/val/test split step
                 ctx.config.setdefault("split", {})["enabled"] = False
-                logger.info(f"Loaded {len(records):,} structures from {path.name}")
+                logger.info(f"Loaded {len(records):,} structures from {len(shards)} shard(s)")
 
             except ImportError:
                 ctx.add_error(missing_dependency_error("lmdb", "materials"))
@@ -193,7 +230,7 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadMaterialsCSV(), LoadStructureFile()]
+    return [DetectFormat(), LoadOC22LMDB(), LoadMaterialsCSV(), LoadStructureFile()]
 
 
 def get_preprocess_steps():
@@ -295,7 +332,7 @@ def get_preprocess_steps():
 
             return ctx
 
-    return [CleanMaterialsData()]
+    return [PreprocessOC22Structures(), CleanMaterialsData()]
 
 
 def get_transform_steps():
@@ -472,7 +509,7 @@ def get_transform_steps():
 
             return ctx
 
-    return [FeaturizeCompositions(), NormalizeMaterialsFeatures()]
+    return [NormalizeOC22(), FeaturizeCompositions(), NormalizeMaterialsFeatures()]
 
 
 def get_structure_steps():
@@ -634,7 +671,7 @@ def get_structure_steps():
 
             return ctx
 
-    return [CreateGraphFromStructure(), ToNumpyArrays()]
+    return [AssembleOC22Tensors(), CreateGraphFromStructure(), ToNumpyArrays()]
 
 
 def get_output_steps():

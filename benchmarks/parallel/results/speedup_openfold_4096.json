@@ -1,0 +1,67 @@
+{
+  "case": "openfold_ops",
+  "domain": "life_sciences",
+  "n_proteins": 4096,
+  "runs": [
+    {
+      "workers": 1,
+      "n_proteins": 4096,
+      "n_ok": 4096,
+      "total_ms": 1336693,
+      "total_s": 1336.7,
+      "throughput_proteins_per_s": 3.06,
+      "speedup": 1.0,
+      "parallel_efficiency": 1.0
+    },
+    {
+      "workers": 2,
+      "n_proteins": 4096,
+      "n_ok": 4096,
+      "total_ms": 700934,
+      "total_s": 700.9,
+      "throughput_proteins_per_s": 5.84,
+      "speedup": 1.907,
+      "parallel_efficiency": 0.954
+    },
+    {
+      "workers": 4,
+      "n_proteins": 4096,
+      "n_ok": 4096,
+      "total_ms": 381920,
+      "total_s": 381.9,
+      "throughput_proteins_per_s": 10.72,
+      "speedup": 3.5,
+      "parallel_efficiency": 0.875
+    },
+    {
+      "workers": 8,
+      "n_proteins": 4096,
+      "n_ok": 4096,
+      "total_ms": 238270,
+      "total_s": 238.3,
+      "throughput_proteins_per_s": 17.19,
+      "speedup": 5.61,
+      "parallel_efficiency": 0.701
+    },
+    {
+      "workers": 16,
+      "n_proteins": 4096,
+      "n_ok": 4096,
+      "total_ms": 156079,
+      "total_s": 156.1,
+      "throughput_proteins_per_s": 26.24,
+      "speedup": 8.564,
+      "parallel_efficiency": 0.535
+    },
+    {
+      "workers": 32,
+      "n_proteins": 4096,
+      "n_ok": 4096,
+      "total_ms": 104938,
+      "total_s": 104.9,
+      "throughput_proteins_per_s": 39.03,
+      "speedup": 12.738,
+      "parallel_efficiency": 0.398
+    }
+  ]
+}
