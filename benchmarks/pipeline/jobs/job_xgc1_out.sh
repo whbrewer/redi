@@ -16,7 +16,7 @@ REDI_DIR="/autofs/nccs-svm1_home1/whbrewer/drai/redi"
 VENV="$HOME/venv/redi/bin/activate"
 XGC1_ROOT="/lustre/orion/world-shared/fus184/jyc/fusiond-seed-xgc1-data-samples"
 OUT_DIR="/lustre/orion/proj-shared/stf249/redi/outputs/xgc1"
-CFG="$REDI_DIR/benchmarks/pipeline/configs/bench_xgc1.yaml"
+CFG="$REDI_DIR/benchmarks/pipeline/configs/bench_xgc1_out.yaml"
 
 echo "=== REDI XGC1 Output Run  $(date) ==="
 echo "  Node:    $(hostname)"

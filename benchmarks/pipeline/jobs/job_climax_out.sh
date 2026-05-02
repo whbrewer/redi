@@ -28,11 +28,18 @@ cd "$REDI_DIR"
 
 mkdir -p benchmarks/pipeline/logs "$OUT_DIR"
 
-redi run "$NC_DIR" \
-    --domain climate \
-    -c "$CFG" \
-    -o "$OUT_DIR" \
-    -v
+# Process each NC file individually to avoid OOM from xr.concat on all 17 files
+for nc_file in "$NC_DIR"/*.nc; do
+    fname=$(basename "$nc_file" .nc)
+    file_out="$OUT_DIR/$fname"
+    mkdir -p "$file_out"
+    echo "  Processing: $nc_file"
+    redi run "$nc_file" \
+        --domain climate \
+        -c "$CFG" \
+        -o "$file_out" \
+        -v
+done
 
 echo "=== Done  $(date) ==="
 echo "Output files:"

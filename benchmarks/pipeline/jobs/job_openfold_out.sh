@@ -16,7 +16,7 @@ REDI_DIR="/autofs/nccs-svm1_home1/whbrewer/drai/redi"
 VENV="$HOME/venv/redi/bin/activate"
 OPS_ROOT="/lustre/orion/gen053/world-shared/openfold/data"
 OUT_DIR="/lustre/orion/proj-shared/stf249/redi/outputs/openfold"
-CFG="$REDI_DIR/benchmarks/pipeline/configs/bench_openfold.yaml"
+CFG="$REDI_DIR/benchmarks/pipeline/configs/bench_openfold_out.yaml"
 
 echo "=== REDI OpenFold Output Run  $(date) ==="
 echo "  Node:    $(hostname)"

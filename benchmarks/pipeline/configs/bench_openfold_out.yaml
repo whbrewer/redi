@@ -1,0 +1,21 @@
+# REDI Output Config — OpenFold / OpenProteinSet
+#
+# SC26 paper: full pipeline output run
+# Reduced from 5000 to 2000 proteins to stay within Andes memory limits.
+
+domain: life_sciences
+input_path: /lustre/orion/gen053/world-shared/openfold/data
+output_format: hdf5
+provenance: true
+
+max_proteins: 2000
+
+num_workers: 16
+
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  random_seed: 42

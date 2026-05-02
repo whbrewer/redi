@@ -259,13 +259,19 @@ class DetectFormat(PipelineStep):
                                     detected_format = sickle_format
                                     logger.debug(f"     Detected SICKLE format: {sickle_format}")
                                 else:
-                                    # Check for directory of NetCDF files (flat or nested)
-                                    # e.g. ClimaX/CMIP6 layout: dir/*.nc or dir/variable/*.nc
-                                    nc_files = sorted(path.rglob("*.nc")) or sorted(path.rglob("*.nc4"))
-                                    if nc_files:
-                                        detected_format = "netcdf"
-                                        ctx.input_paths = nc_files
-                                        logger.debug(f"     Found {len(nc_files)} NetCDF files in directory tree")
+                                    # Check for LMDB shard directory (OC22 / HydraGNN)
+                                    lmdb_shards = sorted(path.glob("*.lmdb"))
+                                    if lmdb_shards:
+                                        detected_format = "lmdb"
+                                        logger.debug(f"     Found {len(lmdb_shards)} .lmdb shards, format set to lmdb")
+                                    else:
+                                        # Check for directory of NetCDF files (flat or nested)
+                                        # e.g. ClimaX/CMIP6 layout: dir/*.nc or dir/variable/*.nc
+                                        nc_files = sorted(path.rglob("*.nc")) or sorted(path.rglob("*.nc4"))
+                                        if nc_files:
+                                            detected_format = "netcdf"
+                                            ctx.input_paths = nc_files
+                                            logger.debug(f"     Found {len(nc_files)} NetCDF files in directory tree")
 
         # If format unknown, try content sniffing
         if detected_format == "unknown" and path.is_file():

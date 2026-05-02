@@ -1,0 +1,11 @@
+# REDI Output Config — XGC1 ITER fusion simulation (xgc1 plugin)
+#
+# SC26 paper: full pipeline output run
+# Uses npz instead of pt to avoid torch.save OOM on 7+ GiB graph tensors.
+
+domain: xgc1
+output_format: npz
+provenance: true
+
+case_filter: n560fr_ITER_PFPO_W_Ne
+max_timesteps: 5
