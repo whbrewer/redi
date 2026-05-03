@@ -253,6 +253,66 @@ def generate_output_dir(
 # ORCHESTRATOR MODE (redi run)
 # =============================================================================
 
+def _generate_enriched_datacard(primary_path, domain, config, ctx, step_results) -> str:
+    """Build a DATA_CARD.md enriched with actual pipeline metadata from ctx."""
+    from .assess import analyze_dataset, PipelineRecommender
+    from .pipeline import PipelineStage
+
+    data_card = analyze_dataset(str(primary_path))
+    data_card.detected_domain = domain
+    data_card.characteristics.domain = domain
+
+    n_records = (
+        ctx.metadata.get("n_structures") or
+        ctx.metadata.get("n_proteins") or
+        ctx.metadata.get("n_samples") or
+        ctx.metadata.get("n_timesteps") or
+        ctx.metadata.get("n_records") or
+        ctx.metadata.get("assembled_structures") or
+        data_card.overview.num_records
+    )
+    if n_records:
+        data_card.overview.num_records = int(n_records)
+
+    out_fmt = config.get("output_format") if isinstance(config, dict) else getattr(config, "get", lambda k, d=None: d)("output_format")
+    if out_fmt:
+        data_card.overview.file_format = out_fmt.upper()
+
+    norm = ctx.metadata.get("normalization") or ctx.metadata.get("normalization_method")
+    if norm:
+        data_card.transformations.normalization_method = str(norm)
+
+    split_info = ctx.metadata.get("split")
+    if split_info and isinstance(split_info, dict):
+        tr = split_info.get("train_size", "")
+        va = split_info.get("val_size", "")
+        te = split_info.get("test_size", "")
+        data_card.transformations.train_val_test_split = f"{tr}/{va}/{te}"
+
+    completed_stage_names = [
+        step_name for status, step_name, _, _ in step_results if status == "success"
+    ]
+    if completed_stage_names:
+        data_card.transformations.preprocessing_steps = completed_stage_names
+
+    if ctx.completed_stages and PipelineStage.OUTPUT in ctx.completed_stages:
+        data_card.readiness_level = 5
+    elif ctx.completed_stages and PipelineStage.STRUCTURE in ctx.completed_stages:
+        data_card.readiness_level = 4
+    elif ctx.completed_stages and PipelineStage.TRANSFORM in ctx.completed_stages:
+        data_card.readiness_level = 3
+
+    recommender = PipelineRecommender(data_card)
+    return "\n".join([
+        "=" * 60,
+        "REDI - Data Readiness Analysis",
+        "=" * 60 + "\n",
+        data_card.to_markdown(),
+        "\n" + "=" * 60 + "\n",
+        recommender.get_recommendations_markdown(),
+    ])
+
+
 def run_pipeline(
     input_path: Optional[str] = None,
     output_dir: str = "./output",
@@ -805,10 +865,13 @@ def run_pipeline(
         # Generate and save Data Card
         print_section("Data Card")
         try:
-            from .assess import generate_report, analyze_dataset, PipelineRecommender
+            from .assess import analyze_dataset, PipelineRecommender
 
-            # Generate full report for file (use primary path for multi-file)
-            report = generate_report(str(primary_path))
+            report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
+            data_card = analyze_dataset(str(primary_path))
+            data_card.detected_domain = domain
+            data_card.characteristics.domain = domain
+
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
             datacard_path.write_text(report)
@@ -845,11 +908,6 @@ def run_pipeline(
                     colors=Colors,
                 )
 
-            # Display recommendations in terminal
-            data_card = analyze_dataset(str(primary_path))
-            # Use the domain we actually ran with, not the auto-detected one
-            data_card.detected_domain = domain
-            data_card.characteristics.domain = domain
             recommender = PipelineRecommender(data_card)
             rec = recommender.get_recommendations()
 
@@ -951,11 +1009,10 @@ def run_pipeline(
 
         # Save metadata.json and DATA_CARD.md for simple/json modes too
         try:
-            from .assess import generate_report
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
             # Save DATA_CARD.md
-            report = generate_report(str(primary_path))
+            report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
             datacard_path.write_text(report)
             if "saved_files" not in ctx.metadata:
@@ -1002,10 +1059,9 @@ def run_pipeline(
     elif style == "json":
         # Save metadata.json and DATA_CARD.md for json mode too
         try:
-            from .assess import generate_report
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
-            report = generate_report(str(primary_path))
+            report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
             datacard_path.write_text(report)
             if "saved_files" not in ctx.metadata:

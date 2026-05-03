@@ -337,7 +337,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get materials-specific transform steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ..pipeline import PipelineStep, PipelineStage, PipelineContext, missing_dependency_error
 
     class NormalizeOC22(PipelineStep):
         """

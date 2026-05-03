@@ -41,6 +41,10 @@ for nc_file in "$NC_DIR"/*.nc; do
         -v
 done
 
+# Generate top-level DATA_CARD.md describing the full TaiESM1 dataset
+echo "  Generating top-level DATA_CARD.md ..."
+redi discover "$NC_DIR" -o "$OUT_DIR" --no-interactive
+
 echo "=== Done  $(date) ==="
 echo "Output files:"
 ls -lh "$OUT_DIR" 2>/dev/null || true
