@@ -1,0 +1,11 @@
+# REDI Demo Config — OC22 / HydraGNN
+# 500 structures from the train split; completes in ~30s on Andes.
+
+domain: materials
+output_format: npz
+provenance: true
+
+max_samples: 500
+
+split:
+  enabled: false

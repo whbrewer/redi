@@ -1,0 +1,33 @@
+# REDI Demo Config — ClimaX / TaiESM1
+# Single 10-year NC file; completes in ~2 min on Andes.
+
+domain: climate
+output_format: npz
+provenance: true
+
+regrid:
+  enabled: true
+  target_resolution: 1.40625
+  method: bilinear
+  climax_grid: true
+
+normalize:
+  enabled: true
+  method: zscore
+
+variables:
+  select: null
+  rename:
+    tas: t2m
+
+split:
+  enabled: true
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  random_seed: 42
+
+climax_output:
+  enabled: true

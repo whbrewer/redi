@@ -1,0 +1,19 @@
+# REDI Demo Config — OpenFold / OpenProteinSet
+# 10 proteins; completes in ~20s on Andes.
+
+domain: life_sciences
+input_path: /lustre/orion/gen053/world-shared/openfold/data
+output_format: hdf5
+provenance: true
+
+max_proteins: 10
+
+num_workers: 4
+
+split:
+  method: random
+  ratios:
+    train: 0.8
+    val:   0.1
+    test:  0.1
+  random_seed: 42

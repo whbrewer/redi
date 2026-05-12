@@ -1,0 +1,9 @@
+# REDI Demo Config — XGC1 ITER (xgc1 plugin)
+# 1 timestep; completes in ~1 min on Andes.
+
+domain: xgc1
+output_format: npz
+provenance: true
+
+case_filter: n560fr_ITER_PFPO_W_Ne
+max_timesteps: 1
