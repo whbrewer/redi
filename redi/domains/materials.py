@@ -403,6 +403,7 @@ def get_transform_steps():
         name = "featurize_compositions"
         stage = PipelineStage.TRANSFORM
         description = "Generate Magpie/composition features"
+        critical = False
 
         def __init__(self, featurizers: Optional[List[str]] = None):
             super().__init__()
@@ -411,11 +412,12 @@ def get_transform_steps():
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
                 import pandas as pd
-                from pymatgen.core import Composition
-                from matminer.featurizers.composition import ElementProperty
 
                 if not isinstance(ctx.data, pd.DataFrame):
                     return ctx
+
+                from pymatgen.core import Composition
+                from matminer.featurizers.composition import ElementProperty
 
                 df = ctx.data
                 comp_col = ctx.metadata.get("composition_column")
