@@ -515,8 +515,8 @@ def run_pipeline(
             _split = _split_cfg.get("enabled", True) if isinstance(_split_cfg, dict) else bool(_split_cfg)
             get_full_pipeline = lambda: _get_geo_pipeline(split=_split)
         elif domain == "nuclear_physics":
-            from .domains.sphenix import get_sphenix_pipeline
-            get_full_pipeline = get_sphenix_pipeline
+            # Routed through plugin system — install redi-nuclear-physics
+            pass  # falls through to plugin/generic lookup below
         elif domain == "combustion":
             from .domains.combustion import get_full_pipeline
         else:
@@ -3835,11 +3835,17 @@ def _generate_validation_markdown(result, elapsed: float) -> str:
 def _handle_install_command(args):
     """Handle the 'install' subcommand."""
     from .plugins import install, reload_registry
+    import re as _re
 
     pip_args = ["--upgrade"] if args.upgrade else []
 
+    target = args.target
+    # Convert SCP-style SSH URLs (git@host:path) to pip's git+ssh://git@host/path
+    if _re.match(r'^git@[^:]+:[^/]', target):
+        target = _re.sub(r'^git@([^:]+):(.*)', r'git+ssh://git@\1/\2', target)
+
     print(f"{Colors.BOLD}Installing plugin:{Colors.END} {args.target}")
-    rc = install(args.target, pip_args=pip_args)
+    rc = install(target, pip_args=pip_args)
 
     if rc != 0:
         print(f"{Colors.RED}Installation failed (pip exit code {rc}).{Colors.END}")
