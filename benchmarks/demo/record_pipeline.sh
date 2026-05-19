@@ -92,3 +92,66 @@ echo
 pause 1
 run_cmd "redi run '$XGC1_ROOT' --domain xgc1 -c '$CFG/demo_xgc1.yaml' -o '$OUT_BASE/xgc1' -v"
 pause 3
+
+# ── Outputs ────────────────────────────────────────────────────────────────────
+show_metadata() {
+    python3 - "$1" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+skip = {"per_file", "saved_files", "input_files", "normalization_stats", "lmdb_shards"}
+for k, v in m.items():
+    if k in skip:
+        continue
+    if isinstance(v, (dict, list)) and len(str(v)) > 80:
+        continue
+    print(f"  {k}: {v}")
+PYEOF
+}
+
+clear
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  REDI outputs"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+pause 2
+
+# ClimaX outputs
+run_cmd "ls -lh $OUT_BASE/climax/"
+pause 2
+echo
+run_cmd "cat $OUT_BASE/climax/metadata.json"
+pause 3
+
+# OC22 outputs
+clear
+echo
+run_cmd "ls -lh $OUT_BASE/oc22/"
+pause 2
+echo
+run_cmd "cat $OUT_BASE/oc22/metadata.json"
+pause 3
+
+# OpenFold outputs
+clear
+echo
+run_cmd "ls -lh $OUT_BASE/openfold/"
+pause 2
+echo
+run_cmd "cat $OUT_BASE/openfold/metadata.json"
+pause 3
+
+# XGC1 outputs
+clear
+echo
+run_cmd "ls -lh $OUT_BASE/xgc1/"
+pause 2
+echo
+run_cmd "cat $OUT_BASE/xgc1/metadata.json"
+pause 3
+
+# DATA_CARD sample
+clear
+echo
+run_cmd "cat $OUT_BASE/oc22/DATA_CARD.md"
+pause 4
