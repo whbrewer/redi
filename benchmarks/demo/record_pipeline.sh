@@ -2,7 +2,7 @@
 # ── REDI Demo: sequential pipeline recording with simulated typing ─────────────
 #
 # Usage:
-#   asciinema rec -t "REDI SC26 Demo - Pipeline" /tmp/demo_pipeline.cast \
+#   asciinema rec -t "REDI SC26 Demo" /tmp/demo_pipeline.cast \
 #       --command "bash benchmarks/demo/record_pipeline.sh"
 
 REDI_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -22,7 +22,6 @@ cd "$REDI_DIR"
 
 PROMPT="(redi) whbrewer@andes$ "
 
-# Print text character by character, like someone typing
 type_text() {
     local text="$1"
     local delay="${2:-0.04}"
@@ -32,7 +31,6 @@ type_text() {
     done
 }
 
-# Show a command being typed, pause, then run it
 run_cmd() {
     local cmd="$1"
     echo -n "$PROMPT"
@@ -42,8 +40,33 @@ run_cmd() {
     eval "$cmd"
 }
 
-# Blank line pause
 pause() { sleep "${1:-1.5}"; }
+
+show_metadata() {
+    python3 - "$1" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+skip = {"per_file", "saved_files", "input_files", "normalization_stats", "lmdb_shards"}
+for k, v in m.items():
+    if k in skip:
+        continue
+    if isinstance(v, (dict, list)) and len(str(v)) > 80:
+        continue
+    print(f"  {k}: {v}")
+PYEOF
+}
+
+show_outputs() {
+    local label="$1"
+    local dir="$2"
+    echo
+    echo "── outputs: $label ──"
+    run_cmd "ls -lh $dir/"
+    pause 2
+    echo
+    run_cmd "cat $dir/metadata.json"
+    pause 3
+}
 
 # ── intro ─────────────────────────────────────────────────────────────────────
 clear
@@ -64,7 +87,8 @@ echo "# Case 1/4 — ClimaX / TaiESM1  (climate)"
 echo
 pause 1
 run_cmd "redi run '$NC_FILE' --domain climate -c '$CFG/demo_climax.yaml' -o '$OUT_BASE/climax' -v"
-pause 2
+pause 3
+show_outputs "ClimaX / TaiESM1" "$OUT_BASE/climax"
 
 # ── Case 2: OC22 ───────────────────────────────────────────────────────────────
 clear
@@ -73,7 +97,8 @@ echo "# Case 2/4 — OC22 / HydraGNN  (materials)"
 echo
 pause 1
 run_cmd "redi run '$OC22_DIR' --domain materials -c '$CFG/demo_oc22.yaml' -o '$OUT_BASE/oc22' -v"
-pause 2
+pause 3
+show_outputs "OC22 / HydraGNN" "$OUT_BASE/oc22"
 
 # ── Case 3: OpenFold ───────────────────────────────────────────────────────────
 clear
@@ -82,7 +107,8 @@ echo "# Case 3/4 — OpenFold / OpenProteinSet  (life sciences)"
 echo
 pause 1
 run_cmd "redi run '$OPS_ROOT' --domain life_sciences -c '$CFG/demo_openfold.yaml' -o '$OUT_BASE/openfold' -v"
-pause 2
+pause 3
+show_outputs "OpenFold / OpenProteinSet" "$OUT_BASE/openfold"
 
 # ── Case 4: XGC1 ───────────────────────────────────────────────────────────────
 clear
@@ -92,61 +118,6 @@ echo
 pause 1
 run_cmd "redi run '$XGC1_ROOT' --domain xgc1 -c '$CFG/demo_xgc1.yaml' -o '$OUT_BASE/xgc1' -v"
 pause 3
+show_outputs "XGC1 ITER" "$OUT_BASE/xgc1"
 
-# ── Outputs ────────────────────────────────────────────────────────────────────
-show_metadata() {
-    python3 - "$1" <<'PYEOF'
-import json, sys
-m = json.load(open(sys.argv[1]))
-skip = {"per_file", "saved_files", "input_files", "normalization_stats", "lmdb_shards"}
-for k, v in m.items():
-    if k in skip:
-        continue
-    if isinstance(v, (dict, list)) and len(str(v)) > 80:
-        continue
-    print(f"  {k}: {v}")
-PYEOF
-}
-
-clear
-echo
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  REDI outputs"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo
 pause 2
-
-# ClimaX outputs
-run_cmd "ls -lh $OUT_BASE/climax/"
-pause 2
-echo
-run_cmd "cat $OUT_BASE/climax/metadata.json"
-pause 3
-
-# OC22 outputs
-clear
-echo
-run_cmd "ls -lh $OUT_BASE/oc22/"
-pause 2
-echo
-run_cmd "cat $OUT_BASE/oc22/metadata.json"
-pause 3
-
-# OpenFold outputs
-clear
-echo
-run_cmd "ls -lh $OUT_BASE/openfold/"
-pause 2
-echo
-run_cmd "cat $OUT_BASE/openfold/metadata.json"
-pause 3
-
-# XGC1 outputs
-clear
-echo
-run_cmd "ls -lh $OUT_BASE/xgc1/"
-pause 2
-echo
-run_cmd "cat $OUT_BASE/xgc1/metadata.json"
-pause 3
-

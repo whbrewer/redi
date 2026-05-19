@@ -320,6 +320,7 @@ def run_pipeline(
     stages: Optional[List[str]] = None,
     config: Optional[dict] = None,
     verbose: bool = False,
+    show_skipped: bool = False,
     style: str = "rich",
     input_paths: Optional[List[str]] = None,
     array_mode: bool = False,
@@ -652,13 +653,16 @@ def run_pipeline(
         # Validate
         if not step.validate(ctx):
             step_time = time.time() - step_start
-            if style == "rich":
+            if style == "rich" and show_skipped:
                 if verbose:
                     print(f"     {Colors.DIM}↳ skipped (not applicable){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
                 else:
                     print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (not applicable) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
-            elif style == "simple":
+            elif style == "simple" and show_skipped:
                 print(f"  [SKIP] {step.name}")
+            elif verbose and not show_skipped:
+                # clear the "⏳ step:" line so skipped steps leave no trace
+                print(f"\r{' ' * 60}\r", end="", flush=True)
             step_results.append(("skipped", step.name, "", step_time))
             continue
 
@@ -2610,7 +2614,8 @@ Download examples (climate domain)::
                            help="Normalization method for array data")
     run_parser.add_argument("--provenance", action="store_true",
                            help="Enable FlowCept provenance tracking and generate PROVENANCE_CARD.md")
-    run_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    run_parser.add_argument("-v", "--verbose", action="count", default=0,
+                           help="Verbose output (-v show steps, -vv also show skipped steps)")
     run_parser.add_argument("--verify", action="store_true",
                            help="Run verification checks after each pipeline step")
     run_parser.add_argument("--raps-jobs", action="store_true", dest="raps_jobs",
@@ -3236,6 +3241,8 @@ def _handle_run_command(args):
         config['shards'] = args.shards
     if args.verbose:
         config['verbose'] = True
+    if args.verbose >= 2:
+        config['show_skipped'] = True
     if args.stages:
         config['stages'] = args.stages.split(',')
     if getattr(args, 'provenance', False):
@@ -3264,7 +3271,8 @@ def _handle_run_command(args):
     if getattr(args, 'end', None):
         config['end'] = args.end
 
-    verbose = args.verbose or config.get('verbose', False)
+    verbose = bool(args.verbose) or config.get('verbose', False)
+    show_skipped = (args.verbose >= 2) or config.get('show_skipped', False)
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -3371,6 +3379,7 @@ def _handle_run_command(args):
         stages=stages,
         config=config,
         verbose=verbose,
+        show_skipped=show_skipped,
         style=args.style,
         input_paths=[str(p) for p in input_paths],
         array_mode=array_mode,
