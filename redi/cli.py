@@ -253,9 +253,9 @@ def generate_output_dir(
 # ORCHESTRATOR MODE (redi run)
 # =============================================================================
 
-def _generate_enriched_datacard(primary_path, domain, config, ctx, step_results) -> str:
-    """Build a DATA_CARD.md enriched with actual pipeline metadata from ctx."""
-    from .assess import analyze_dataset, PipelineRecommender
+def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
+    """Return an enriched DataCard populated from actual pipeline metadata."""
+    from .assess import analyze_dataset
     from .pipeline import PipelineStage
 
     data_card = analyze_dataset(str(primary_path))
@@ -274,7 +274,7 @@ def _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
     if n_records:
         data_card.overview.num_records = int(n_records)
 
-    out_fmt = config.get("output_format") if isinstance(config, dict) else getattr(config, "get", lambda k, d=None: d)("output_format")
+    out_fmt = config.get("output_format") if isinstance(config, dict) else None
     if out_fmt:
         data_card.overview.file_format = out_fmt.upper()
 
@@ -302,6 +302,14 @@ def _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
     elif ctx.completed_stages and PipelineStage.TRANSFORM in ctx.completed_stages:
         data_card.readiness_level = 3
 
+    return data_card
+
+
+def _generate_enriched_datacard(primary_path, domain, config, ctx, step_results) -> str:
+    """Build a DATA_CARD.md string enriched with actual pipeline metadata."""
+    from .assess import PipelineRecommender
+
+    data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
     recommender = PipelineRecommender(data_card)
     return "\n".join([
         "=" * 60,
@@ -867,12 +875,10 @@ def run_pipeline(
         # Generate and save Data Card
         print_section("Data Card")
         try:
-            from .assess import analyze_dataset, PipelineRecommender
+            from .assess import PipelineRecommender
 
+            data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
             report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
-            data_card = analyze_dataset(str(primary_path))
-            data_card.detected_domain = domain
-            data_card.characteristics.domain = domain
 
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
             datacard_path = ctx.output_dir / "DATA_CARD.md"
