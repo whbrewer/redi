@@ -913,7 +913,10 @@ class PipelineRecommender:
 
     def __init__(self, data_card: DataCard):
         self.data_card = data_card
-        self.domain = ScientificDomain(data_card.detected_domain)
+        try:
+            self.domain = ScientificDomain(data_card.detected_domain)
+        except ValueError:
+            self.domain = ScientificDomain.GENERAL
         self.current_level = MaturityLevel(data_card.readiness_level)
 
     def get_recommendations(self) -> Dict[str, Any]:

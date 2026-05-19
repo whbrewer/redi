@@ -258,9 +258,13 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
     from .assess import analyze_dataset
     from .pipeline import PipelineStage
 
+    # Map plugin domain names to valid ScientificDomain enum values
+    _DOMAIN_ALIAS = {"xgc1": "fusion", "hydragnn": "materials", "climax": "climate"}
+    card_domain = _DOMAIN_ALIAS.get(domain, domain)
+
     data_card = analyze_dataset(str(primary_path))
-    data_card.detected_domain = domain
-    data_card.characteristics.domain = domain
+    data_card.detected_domain = card_domain
+    data_card.characteristics.domain = card_domain
 
     n_records = (
         ctx.metadata.get("n_structures") or
@@ -888,22 +892,6 @@ def run_pipeline(
             ctx.metadata["saved_files"].append(str(datacard_path))
             print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
-            # Save metadata.json for downstream tooling
-            metadata_path = ctx.output_dir / "metadata.json"
-            metadata_dict = {
-                "input_file": str(primary_path),
-                "domain": domain,
-                "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
-                "errors": ctx.errors,
-                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
-            }
-            import json as json_module
-            with open(metadata_path, 'w') as f:
-                json_module.dump(metadata_dict, f, indent=2, default=str)
-            ctx.metadata["saved_files"].append(str(metadata_path))
-            ctx.output_dir.touch()  # update directory mtime on re-runs
-            print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
-
             if getattr(ctx, "with_flowcept", False):
                 from .provenance_card import render_provenance_summary
 
@@ -990,6 +978,26 @@ def run_pipeline(
 
         except Exception as e:
             print(f"    {Colors.YELLOW}⚠ Could not generate Data Card: {e}{Colors.END}")
+
+        # Always write metadata.json regardless of Data Card success
+        import json as json_module
+        ctx.output_dir.mkdir(parents=True, exist_ok=True)
+        metadata_path = ctx.output_dir / "metadata.json"
+        metadata_dict = {
+            "input_file": str(primary_path),
+            "domain": domain,
+            "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
+            "errors": ctx.errors,
+            **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+        }
+        with open(metadata_path, 'w') as f:
+            json_module.dump(metadata_dict, f, indent=2, default=str)
+        if "saved_files" not in ctx.metadata:
+            ctx.metadata["saved_files"] = []
+        if str(metadata_path) not in ctx.metadata["saved_files"]:
+            ctx.metadata["saved_files"].append(str(metadata_path))
+        ctx.output_dir.touch()
+        print(f"    📋 {Colors.BOLD}metadata.json{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
         # Final status
         print()
