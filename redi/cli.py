@@ -642,29 +642,27 @@ def run_pipeline(
                 ctx.mark_complete(current_stage)
             current_stage = step.stage
 
-        # Show running status (rich mode)
+        # Validate before printing anything — skip silently unless show_skipped
+        if not step.validate(ctx):
+            step_time = time.time() - step_start
+            if show_skipped:
+                if style == "rich":
+                    if verbose:
+                        print(f"  ⏭  {Colors.DIM}{step.name}{Colors.END}: {step.description}")
+                        print(f"     {Colors.DIM}↳ skipped (not applicable){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                    else:
+                        print(f"  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
+                elif style == "simple":
+                    print(f"  [SKIP] {step.name}")
+            step_results.append(("skipped", step.name, "", step_time))
+            continue
+
+        # Show running status now that we know the step will execute
         if style == "rich":
             if verbose:
-                # In verbose mode, print on own line so logs don't get overwritten
                 print(f"  ⏳ {Colors.YELLOW}{step.name}{Colors.END}: {step.description}")
             else:
                 print(f"  ⏳ {Colors.YELLOW}{step.name}{Colors.END} ...", end="", flush=True)
-
-        # Validate
-        if not step.validate(ctx):
-            step_time = time.time() - step_start
-            if style == "rich" and show_skipped:
-                if verbose:
-                    print(f"     {Colors.DIM}↳ skipped (not applicable){Colors.END} {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
-                else:
-                    print(f"\r  ⏭️  {Colors.DIM}{step.name}{Colors.END} → skipped (not applicable) {Colors.DIM}({step_time*1000:.0f}ms){Colors.END}")
-            elif style == "simple" and show_skipped:
-                print(f"  [SKIP] {step.name}")
-            elif verbose and not show_skipped:
-                # clear the "⏳ step:" line so skipped steps leave no trace
-                print(f"\r{' ' * 60}\r", end="", flush=True)
-            step_results.append(("skipped", step.name, "", step_time))
-            continue
 
         # Execute
         try:
