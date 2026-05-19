@@ -150,8 +150,3 @@ echo
 run_cmd "cat $OUT_BASE/xgc1/metadata.json"
 pause 3
 
-# DATA_CARD sample
-clear
-echo
-run_cmd "cat $OUT_BASE/oc22/DATA_CARD.md"
-pause 4
