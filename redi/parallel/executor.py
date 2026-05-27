@@ -24,7 +24,7 @@ class ParallelConfig:
     Configuration for parallel execution.
 
     Attributes:
-        backend: Backend type ("local", "gnu", or "mpi").
+        backend: Backend type ("local", "gnu", "mpi", or "dragon").
         workers: Number of parallel workers (None for auto-detect).
         batch_size: Number of files per worker batch.
         output_dir: Base output directory.
@@ -32,7 +32,7 @@ class ParallelConfig:
         style: Output style for redi (default: simple for parallel).
         distribution: Distribution strategy ("round_robin" or "balanced").
 
-        # SLURM options (shared by "gnu" and "mpi" backends)
+        # SLURM options (shared by "gnu", "mpi", and "dragon" backends)
         slurm_nodes: Number of compute nodes.
         slurm_cores_per_node: CPU cores per node (gnu backend).
         slurm_time: Time limit (HH:MM:SS).
@@ -48,6 +48,24 @@ class ParallelConfig:
         mpi_ntasks_per_node: MPI tasks per node (default 1).
         mpi_merge: Gather results and write unified DataCard on rank 0.
         mpi_merge_format: Output format for merged file (npz, hdf5, zarr).
+
+        # Dragon-specific options (dragon backend only)
+        dragon_mode: Worker execution mode: "subprocess" or "inprocess".
+            subprocess — each worker calls ``redi run`` as a subprocess
+                         (compatible with all Dragon versions).
+            inprocess  — each worker imports and runs the REDI pipeline
+                         directly, using Dragon managed memory for arrays
+                         (experimental; requires Dragon >= 0.9).
+        dragon_nodes: Number of nodes for a multi-node Dragon launch.
+            When > 1, ``generate_scripts`` creates a SLURM batch script
+            that calls ``dragon --nodes N``.
+        dragon_launcher: How the Dragon runtime is started: "local"
+            (default; call ``dragon`` directly) or "slurm" (wrap in a
+            SLURM batch script via ``generate_scripts``).
+        dragon_domain: Domain hint passed to the in-process worker.
+            Only used when dragon_mode="inprocess".
+        dragon_stages: Comma-separated pipeline stages for in-process mode.
+        dragon_output_format: Output format for in-process mode (npz, hdf5, zarr).
     """
 
     backend: str = "local"
@@ -58,7 +76,7 @@ class ParallelConfig:
     style: str = "simple"
     distribution: str = "round_robin"
 
-    # SLURM options (gnu + mpi)
+    # SLURM options (gnu + mpi + dragon)
     slurm_nodes: int = 4
     slurm_cores_per_node: int = 56
     slurm_time: str = "0:30:00"
@@ -77,12 +95,22 @@ class ParallelConfig:
     mpi_merge: bool = True
     mpi_merge_format: str = "npz"
 
+    # Dragon-specific options
+    dragon_mode: str = "subprocess"
+    dragon_nodes: int = 1
+    dragon_launcher: str = "local"
+    dragon_domain: Optional[str] = None
+    dragon_stages: Optional[str] = None
+    dragon_output_format: str = "npz"
+
     def __post_init__(self):
         if self.workers is None:
             if self.backend == "local":
                 self.workers = os.cpu_count() or 4
             elif self.backend == "mpi":
                 self.workers = self.slurm_nodes * self.mpi_ntasks_per_node
+            elif self.backend == "dragon":
+                self.workers = (os.cpu_count() or 4) * self.dragon_nodes
             else:  # gnu
                 self.workers = self.slurm_nodes
 
@@ -150,7 +178,8 @@ class ParallelExecutor:
             batch_size=batch_size,
             output_dir=output_dir,
             redi_args=redi_args or [],
-            **{k: v for k, v in kwargs.items() if k.startswith("slurm_")},
+            **{k: v for k, v in kwargs.items()
+               if k.startswith("slurm_") or k.startswith("dragon_")},
         )
         self._backend = None
 

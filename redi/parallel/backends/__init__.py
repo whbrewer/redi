@@ -2,9 +2,10 @@
 Parallel execution backends.
 
 Provides different backends for parallel execution:
-    - local: GNU parallel on local machine (no SLURM)
-    - gnu:   SLURM + GNU parallel across nodes
-    - mpi:   SLURM + mpi4py across nodes (adds allreduce/gather for unified output)
+    - local:   GNU parallel on local machine (no SLURM)
+    - gnu:     SLURM + GNU parallel across nodes
+    - mpi:     SLURM + mpi4py across nodes (adds allreduce/gather for unified output)
+    - dragon:  Dragon HPC distributed runtime (multi-core and multi-node)
 """
 
 import warnings
@@ -14,6 +15,7 @@ from .base import ParallelBackend
 from .local import LocalBackend
 from .gnu import GnuBackend
 from .mpi import MpiBackend
+from .dragon import DragonBackend
 
 if TYPE_CHECKING:
     from ..executor import ParallelConfig
@@ -23,6 +25,7 @@ BACKENDS = {
     "local": LocalBackend,
     "gnu": GnuBackend,
     "mpi": MpiBackend,
+    "dragon": DragonBackend,
 }
 
 # Deprecated alias
@@ -67,6 +70,7 @@ __all__ = [
     "LocalBackend",
     "GnuBackend",
     "MpiBackend",
+    "DragonBackend",
     "get_backend",
     "BACKENDS",
 ]
