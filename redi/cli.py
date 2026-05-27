@@ -2355,6 +2355,9 @@ def run_parallel_pipeline(
     slurm_account: Optional[str] = None,
     slurm_partition: str = "batch",
     slurm_final_output: Optional[str] = None,
+    dragon_mode: str = "subprocess",
+    dragon_nodes: int = 1,
+    dragon_launcher: str = "local",
 ):
     """Run REDI pipeline in parallel mode."""
     from pathlib import Path
@@ -2384,6 +2387,10 @@ def run_parallel_pipeline(
             print_metric("Time Limit", slurm_time)
             if slurm_account:
                 print_metric("Account", slurm_account)
+        if backend == "dragon":
+            print_metric("Dragon Mode", dragon_mode)
+            print_metric("Dragon Nodes", str(dragon_nodes))
+            print_metric("Dragon Launcher", dragon_launcher)
     elif style == "simple":
         print(f"Parallel: {len(paths)} files, backend={backend}, workers={workers or 'auto'}")
 
@@ -2412,6 +2419,9 @@ def run_parallel_pipeline(
         slurm_account=slurm_account,
         slurm_partition=slurm_partition,
         slurm_final_output=slurm_final_output,
+        dragon_mode=dragon_mode,
+        dragon_nodes=dragon_nodes,
+        dragon_launcher=dragon_launcher,
     )
 
     # Update config distribution
@@ -2434,6 +2444,9 @@ def run_parallel_pipeline(
             if backend in ("gnu", "mpi"):
                 print()
                 print(f"    {Colors.CYAN}To submit:{Colors.END} cd {script_dir} && sbatch multinodejob.sh")
+            elif backend == "dragon":
+                print()
+                print(f"    {Colors.CYAN}To run:{Colors.END} cd {script_dir} && bash run_dragon.sh")
         elif style == "simple":
             print(f"Scripts generated in: {script_dir}")
             for name, path in scripts.items():
@@ -2651,9 +2664,11 @@ Download examples (climate domain)::
                                 help="Enable parallel execution across input files")
     parallel_group.add_argument("-w", "--workers", type=int, default=None,
                                 help="Number of parallel workers (default: auto-detect CPU count)")
-    parallel_group.add_argument("--backend", choices=["local", "gnu", "mpi"], default="local",
+    parallel_group.add_argument("--backend", choices=["local", "gnu", "mpi", "dragon"],
+                                default="local",
                                 help="Parallel backend: local (GNU parallel, no SLURM), "
-                                     "gnu (SLURM + GNU parallel), mpi (SLURM + mpi4py)")
+                                     "gnu (SLURM + GNU parallel), mpi (SLURM + mpi4py), "
+                                     "dragon (Dragon HPC distributed runtime)")
     parallel_group.add_argument("--batch-size", type=int, default=4,
                                 help="Files per worker batch (default: 4)")
     parallel_group.add_argument("--generate-only", action="store_true",
@@ -2662,8 +2677,20 @@ Download examples (climate domain)::
                                 default="round_robin",
                                 help="File distribution strategy (default: round_robin)")
 
+    # Dragon-specific options
+    dragon_group = run_parser.add_argument_group("Dragon options (for --backend dragon)")
+    dragon_group.add_argument("--dragon-mode", choices=["subprocess", "inprocess"],
+                              default="subprocess",
+                              help="subprocess: each worker calls 'redi run' as a subprocess; "
+                                   "inprocess: pipeline runs inside the Dragon worker (experimental)")
+    dragon_group.add_argument("--dragon-nodes", type=int, default=1,
+                              help="Number of nodes for multi-node Dragon launch (default: 1)")
+    dragon_group.add_argument("--dragon-launcher", choices=["local", "slurm"], default="local",
+                              help="local: call 'dragon' directly; "
+                                   "slurm: wrap in a SLURM batch script via --generate-only")
+
     # SLURM-specific options
-    slurm_group = run_parser.add_argument_group("SLURM options (for --backend gnu or mpi)")
+    slurm_group = run_parser.add_argument_group("SLURM options (for --backend gnu, mpi, or dragon)")
     slurm_group.add_argument("--slurm-nodes", type=int, default=4,
                              help="Number of compute nodes (default: 4)")
     slurm_group.add_argument("--slurm-cores", type=int, default=56,
@@ -3343,6 +3370,9 @@ def _handle_run_command(args):
             slurm_account=getattr(args, 'slurm_account', None) or config.get('parallel', {}).get('slurm', {}).get('account'),
             slurm_partition=getattr(args, 'slurm_partition', None) or config.get('parallel', {}).get('slurm', {}).get('partition', 'batch'),
             slurm_final_output=getattr(args, 'slurm_output', None) or config.get('parallel', {}).get('slurm', {}).get('final_output'),
+            dragon_mode=getattr(args, 'dragon_mode', None) or config.get('parallel', {}).get('dragon', {}).get('mode', 'subprocess'),
+            dragon_nodes=getattr(args, 'dragon_nodes', None) or config.get('parallel', {}).get('dragon', {}).get('nodes', 1),
+            dragon_launcher=getattr(args, 'dragon_launcher', None) or config.get('parallel', {}).get('dragon', {}).get('launcher', 'local'),
         )
         return  # Exit after parallel execution
 
