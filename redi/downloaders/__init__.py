@@ -102,3 +102,4 @@ def list_downloaders() -> Dict[str, str]:
 # Import downloaders to register them
 from .esgf import ESGFDownloader
 from .cds import CDSDownloader
+from . import demo  # noqa: F401 — makes demo.DEMOS importable

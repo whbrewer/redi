@@ -2858,6 +2858,52 @@ Examples::
     plugins_parser.add_argument("--json", action="store_true",
                                 help="Output as JSON")
 
+    # =========================================================================
+    # redi demo
+    # =========================================================================
+    demo_parser = subparsers.add_parser(
+        'demo',
+        help='Download a sample dataset and run the pipeline end-to-end',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Downloads a small public dataset (or generates synthetic data) for the chosen
+domain, runs the full REDI pipeline, and prints the resulting Data Card.
+
+Available domains::
+
+  general    UCI Wine Quality (~84 KB CSV)              [default]
+  hpc        Synthetic HPC job log (5,000 jobs)
+  climate    NOAA GHCND Honolulu station (~400 KB CSV)
+  geospatial EPA Annual AQI by County 2023 (~250 KB CSV)
+  materials  Synthetic crystal structure dataset
+
+Examples::
+
+  redi demo                          # Run general demo (UCI Wine Quality)
+  redi demo --domain hpc             # Run HPC telemetry demo
+  redi demo --domain climate -o ./out
+        """
+    )
+    demo_parser.add_argument(
+        "-d", "--domain",
+        choices=["general", "hpc", "climate", "geospatial", "materials"],
+        default=None,
+        help="Domain to demo (default: general)",
+    )
+    demo_parser.add_argument(
+        "-o", "--output",
+        default=None,
+        help="Output directory (default: ./demo_output/<domain>)",
+    )
+    demo_parser.add_argument(
+        "--list", action="store_true",
+        help="List available demos and exit",
+    )
+    demo_parser.add_argument(
+        "--style", choices=["rich", "simple", "json"], default="rich",
+        help="Output style",
+    )
+
     return parser
 
 
@@ -2899,6 +2945,8 @@ def main():
         _handle_install_command(args)
     elif args.command == 'plugins':
         _handle_plugins_command(args)
+    elif args.command == 'demo':
+        _handle_demo_command(args)
     else:
         parser.print_help()
 
@@ -3925,6 +3973,62 @@ def _handle_plugins_command(args):
         if steps:
             print(f"    {Colors.DIM}{len(steps)} pipeline steps{Colors.END}")
         print()
+
+
+def _handle_demo_command(args):
+    """Handle the 'demo' subcommand."""
+    import tempfile
+    from .downloaders.demo import list_demos, download_demo, DEFAULT_DOMAIN
+
+    demos = list_demos()
+
+    if getattr(args, 'list', False):
+        print(f"\n{Colors.BOLD}Available redi demo datasets:{Colors.END}\n")
+        for key, meta in demos.items():
+            tag = f"{Colors.DIM}[{meta['source']}]{Colors.END}"
+            print(f"  {Colors.CYAN}{Colors.BOLD}{key:<12}{Colors.END}  {meta['name']}")
+            print(f"              {Colors.DIM}{meta['description']}{Colors.END}")
+            print(f"              {meta['size']}  {tag}")
+            print()
+        return
+
+    domain = args.domain or DEFAULT_DOMAIN
+    style = getattr(args, 'style', 'rich')
+    meta = demos[domain]
+
+    print_banner()
+    print(f"{Colors.BOLD}Demo:{Colors.END} {meta['name']}")
+    print(f"{Colors.DIM}{meta['description']}{Colors.END}")
+    print(f"{Colors.DIM}Source: {meta['source']}  |  Size: {meta['size']}{Colors.END}\n")
+
+    output_dir = args.output or f"./demo_output/{domain}"
+
+    # Download / generate into a temp dir, then run the pipeline
+    with tempfile.TemporaryDirectory(prefix="redi_demo_") as tmpdir:
+        if meta['source'] == 'generated':
+            print(f"  {Colors.YELLOW}⚙{Colors.END}  Generating synthetic {domain} dataset…")
+        else:
+            print(f"  {Colors.YELLOW}⬇{Colors.END}  Downloading {meta['name']} ({meta['size']})…")
+
+        try:
+            data_path, _ = download_demo(domain, Path(tmpdir))
+        except Exception as exc:
+            print(f"\n{Colors.RED}Error fetching demo data: {exc}{Colors.END}")
+            print(f"{Colors.DIM}Check your network connection and try again.{Colors.END}")
+            sys.exit(1)
+
+        size_kb = data_path.stat().st_size // 1024
+        print(f"  {Colors.GREEN}✓{Colors.END}  Ready — {size_kb} KB  →  {Colors.DIM}{data_path.name}{Colors.END}\n")
+
+        run_pipeline(
+            input_path=str(data_path),
+            output_dir=output_dir,
+            domain=meta['domain'],
+            style=style,
+        )
+
+    print(f"\n{Colors.BOLD}Output written to:{Colors.END} {Colors.CYAN}{output_dir}{Colors.END}")
+    print(f"{Colors.DIM}Run 'redi demo --list' to see all available demos.{Colors.END}\n")
 
 
 if __name__ == "__main__":

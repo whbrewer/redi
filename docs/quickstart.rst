@@ -37,6 +37,21 @@ If you are using the pre-built ``drai`` virtual environment::
 
 The environment automatically sets ``ESMFMKFILE`` for climate domain regridding.
 
+Try it now — no data required
+-----------------------------
+
+``redi demo`` downloads a small public dataset and runs the full pipeline so you
+can see REDI working before you have your own data::
+
+    redi demo                          # UCI Wine Quality (general domain, ~84 KB)
+    redi demo --domain hpc             # Synthetic HPC job telemetry
+    redi demo --domain climate         # NOAA GHCND daily weather station data
+    redi demo --domain geospatial      # EPA Annual AQI by County (2023)
+    redi demo --domain materials       # Synthetic crystal structure dataset
+    redi demo --list                   # Show all available demos
+
+Output lands in ``./demo_output/<domain>/`` by default.
+
 Running the pipeline
 --------------------
 
