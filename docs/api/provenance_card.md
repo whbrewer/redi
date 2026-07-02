@@ -1,11 +1,7 @@
-redi.provenance_card
-====================
+# redi.provenance_card
 
 Lightweight provenance helpers backed by Flowcept reports. Generates
 human-readable provenance artifacts (Data Cards, audit trails) from
 Flowcept pipeline execution data.
 
-.. automodule:: redi.provenance_card
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Source:** [`redi/provenance_card.py`](../../redi/provenance_card.py)

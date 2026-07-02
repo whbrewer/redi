@@ -108,15 +108,6 @@ dev = [
     "ruff>=0.1.0",
 ]
 
-# Documentation dependencies
-docs = [
-    "sphinx>=7.0",
-    "furo",
-    "sphinx-autodoc-typehints",
-    "sphinx-argparse",
-    "myst-parser",
-]
-
 [project.scripts]
 redi = "redi.cli:main"
 
