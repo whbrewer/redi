@@ -1,5 +1,7 @@
 # REDI - Readiness Engine for Data Integration
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A modular pipeline for transforming raw scientific data into AI-ready datasets.
 
 REDI operates in four modes:
