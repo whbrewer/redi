@@ -564,7 +564,11 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(), LoadPhillyData()]
+    from .hpc_swf_loader import LoadSWFData
+    from .hpc_sacct_loader import LoadAdastraSacctDump
+
+    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(),
+            LoadPhillyData(), LoadSWFData(), LoadAdastraSacctDump()]
 
 
 def get_preprocess_steps():
