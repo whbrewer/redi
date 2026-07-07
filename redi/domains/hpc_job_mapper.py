@@ -1002,7 +1002,7 @@ class JobDictBuilder:
 
         # Determine whether we have real per-timestep trace arrays
         cpu_trace = job.get("cpu_trace")
-        has_timeseries = isinstance(cpu_trace, (list, np.ndarray)) and len(cpu_trace) > 1
+        has_timeseries = isinstance(cpu_trace, (list, np.ndarray)) and len(cpu_trace) >= 1
 
         job["current_state"] = "PENDING"      # scheduler moves to RUNNING
         job["current_run_time"] = 0
@@ -1012,19 +1012,37 @@ class JobDictBuilder:
         job["dilated"] = False
 
         if has_timeseries:
-            # Real per-timestep trace data
+            # Real per-timestep trace data.  RAPS convention (see
+            # raps/dataloaders/frontier.py): trace_start_time /
+            # trace_end_time are JOB-RELATIVE offsets in [0, run_time]
+            # placing the telemetry window within the job's own timeline.
             quanta = self.trace_quanta or 1
+            trace_time = len(cpu_trace) * quanta
+            run_time = end - start
+            trace_start_time = 0
+            trace_end_time = trace_time
+            trace_missing_values = False
+            if run_time > trace_time:
+                trace_missing_values = True
+                if start < 0:
+                    # Job started before the telemetry window: the trace
+                    # covers the tail of the job, pad the head.
+                    trace_start_time = int(run_time - trace_time)
+                    trace_end_time = run_time
+                # else: trace covers the head of the job (job ran past
+                # the telemetry window, or interior gaps) — keep defaults.
             job["trace_quanta"] = quanta
-            job["trace_time"] = len(cpu_trace) * quanta
-            job["trace_start_time"] = end     # RAPS convention
-            job["trace_end_time"] = start     # RAPS convention
-            job["trace_missing_values"] = False
+            job["trace_time"] = trace_time
+            job["trace_start_time"] = trace_start_time
+            job["trace_end_time"] = trace_end_time
+            job["trace_missing_values"] = trace_missing_values
         else:
-            # Scalar or no trace data — RAPS convention for scalar traces
+            # Scalar or no trace data — job-relative offsets over the
+            # whole (expected) runtime, flagged as missing values.
             job["trace_quanta"] = self.trace_quanta
             job["trace_time"] = wall_time
-            job["trace_start_time"] = end     # RAPS convention
-            job["trace_end_time"] = start     # RAPS convention
+            job["trace_start_time"] = 0
+            job["trace_end_time"] = wall_time
             job["trace_missing_values"] = True
 
         # Ensure partition is int (RAPS expects int | None, not str)
