@@ -39,9 +39,9 @@ raps_jobs:
       max: 280
       per_node: 1    # cpus_per_node
     gpu:
-      idle: 44
-      max: 238
-      per_node: 8    # gpus_per_node
+      idle: 88
+      max: 560
+      per_node: 4    # gpus_per_node (MI250X modules, matching RAPS frontier.yaml; NOT GCDs)
 
   # System topology for xname → node index conversion
   topology:
