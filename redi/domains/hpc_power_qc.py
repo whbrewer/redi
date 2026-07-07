@@ -1,8 +1,8 @@
 """
-REDI power-data-quality detectors for HPC job accounting (QC1 / QC2).
+REDI power-data-quality detectors for HPC job accounting (QC1 / QC2 / QC3).
 
 This module implements W4 from notes/uc-demonstration-plan2.md §3 ("Automated
-power-data QC: detect + repair"): the *detection* half, restricted to the two
+power-data QC: detect + repair"): the *detection* half, restricted to the
 checks that can be built before the pm_counters ingester (W3) lands.
 
   - QC1 — dimensionless envelope check (`qc1_envelope_check`): Gerard Gil's
@@ -23,9 +23,21 @@ checks that can be built before the pm_counters ingester (W3) lands.
     pm_counters ingester (W3) is blocked on CINES schema confirmation (D8);
     a `SyntheticPowerSource` makes QC2 fully testable today.
 
+  - QC3 — trace-level stream checks (`qc3_check_stream`): pure function over
+    generic per-device streams (t, optional cumulative-energy counter,
+    optional instantaneous power) — timestamp monotonicity, sampling gaps,
+    counter resets/rollbacks (with a taxonomy of negative-delta classes),
+    energy/power cross-consistency, per-sample power envelope, stuck values.
+    Deliberately contains NO pm_counters-specific parsing: the raw-log column
+    schema is UNCONFIRMED (D8, awaiting CINES); the eventual W3 ingester maps
+    columns onto (t, energy_cum, power_w) and this function only measures
+    stream behavior.
+
 Entry points:
   - `qc1_envelope_check(df, envelopes, epsilon)` — pure function.
   - `qc2_cross_source(df, source, rel_tol)` — pure function.
+  - `qc3_check_stream(t, energy_cum, power_w, device_p_max, ...)` — pure
+    function returning a `Qc3StreamReport`.
   - `PowerEnvelopeQC` — a PREPROCESS-stage `PipelineStep` wrapping QC1.
     NOT registered in any get_*_steps() list — wiring is a separate change,
     same policy as `LoadAdastraSacctDump` in hpc_sacct_loader.py.
@@ -496,7 +508,316 @@ PowerEnvelopeQC = _build_power_envelope_qc_step()
 
 
 # ---------------------------------------------------------------------------
-# 5. Self-tests (synthetic known-answer) + real-data verification report
+# 5. QC3 — trace-level per-device stream checks (plan §3 QC3)
+# ---------------------------------------------------------------------------
+
+# Negative-delta taxonomy for the cumulative-energy counter, in PRECEDENCE
+# order (first match wins). These labels are HYPOTHESES about the mechanism
+# behind a measured negative delta, not confirmed semantics — the pm_counters
+# column schema itself is unconfirmed (D8, awaiting CINES).
+QC3_RESET_CLASSES = ("u64_wrap", "jitter", "reset_to_zero", "rollback_other")
+
+# ΔE more negative than −2^62 J is physically absurd (cf. U64_WRAP_THRESHOLD
+# above) and is taken as an unsigned-64-bit counter wrapping / being
+# reinterpreted. Checked FIRST: a u64 wrap also lands "near zero relative to
+# the old value", so it would otherwise be misclassified as reset_to_zero.
+QC3_U64_WRAP_DELTA_J = -float(2**62)
+
+# Fallback |ΔE| bound for the "jitter" class when no device_p_max is given.
+QC3_JITTER_FALLBACK_J = 1.0e4
+
+# "reset_to_zero": new counter value at or below this fraction of the old one.
+QC3_RESET_ZERO_FRACTION = 0.01
+
+
+@dataclass
+class Qc3StreamReport:
+    """Result of `qc3_check_stream` on ONE per-device stream.
+
+    Index convention: interval-level defects (timestamp decrease/duplicate,
+    sampling gap, counter reset, energy/power inconsistency) between samples
+    i and i+1 are reported at index i+1 — the first sample AFTER the
+    defective interval. Sample-level defects (power envelope, stuck runs) use
+    the sample's own index; stuck runs are (start_index, run_length, value).
+
+    `checks_run` lists which checks had sufficient inputs; a check absent
+    from it reports zero counts vacuously, not as evidence of health.
+    """
+
+    n_samples: int
+    checks_run: tuple
+    # timestamp_nonmonotonic
+    ts_decreasing_count: int
+    ts_decreasing_idx: np.ndarray
+    ts_duplicate_count: int
+    ts_duplicate_idx: np.ndarray
+    # sampling_gap
+    median_dt_s: float
+    gap_count: int
+    gap_idx: np.ndarray
+    gap_max_s: float
+    gap_total_s: float
+    # counter_reset
+    reset_count: int
+    reset_idx: np.ndarray
+    reset_class_idx: Dict[str, np.ndarray]
+    # energy_power_consistency
+    epc_high_count: int
+    epc_high_idx: np.ndarray
+    epc_low_count: int
+    epc_low_idx: np.ndarray
+    # power_out_of_envelope
+    pow_high_count: int
+    pow_high_idx: np.ndarray
+    pow_low_count: int
+    pow_low_idx: np.ndarray
+    # stuck_value (informational — see qc3_check_stream docstring)
+    stuck_run_count: int
+    stuck_runs: tuple
+    stuck_sample_count: int
+
+    @property
+    def has_defects(self) -> bool:
+        """True if any non-informational check flagged anything.
+
+        Includes duplicate timestamps (a trace anomaly even though not
+        strictly decreasing). EXCLUDES stuck_value, which is informational.
+        """
+        return (
+            self.ts_decreasing_count + self.ts_duplicate_count
+            + self.gap_count + self.reset_count
+            + self.epc_high_count + self.epc_low_count
+            + self.pow_high_count + self.pow_low_count
+        ) > 0
+
+    def summary(self) -> Dict:
+        """Flat dict of per-check counts for logging/aggregation."""
+        return {
+            "n_samples": self.n_samples,
+            "checks_run": list(self.checks_run),
+            "ts_decreasing": self.ts_decreasing_count,
+            "ts_duplicate": self.ts_duplicate_count,
+            "median_dt_s": self.median_dt_s,
+            "gap_count": self.gap_count,
+            "gap_max_s": self.gap_max_s,
+            "gap_total_s": self.gap_total_s,
+            "reset_count": self.reset_count,
+            "reset_by_class": {
+                c: int(v.size) for c, v in self.reset_class_idx.items()
+            },
+            "epc_high": self.epc_high_count,
+            "epc_low": self.epc_low_count,
+            "pow_high": self.pow_high_count,
+            "pow_low": self.pow_low_count,
+            "stuck_runs": self.stuck_run_count,
+            "stuck_samples": self.stuck_sample_count,
+            "has_defects": self.has_defects,
+        }
+
+
+def qc3_check_stream(
+    t: np.ndarray,
+    energy_cum: Optional[np.ndarray] = None,
+    power_w: Optional[np.ndarray] = None,
+    device_p_max: Optional[float] = None,
+    gap_factor: float = 5.0,
+    stuck_min_run: int = 30,
+    epsilon: float = 0.05,
+) -> Qc3StreamReport:
+    """QC3: trace-level checks on ONE per-device power/energy stream.
+
+    Operates on generic numpy streams — `t` (epoch seconds), optional
+    `energy_cum` (cumulative Joules), optional `power_w` (instantaneous
+    Watts) — with NO pm_counters-specific parsing: the raw-log column schema
+    is unconfirmed (D8, awaiting CINES), so the caller is responsible for
+    mapping whatever columns it trusts onto these three arrays. Each check
+    is skipped (absent from `checks_run`) when its inputs are missing;
+    NaN samples never trigger a defect (comparisons with NaN are False),
+    so gappy inputs degrade to fewer checked intervals, not false alarms.
+
+    Checks:
+      - timestamp_nonmonotonic (t): strictly decreasing consecutive pairs;
+        exact duplicate timestamps counted separately.
+      - sampling_gap (t): dt > gap_factor × median(positive dt). Reports
+        count, max gap, and total gapped seconds — gaps matter downstream
+        because QC2's counter-differencing integrates across them blindly.
+      - counter_reset (energy_cum): negative counter deltas, classified in
+        precedence order (QC3_RESET_CLASSES): `u64_wrap` (ΔE < −2^62 J —
+        checked first because a wrap also looks like a reset-to-zero),
+        `jitter` (|ΔE| ≤ device_p_max·dt when device_p_max is given, else
+        ≤ QC3_JITTER_FALLBACK_J — plausibly out-of-order/near-simultaneous
+        counter reads), `reset_to_zero` (old > 0 and new ≤ 1% of old),
+        `rollback_other` (everything else). The class names are HYPOTHESES
+        about mechanism, to be revisited against the CINES schema answer.
+      - energy_power_consistency (energy_cum + device_p_max): implied power
+        ΔE/Δt over each interval with Δt > 0 must lie in
+        [−ε·p_max, p_max·(1+ε)]. This is the strong check: it catches
+        trace-level corruption (e.g. a counter mid-stream scaled or spliced)
+        that per-sample checks miss. Reset intervals necessarily also fail
+        low here; consumers should de-duplicate against `reset_idx`.
+      - power_out_of_envelope (power_w + device_p_max): per-sample power
+        outside [−ε·p_max, p_max·(1+ε)].
+      - stuck_value (power_w): runs of ≥ stuck_min_run consecutive IDENTICAL
+        power values. INFORMATIONAL, not a failure: constant idle power
+        reported in integer watts can be legitimate for a parked node, so a
+        stuck run is a review flag, not a verdict. Default 30 samples ≈ 30
+        minutes at the ~60 s pm_counters cadence. NaN breaks a run.
+
+    Deliberately NO slew-rate check: at ~60 s cadence a node can
+    legitimately swing idle→max (or back) within a single sampling
+    interval, so any per-interval dP/dt bound would be an arbitrary knob
+    that flags real workload transitions. Slew checking only becomes
+    meaningful on the ~9 Hz underlying counters, which we do not have.
+
+    Args:
+        t: sample timestamps, epoch seconds (float array, length n).
+        energy_cum: cumulative energy counter, Joules (length n) or None.
+        power_w: instantaneous power, Watts (length n) or None.
+        device_p_max: physical max power of the device this stream
+            measures, Watts; enables the envelope/consistency checks and
+            scales the reset `jitter` threshold. None disables those.
+        gap_factor: dt threshold multiplier on the median positive dt.
+        stuck_min_run: minimum identical-run length to report.
+        epsilon: dimensionless envelope tolerance (same role as QC1's ε).
+
+    Returns:
+        Qc3StreamReport (see its docstring for the index convention).
+    """
+    t = np.asarray(t, dtype="float64")
+    n = int(t.size)
+    if energy_cum is not None:
+        energy_cum = np.asarray(energy_cum, dtype="float64")
+        if energy_cum.size != n:
+            raise ValueError(
+                f"energy_cum length {energy_cum.size} != t length {n}")
+    if power_w is not None:
+        power_w = np.asarray(power_w, dtype="float64")
+        if power_w.size != n:
+            raise ValueError(
+                f"power_w length {power_w.size} != t length {n}")
+
+    checks_run = ["timestamp_nonmonotonic", "sampling_gap"]
+    empty_idx = np.empty(0, dtype=np.int64)
+
+    # --- timestamp_nonmonotonic -------------------------------------------
+    dt = np.diff(t) if n >= 2 else np.empty(0, dtype="float64")
+    with np.errstate(invalid="ignore"):
+        ts_decreasing_idx = np.flatnonzero(dt < 0) + 1
+        ts_duplicate_idx = np.flatnonzero(dt == 0) + 1
+
+    # --- sampling_gap -------------------------------------------------------
+    pos_dt = dt[dt > 0]
+    median_dt = float(np.median(pos_dt)) if pos_dt.size else float("nan")
+    if math.isfinite(median_dt) and median_dt > 0:
+        gap_mask = dt > gap_factor * median_dt
+    else:
+        gap_mask = np.zeros(dt.shape, dtype=bool)
+    gap_idx = np.flatnonzero(gap_mask) + 1
+    gap_max_s = float(dt[gap_mask].max()) if gap_idx.size else 0.0
+    gap_total_s = float(dt[gap_mask].sum()) if gap_idx.size else 0.0
+
+    # --- counter_reset ------------------------------------------------------
+    reset_idx = empty_idx
+    reset_class_idx = {c: empty_idx for c in QC3_RESET_CLASSES}
+    dE = None
+    if energy_cum is not None and n >= 2:
+        checks_run.append("counter_reset")
+        dE = np.diff(energy_cum)  # NaN where either endpoint NaN -> excluded
+        old = energy_cum[:-1]
+        new = energy_cum[1:]
+        if device_p_max is not None:
+            jitter_thresh = device_p_max * np.maximum(dt, 0.0)
+        else:
+            jitter_thresh = np.full(dt.shape, QC3_JITTER_FALLBACK_J)
+        with np.errstate(invalid="ignore"):
+            neg = dE < 0
+            is_wrap = neg & (dE < QC3_U64_WRAP_DELTA_J)
+            is_jitter = neg & ~is_wrap & (np.abs(dE) <= jitter_thresh)
+            is_zero = (neg & ~is_wrap & ~is_jitter & (old > 0)
+                       & (new <= QC3_RESET_ZERO_FRACTION * old))
+            is_other = neg & ~is_wrap & ~is_jitter & ~is_zero
+        reset_idx = np.flatnonzero(neg) + 1
+        reset_class_idx = {
+            "u64_wrap": np.flatnonzero(is_wrap) + 1,
+            "jitter": np.flatnonzero(is_jitter) + 1,
+            "reset_to_zero": np.flatnonzero(is_zero) + 1,
+            "rollback_other": np.flatnonzero(is_other) + 1,
+        }
+
+    # --- energy_power_consistency -------------------------------------------
+    epc_high_idx = empty_idx
+    epc_low_idx = empty_idx
+    if dE is not None and device_p_max is not None:
+        checks_run.append("energy_power_consistency")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            implied_w = np.where(dt > 0, dE / dt, np.nan)
+            epc_high_idx = np.flatnonzero(
+                implied_w > device_p_max * (1.0 + epsilon)) + 1
+            epc_low_idx = np.flatnonzero(
+                implied_w < -epsilon * device_p_max) + 1
+
+    # --- power_out_of_envelope -----------------------------------------------
+    pow_high_idx = empty_idx
+    pow_low_idx = empty_idx
+    if power_w is not None and device_p_max is not None:
+        checks_run.append("power_out_of_envelope")
+        with np.errstate(invalid="ignore"):
+            pow_high_idx = np.flatnonzero(
+                power_w > device_p_max * (1.0 + epsilon))
+            pow_low_idx = np.flatnonzero(power_w < -epsilon * device_p_max)
+
+    # --- stuck_value (informational) ----------------------------------------
+    stuck_runs = []
+    if power_w is not None and n >= 2 and stuck_min_run >= 2:
+        checks_run.append("stuck_value")
+        with np.errstate(invalid="ignore"):
+            same = power_w[1:] == power_w[:-1]  # False across NaN
+        i = 0
+        m = same.size
+        while i < m:
+            if same[i]:
+                j = i
+                while j < m and same[j]:
+                    j += 1
+                run_len = j - i + 1  # samples i .. j inclusive
+                if run_len >= stuck_min_run:
+                    stuck_runs.append((int(i), int(run_len),
+                                       float(power_w[i])))
+                i = j
+            else:
+                i += 1
+
+    return Qc3StreamReport(
+        n_samples=n,
+        checks_run=tuple(checks_run),
+        ts_decreasing_count=int(ts_decreasing_idx.size),
+        ts_decreasing_idx=ts_decreasing_idx,
+        ts_duplicate_count=int(ts_duplicate_idx.size),
+        ts_duplicate_idx=ts_duplicate_idx,
+        median_dt_s=median_dt,
+        gap_count=int(gap_idx.size),
+        gap_idx=gap_idx,
+        gap_max_s=gap_max_s,
+        gap_total_s=gap_total_s,
+        reset_count=int(reset_idx.size),
+        reset_idx=reset_idx,
+        reset_class_idx=reset_class_idx,
+        epc_high_count=int(epc_high_idx.size),
+        epc_high_idx=epc_high_idx,
+        epc_low_count=int(epc_low_idx.size),
+        epc_low_idx=epc_low_idx,
+        pow_high_count=int(pow_high_idx.size),
+        pow_high_idx=pow_high_idx,
+        pow_low_count=int(pow_low_idx.size),
+        pow_low_idx=pow_low_idx,
+        stuck_run_count=len(stuck_runs),
+        stuck_runs=tuple(stuck_runs),
+        stuck_sample_count=sum(r[1] for r in stuck_runs),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Self-tests (synthetic known-answer) + real-data verification report
 # ---------------------------------------------------------------------------
 def _run_synthetic_qc1_tests() -> int:
     """Known-answer tests exercising every QC1 verdict. Returns #failures.
@@ -634,6 +955,162 @@ def _run_synthetic_qc2_tests() -> int:
     return failures
 
 
+def _run_synthetic_qc3_tests() -> int:
+    """Known-answer tests exercising every QC3 check and every counter_reset
+    subclass, on streams with hand-planted defects at known indices. Returns
+    #failures. Hand computations are in each scenario's comments.
+    """
+    failures = 0
+
+    def check(name, got, want):
+        nonlocal failures
+        if isinstance(got, np.ndarray):
+            got = got.tolist()
+        if isinstance(want, np.ndarray):
+            want = want.tolist()
+        if isinstance(want, float) and isinstance(got, float):
+            ok = (math.isnan(got) and math.isnan(want)) or got == want
+        else:
+            ok = got == want
+        status = "PASS" if ok else "FAIL"
+        print(f"    [{status}] qc3: {name:<44s} got={got!r} (want {want!r})")
+        if not ok:
+            failures += 1
+
+    # --- A. clean stream: 100 samples @ 60 s, exactly 500 W ----------------
+    n = 100
+    t = 1000.0 + 60.0 * np.arange(n)
+    e = 1.0e6 + 30000.0 * np.arange(n)                    # 30 kJ / 60 s = 500 W
+    p = np.where(np.arange(n) % 2 == 0, 480.0, 520.0)     # varies: no stuck run
+    r = qc3_check_stream(t, e, p, device_p_max=1000.0)
+    check("A clean: has_defects", r.has_defects, False)
+    check("A clean: all 6 checks ran", len(r.checks_run), 6)
+    check("A clean: median_dt_s", r.median_dt_s, 60.0)
+    check("A clean: stuck_run_count", r.stuck_run_count, 0)
+
+    # --- B. timestamp defects ----------------------------------------------
+    # t[50] = t[49]-10 -> decreasing pair at idx 50 (dt[50]=130 <= 5*60: no gap)
+    # t[70] = t[69]    -> exact duplicate at idx 70 (dt[70]=120: no gap)
+    # t[90:] += 3600   -> dt[89] = 3660 > 300 -> ONE gap at idx 90
+    t = 1000.0 + 60.0 * np.arange(n)
+    t[50] = t[49] - 10.0
+    t[70] = t[69]
+    t[90:] += 3600.0
+    r = qc3_check_stream(t)
+    check("B ts: decreasing idx", r.ts_decreasing_idx, [50])
+    check("B ts: duplicate idx", r.ts_duplicate_idx, [70])
+    check("B ts: gap idx", r.gap_idx, [90])
+    check("B ts: gap_max_s", r.gap_max_s, 3660.0)
+    check("B ts: gap_total_s", r.gap_total_s, 3660.0)
+    check("B ts: median_dt_s still 60", r.median_dt_s, 60.0)
+    check("B ts: only t-checks ran", list(r.checks_run),
+          ["timestamp_nonmonotonic", "sampling_gap"])
+
+    # --- C. counter resets: one defect per subclass, p_max=1000 ------------
+    # Baseline dE=+30 kJ (500 W). Planted (offending sample = i+1):
+    #   dE[19] = -100        -> jitter at idx 20 (|dE| <= p_max*dt = 60 kJ)
+    #   e[40]  = 5.0         -> reset_to_zero at idx 40 (old ~2.17 MJ, new 5 J)
+    #                           side effect: dE[40] huge positive -> epc_high 41
+    #   dE[59] = -2^63       -> u64_wrap at idx 60 (< -2^62)
+    #   dE[79] = -1e6        -> rollback_other at idx 80 (not small, old < 0
+    #                           after the wrap so the reset_to_zero old>0
+    #                           guard is exercised)
+    # epc_low expected at [40, 60, 80]: implied W = -36165, -1.5e17, -16667,
+    # all < -eps*p_max = -50; idx 20 implied -1.67 W is NOT epc_low.
+    de = np.full(n - 1, 30000.0)
+    de[19] = -100.0
+    de[59] = -float(2**63)
+    de[79] = -1.0e6
+    e = 1.0e6 + np.concatenate([[0.0], np.cumsum(de)])
+    e[40] = 5.0
+    t = 60.0 * np.arange(n)
+    r = qc3_check_stream(t, e, device_p_max=1000.0)
+    check("C reset: reset_idx", r.reset_idx, [20, 40, 60, 80])
+    check("C reset: jitter idx", r.reset_class_idx["jitter"], [20])
+    check("C reset: reset_to_zero idx", r.reset_class_idx["reset_to_zero"], [40])
+    check("C reset: u64_wrap idx", r.reset_class_idx["u64_wrap"], [60])
+    check("C reset: rollback_other idx", r.reset_class_idx["rollback_other"], [80])
+    check("C reset: epc_low idx", r.epc_low_idx, [40, 60, 80])
+    check("C reset: epc_high idx (post-reset jump)", r.epc_high_idx, [41])
+
+    # --- D. energy/power consistency + power envelope + stuck --------------
+    # p_max=1000, eps=0.05 -> power bounds (-50, 1050), exclusive.
+    #   dE[24] = 90000 -> implied 1500 W -> epc_high at idx 25
+    #   dE[49] = -12000 -> implied -200 W -> epc_low at idx 50; |dE| <= 60 kJ
+    #                      so the SAME interval is also a jitter reset
+    #                      (documented overlap between the two checks)
+    #   dE[70] = 63000 -> implied exactly 1050.0 W: 1050.0 is NOT >
+    #                      1000*(1+0.05) (which rounds up in float64) ->
+    #                      boundary NOT flagged
+    #   p[10]=1200 -> pow_high; p[11]=-100 -> pow_low
+    #   p[12]=1050.0, p[13]=-50.0 -> exact bounds, NOT flagged
+    #   p[30:59] = 350.0 -> 29 identical: below stuck_min_run=30, not flagged
+    #   p[60:90] = 400.0 -> 30 identical: ONE stuck run (60, 30, 400.0)
+    nn = 120
+    t = 60.0 * np.arange(nn)
+    de = np.full(nn - 1, 30000.0)
+    de[24] = 90000.0
+    de[49] = -12000.0
+    de[70] = 63000.0
+    e = 1.0e6 + np.concatenate([[0.0], np.cumsum(de)])
+    p = np.where(np.arange(nn) % 2 == 0, 490.0, 510.0)
+    p[10] = 1200.0
+    p[11] = -100.0
+    p[12] = 1050.0
+    p[13] = -50.0
+    p[30:59] = 350.0
+    p[60:90] = 400.0
+    r = qc3_check_stream(t, e, p, device_p_max=1000.0)
+    check("D epc: high idx (boundary excluded)", r.epc_high_idx, [25])
+    check("D epc: low idx", r.epc_low_idx, [50])
+    check("D epc: same interval also jitter reset",
+          r.reset_class_idx["jitter"], [50])
+    check("D pow: high idx (boundary excluded)", r.pow_high_idx, [10])
+    check("D pow: low idx (boundary excluded)", r.pow_low_idx, [11])
+    check("D stuck: runs (29-run ignored)", list(r.stuck_runs),
+          [(60, 30, 400.0)])
+    check("D stuck: sample count", r.stuck_sample_count, 30)
+    check("D stuck: informational, so 29+30 runs but has_defects from "
+          "epc/pow only", r.has_defects, True)
+
+    # --- E. skippable checks + fallback jitter threshold (no p_max) --------
+    #   dE[9]  = -5000  -> |dE| <= fallback 1e4 -> jitter at idx 10
+    #   dE[19] = -20000 -> > 1e4, new/old ~ 1 -> rollback_other at idx 20
+    t = 60.0 * np.arange(50)
+    de = np.full(49, 30000.0)
+    de[9] = -5000.0
+    de[19] = -20000.0
+    e = 1.0e7 + np.concatenate([[0.0], np.cumsum(de)])
+    r = qc3_check_stream(t, energy_cum=e)  # no power_w, no device_p_max
+    check("E fallback: checks_run", list(r.checks_run),
+          ["timestamp_nonmonotonic", "sampling_gap", "counter_reset"])
+    check("E fallback: jitter idx (<=1e4 J)", r.reset_class_idx["jitter"], [10])
+    check("E fallback: rollback_other idx",
+          r.reset_class_idx["rollback_other"], [20])
+    check("E fallback: epc skipped (no p_max)",
+          r.epc_high_count + r.epc_low_count, 0)
+
+    # --- F. gap boundary: threshold is strict > gap_factor*median ----------
+    # dts: 47x60 s, one exactly 300 (=5*60, NOT a gap), one 301 (gap idx 21)
+    dts = np.full(49, 60.0)
+    dts[10] = 300.0
+    dts[20] = 301.0
+    t = 100.0 + np.concatenate([[0.0], np.cumsum(dts)])
+    r = qc3_check_stream(t)
+    check("F gap: boundary 300s not flagged, 301s is", r.gap_idx, [21])
+    check("F gap: gap_max_s", r.gap_max_s, 301.0)
+    check("F gap: gap_total_s", r.gap_total_s, 301.0)
+
+    # --- G. degenerate single-sample stream --------------------------------
+    r = qc3_check_stream(np.array([100.0]), energy_cum=np.array([5.0]),
+                         power_w=np.array([1.0]), device_p_max=100.0)
+    check("G degenerate: n_samples", r.n_samples, 1)
+    check("G degenerate: has_defects", r.has_defects, False)
+    check("G degenerate: median_dt_s is NaN", r.median_dt_s, float("nan"))
+
+    return failures
+
+
 if __name__ == "__main__":
     import sys
     import time
@@ -644,7 +1121,7 @@ if __name__ == "__main__":
     )
 
     print("=" * 78)
-    print("REDI HPC power-data QC (QC1/QC2) — verification report")
+    print("REDI HPC power-data QC (QC1/QC2/QC3) — verification report")
     print("=" * 78)
 
     # --- [0] Synthetic known-answer tests --------------------------------
@@ -653,11 +1130,13 @@ if __name__ == "__main__":
     qc1_failures = _run_synthetic_qc1_tests()
     print("  QC2 (SyntheticPowerSource n1/n2 @ 500 W, rel_tol=0.10):")
     qc2_failures = _run_synthetic_qc2_tests()
-    total_failures = qc1_failures + qc2_failures
+    print("  QC3 (stream checks: gap_factor=5, stuck_min_run=30, eps=0.05):")
+    qc3_failures = _run_synthetic_qc3_tests()
+    total_failures = qc1_failures + qc2_failures + qc3_failures
     if total_failures:
         print(f"\n    {total_failures} synthetic test case(s) FAILED — aborting.")
         sys.exit(1)
-    print("\n    All synthetic QC1/QC2 known-answer cases PASSED.")
+    print("\n    All synthetic QC1/QC2/QC3 known-answer cases PASSED.")
 
     # --- [1] QC1 on the real Adastra sacct dump --------------------------
     print(f"\n[1] QC1 on real sacct dump: {DUMP_PATH}")
