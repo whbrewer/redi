@@ -604,10 +604,15 @@ class TraceNormalizer:
 
         For power data with full RAPS config (per_node present), uses::
 
-            watts = sum_power / (wall_time * nodes_required)
+            watts = sum_power / nodes_required
             util  = (watts / idle - per_node) / (max / idle - 1.0)
 
-        Otherwise falls back to simple linear normalization.
+        ``value`` is a per-sample power reading (Watts), already summed
+        across the job's allocated nodes at that instant, not accumulated
+        energy: dividing by wall_time in addition to nodes_required was a
+        confirmed defect (D-E13a) that silently drove every normalized
+        utilization sample to exactly 0 for any job longer than a couple of
+        seconds. Otherwise falls back to simple linear normalization.
         Values are NOT clamped — RAPS allows >1 for GPU utilization.
         """
         if np.isnan(value):
@@ -622,9 +627,9 @@ class TraceNormalizer:
             max_p = cfg.get("max", 0)
             per_node = cfg.get("per_node", 0)
 
-            if idle > 0 and max_p > 0 and per_node > 0 and wall_time > 0 and nodes_required > 0:
+            if idle > 0 and max_p > 0 and per_node > 0 and nodes_required > 0:
                 # Full RAPS formula
-                watts = value / (wall_time * nodes_required)
+                watts = value / nodes_required
                 util = (watts / idle - per_node) / (max_p / idle - 1.0)
                 return max(0.0, float(util))
             elif max_p > idle > 0:

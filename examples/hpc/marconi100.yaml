@@ -1,8 +1,8 @@
 # REDI RAPS Job Extraction — Marconi100 (CINECA, Italy)
 #
 # Data: SLURM job accounting with per-node power consumption (Parquet + CSV)
-# Source: /opt/data/marconi100/p_m_100.parquet (287 MB, primary)
-#         /opt/data/marconi100/output.csv (326 MB, CSV equivalent)
+# Source: /opt/data/hpc/marconi100/p_m_100.parquet (287 MB, primary)
+#         /opt/data/hpc/marconi100/output.csv (326 MB, CSV equivalent)
 # Records: ~231,238 jobs
 # Columns: 35 (SLURM fields + node/mem/cpu power consumption)
 #
@@ -13,7 +13,7 @@
 # (raps/config/marconi100.yaml) — no need to duplicate it here.
 
 domain: hpc
-input_path: /opt/data/marconi100/p_m_100.parquet
+input_path: /opt/data/hpc/marconi100/p_m_100.parquet
 output_dir: ./output/marconi100_raps
 
 raps_jobs:
