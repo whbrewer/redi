@@ -2371,6 +2371,9 @@ def run_parallel_pipeline(
     slurm_account: Optional[str] = None,
     slurm_partition: str = "batch",
     slurm_final_output: Optional[str] = None,
+    dragon_mode: str = "subprocess",
+    dragon_nodes: int = 1,
+    dragon_launcher: str = "local",
 ):
     """Run REDI pipeline in parallel mode."""
     from pathlib import Path
@@ -2400,6 +2403,10 @@ def run_parallel_pipeline(
             print_metric("Time Limit", slurm_time)
             if slurm_account:
                 print_metric("Account", slurm_account)
+        if backend == "dragon":
+            print_metric("Dragon Mode", dragon_mode)
+            print_metric("Dragon Nodes", str(dragon_nodes))
+            print_metric("Dragon Launcher", dragon_launcher)
     elif style == "simple":
         print(f"Parallel: {len(paths)} files, backend={backend}, workers={workers or 'auto'}")
 
@@ -2428,6 +2435,9 @@ def run_parallel_pipeline(
         slurm_account=slurm_account,
         slurm_partition=slurm_partition,
         slurm_final_output=slurm_final_output,
+        dragon_mode=dragon_mode,
+        dragon_nodes=dragon_nodes,
+        dragon_launcher=dragon_launcher,
     )
 
     # Update config distribution
@@ -2450,6 +2460,9 @@ def run_parallel_pipeline(
             if backend in ("gnu", "mpi"):
                 print()
                 print(f"    {Colors.CYAN}To submit:{Colors.END} cd {script_dir} && sbatch multinodejob.sh")
+            elif backend == "dragon":
+                print()
+                print(f"    {Colors.CYAN}To run:{Colors.END} cd {script_dir} && bash run_dragon.sh")
         elif style == "simple":
             print(f"Scripts generated in: {script_dir}")
             for name, path in scripts.items():
@@ -2668,9 +2681,11 @@ Download examples (climate domain)::
                                 help="Enable parallel execution across input files")
     parallel_group.add_argument("-w", "--workers", type=int, default=None,
                                 help="Number of parallel workers (default: auto-detect CPU count)")
-    parallel_group.add_argument("--backend", choices=["local", "gnu", "mpi"], default="local",
+    parallel_group.add_argument("--backend", choices=["local", "gnu", "mpi", "dragon"],
+                                default="local",
                                 help="Parallel backend: local (GNU parallel, no SLURM), "
-                                     "gnu (SLURM + GNU parallel), mpi (SLURM + mpi4py)")
+                                     "gnu (SLURM + GNU parallel), mpi (SLURM + mpi4py), "
+                                     "dragon (Dragon HPC distributed runtime)")
     parallel_group.add_argument("--batch-size", type=int, default=4,
                                 help="Files per worker batch (default: 4)")
     parallel_group.add_argument("--generate-only", action="store_true",
@@ -2679,8 +2694,20 @@ Download examples (climate domain)::
                                 default="round_robin",
                                 help="File distribution strategy (default: round_robin)")
 
+    # Dragon-specific options
+    dragon_group = run_parser.add_argument_group("Dragon options (for --backend dragon)")
+    dragon_group.add_argument("--dragon-mode", choices=["subprocess", "inprocess"],
+                              default="subprocess",
+                              help="subprocess: each worker calls 'redi run' as a subprocess; "
+                                   "inprocess: pipeline runs inside the Dragon worker (experimental)")
+    dragon_group.add_argument("--dragon-nodes", type=int, default=1,
+                              help="Number of nodes for multi-node Dragon launch (default: 1)")
+    dragon_group.add_argument("--dragon-launcher", choices=["local", "slurm"], default="local",
+                              help="local: call 'dragon' directly; "
+                                   "slurm: wrap in a SLURM batch script via --generate-only")
+
     # SLURM-specific options
-    slurm_group = run_parser.add_argument_group("SLURM options (for --backend gnu or mpi)")
+    slurm_group = run_parser.add_argument_group("SLURM options (for --backend gnu, mpi, or dragon)")
     slurm_group.add_argument("--slurm-nodes", type=int, default=4,
                              help="Number of compute nodes (default: 4)")
     slurm_group.add_argument("--slurm-cores", type=int, default=56,
@@ -2848,6 +2875,52 @@ Examples::
     plugins_parser.add_argument("--json", action="store_true",
                                 help="Output as JSON")
 
+    # =========================================================================
+    # redi demo
+    # =========================================================================
+    demo_parser = subparsers.add_parser(
+        'demo',
+        help='Download a sample dataset and run the pipeline end-to-end',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Downloads a small public dataset (or generates synthetic data) for the chosen
+domain, runs the full REDI pipeline, and prints the resulting Data Card.
+
+Available domains::
+
+  general    UCI Wine Quality (~84 KB CSV)              [default]
+  hpc        Synthetic HPC job log (5,000 jobs)
+  climate    NOAA GHCND Honolulu station (~400 KB CSV)
+  geospatial EPA Annual AQI by County 2023 (~250 KB CSV)
+  materials  Synthetic crystal structure dataset
+
+Examples::
+
+  redi demo                          # Run general demo (UCI Wine Quality)
+  redi demo --domain hpc             # Run HPC telemetry demo
+  redi demo --domain climate -o ./out
+        """
+    )
+    demo_parser.add_argument(
+        "-d", "--domain",
+        choices=["general", "hpc", "climate", "geospatial", "materials"],
+        default=None,
+        help="Domain to demo (default: general)",
+    )
+    demo_parser.add_argument(
+        "-o", "--output",
+        default=None,
+        help="Output directory (default: ./demo_output/<domain>)",
+    )
+    demo_parser.add_argument(
+        "--list", action="store_true",
+        help="List available demos and exit",
+    )
+    demo_parser.add_argument(
+        "--style", choices=["rich", "simple", "json"], default="rich",
+        help="Output style",
+    )
+
     return parser
 
 
@@ -2889,6 +2962,8 @@ def main():
         _handle_install_command(args)
     elif args.command == 'plugins':
         _handle_plugins_command(args)
+    elif args.command == 'demo':
+        _handle_demo_command(args)
     else:
         parser.print_help()
 
@@ -3363,6 +3438,9 @@ def _handle_run_command(args):
             slurm_account=getattr(args, 'slurm_account', None) or config.get('parallel', {}).get('slurm', {}).get('account'),
             slurm_partition=getattr(args, 'slurm_partition', None) or config.get('parallel', {}).get('slurm', {}).get('partition', 'batch'),
             slurm_final_output=getattr(args, 'slurm_output', None) or config.get('parallel', {}).get('slurm', {}).get('final_output'),
+            dragon_mode=getattr(args, 'dragon_mode', None) or config.get('parallel', {}).get('dragon', {}).get('mode', 'subprocess'),
+            dragon_nodes=getattr(args, 'dragon_nodes', None) or config.get('parallel', {}).get('dragon', {}).get('nodes', 1),
+            dragon_launcher=getattr(args, 'dragon_launcher', None) or config.get('parallel', {}).get('dragon', {}).get('launcher', 'local'),
         )
         return  # Exit after parallel execution
 
@@ -3916,6 +3994,62 @@ def _handle_plugins_command(args):
         if steps:
             print(f"    {Colors.DIM}{len(steps)} pipeline steps{Colors.END}")
         print()
+
+
+def _handle_demo_command(args):
+    """Handle the 'demo' subcommand."""
+    import tempfile
+    from .downloaders.demo import list_demos, download_demo, DEFAULT_DOMAIN
+
+    demos = list_demos()
+
+    if getattr(args, 'list', False):
+        print(f"\n{Colors.BOLD}Available redi demo datasets:{Colors.END}\n")
+        for key, meta in demos.items():
+            tag = f"{Colors.DIM}[{meta['source']}]{Colors.END}"
+            print(f"  {Colors.CYAN}{Colors.BOLD}{key:<12}{Colors.END}  {meta['name']}")
+            print(f"              {Colors.DIM}{meta['description']}{Colors.END}")
+            print(f"              {meta['size']}  {tag}")
+            print()
+        return
+
+    domain = args.domain or DEFAULT_DOMAIN
+    style = getattr(args, 'style', 'rich')
+    meta = demos[domain]
+
+    print_banner()
+    print(f"{Colors.BOLD}Demo:{Colors.END} {meta['name']}")
+    print(f"{Colors.DIM}{meta['description']}{Colors.END}")
+    print(f"{Colors.DIM}Source: {meta['source']}  |  Size: {meta['size']}{Colors.END}\n")
+
+    output_dir = args.output or f"./demo_output/{domain}"
+
+    # Download / generate into a temp dir, then run the pipeline
+    with tempfile.TemporaryDirectory(prefix="redi_demo_") as tmpdir:
+        if meta['source'] == 'generated':
+            print(f"  {Colors.YELLOW}⚙{Colors.END}  Generating synthetic {domain} dataset…")
+        else:
+            print(f"  {Colors.YELLOW}⬇{Colors.END}  Downloading {meta['name']} ({meta['size']})…")
+
+        try:
+            data_path, _ = download_demo(domain, Path(tmpdir))
+        except Exception as exc:
+            print(f"\n{Colors.RED}Error fetching demo data: {exc}{Colors.END}")
+            print(f"{Colors.DIM}Check your network connection and try again.{Colors.END}")
+            sys.exit(1)
+
+        size_kb = data_path.stat().st_size // 1024
+        print(f"  {Colors.GREEN}✓{Colors.END}  Ready — {size_kb} KB  →  {Colors.DIM}{data_path.name}{Colors.END}\n")
+
+        run_pipeline(
+            input_path=str(data_path),
+            output_dir=output_dir,
+            domain=meta['domain'],
+            style=style,
+        )
+
+    print(f"\n{Colors.BOLD}Output written to:{Colors.END} {Colors.CYAN}{output_dir}{Colors.END}")
+    print(f"{Colors.DIM}Run 'redi demo --list' to see all available demos.{Colors.END}\n")
 
 
 if __name__ == "__main__":

@@ -5,13 +5,15 @@ description: REDI (Readiness Engine for Data Integration) transforms raw scienti
 
 # REDI - Readiness Engine for Data Integration
 
-REDI transforms raw scientific data into AI-ready datasets. It operates in three modes:
+REDI transforms raw scientific data into AI-ready datasets. It operates in four modes:
 
+- **demo** - Download a sample dataset and run the pipeline end-to-end (good starting point)
 - **run** - Run the REDI pipeline (orchestrator mode) - transforms data through the full pipeline
 - **analyze** - Observe existing workflows (Snakemake, Nextflow, bash) and generate Data Cards
 - **discover** - Analyze unknown datasets and propose pipelines
 
 Use when the user wants to:
+- Try REDI without having data available
 - Transform data through the AI-readiness pipeline
 - Observe/document an existing workflow
 - Analyze an unknown dataset and get recommendations
@@ -25,6 +27,11 @@ Supports climate, materials science, life sciences, fusion, HPC, and geospatial 
 # Activate the environment
 source /opt/venvs/drai/bin/activate
 
+# Try redi with no data (downloads a sample dataset automatically)
+redi demo                              # UCI Wine Quality (general domain)
+redi demo --domain hpc                 # Synthetic HPC job telemetry
+redi demo --list                       # See all available demos
+
 # Run pipeline (default mode)
 redi run data.csv -o ./output
 redi data.csv -o ./output              # 'run' is the default
@@ -37,6 +44,29 @@ redi discover /path/to/data/
 ```
 
 ## Commands
+
+### redi demo
+
+Download a small public dataset (or generate synthetic data) and run the full pipeline.
+
+```bash
+redi demo                              # UCI Wine Quality — general domain (default)
+redi demo --domain hpc                 # Synthetic HPC job log (5,000 jobs)
+redi demo --domain climate             # NOAA GHCND Honolulu station data
+redi demo --domain geospatial          # EPA Annual AQI by County 2023
+redi demo --domain materials           # Synthetic crystal structure dataset
+redi demo --list                       # List all available demos
+redi demo --domain climate -o ./out    # Custom output directory
+```
+
+**Options:**
+```
+  -d, --domain DOMAIN     Domain to demo: general, hpc, climate, geospatial, materials
+  -o, --output DIR        Output directory (default: ./demo_output/<domain>)
+  --list                  List available demos and exit
+  --style STYLE           Output style: rich, simple, json
+```
+
 
 ### redi run
 

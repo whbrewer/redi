@@ -68,7 +68,7 @@ DEFAULTS: Dict[str, Any] = {
 
     'parallel': {
         'enabled': False,
-        'backend': 'local',  # local (GNU parallel, no SLURM), gnu (SLURM+GNU parallel), mpi (SLURM+mpi4py)
+        'backend': 'local',  # local, gnu (SLURM+GNU parallel), mpi (SLURM+mpi4py), dragon
         'workers': None,  # None = auto-detect CPU count
         'batch_size': 4,  # Files per worker batch
         'distribution': 'round_robin',  # round_robin or balanced
@@ -88,6 +88,11 @@ DEFAULTS: Dict[str, Any] = {
             'ntasks_per_node': 1,
             'merge': True,           # Gather results and write unified DataCard on rank 0
             'merge_format': 'npz',   # Output format for merged file: npz, hdf5, zarr
+        },
+        'dragon': {
+            'mode': 'subprocess',    # subprocess or inprocess (experimental)
+            'nodes': 1,              # number of nodes for multi-node Dragon launch
+            'launcher': 'local',     # local (call dragon directly) or slurm
         },
     },
 }
@@ -233,7 +238,7 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     parallel = config.get('parallel', {})
     if parallel.get('enabled'):
         # Validate backend
-        valid_backends = ['local', 'gnu', 'mpi']
+        valid_backends = ['local', 'gnu', 'mpi', 'dragon']
         if parallel.get('backend') not in valid_backends:
             issues.append(
                 f"Unknown parallel backend: {parallel.get('backend')}. "
@@ -269,6 +274,24 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
                 issues.append(f"Invalid slurm.nodes: {slurm['nodes']}. Must be positive integer.")
             if slurm.get('cores_per_node') and (not isinstance(slurm['cores_per_node'], int) or slurm['cores_per_node'] < 1):
                 issues.append(f"Invalid slurm.cores_per_node: {slurm['cores_per_node']}. Must be positive integer.")
+
+        # Validate Dragon config
+        if parallel.get('backend') == 'dragon':
+            dragon = parallel.get('dragon', {})
+            valid_modes = ['subprocess', 'inprocess']
+            if dragon.get('mode') and dragon['mode'] not in valid_modes:
+                issues.append(
+                    f"Invalid dragon.mode: {dragon['mode']}. "
+                    f"Valid options: {valid_modes}"
+                )
+            valid_launchers = ['local', 'slurm']
+            if dragon.get('launcher') and dragon['launcher'] not in valid_launchers:
+                issues.append(
+                    f"Invalid dragon.launcher: {dragon['launcher']}. "
+                    f"Valid options: {valid_launchers}"
+                )
+            if dragon.get('nodes') and (not isinstance(dragon['nodes'], int) or dragon['nodes'] < 1):
+                issues.append(f"Invalid dragon.nodes: {dragon['nodes']}. Must be a positive integer.")
 
     return issues
 

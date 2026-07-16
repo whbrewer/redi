@@ -17,7 +17,7 @@ from redi.parallel import (
     ChunkStrategy,
     ChunkSpec,
 )
-from redi.parallel.backends import get_backend, LocalBackend, GnuBackend, MpiBackend
+from redi.parallel.backends import get_backend, LocalBackend, GnuBackend, MpiBackend, DragonBackend
 from redi.parallel.chunking import TimeChunkStrategy, RowChunkStrategy, get_chunk_strategy
 
 
@@ -375,6 +375,308 @@ class TestMpiBackend:
             assert len(lines) == 100
 
 
+class TestDragonWorkerFunctions:
+    """Unit tests for Dragon's module-level worker functions (no Dragon runtime needed)."""
+
+    @patch("redi.parallel.backends.dragon.subprocess.run")
+    def test_subprocess_worker_success(self, mock_run):
+        """_subprocess_worker returns success dict on zero exit code."""
+        from redi.parallel.backends.dragon import _subprocess_worker
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _subprocess_worker(("/data/file.nc", tmpdir, [], "simple"))
+
+        assert result["success"] is True
+        assert result["file"] == "/data/file.nc"
+        assert "output" in result
+
+    @patch("redi.parallel.backends.dragon.subprocess.run")
+    def test_subprocess_worker_failure(self, mock_run):
+        """_subprocess_worker captures stderr on non-zero exit."""
+        from redi.parallel.backends.dragon import _subprocess_worker
+
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="pipeline failed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _subprocess_worker(("/data/missing.nc", tmpdir, [], "simple"))
+
+        assert result["success"] is False
+        assert "pipeline failed" in result["error"]
+
+    @patch("redi.parallel.backends.dragon.subprocess.run")
+    def test_subprocess_worker_extra_args(self, mock_run):
+        """_subprocess_worker passes extra redi args through to subprocess."""
+        from redi.parallel.backends.dragon import _subprocess_worker
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _subprocess_worker(("/data/f.nc", tmpdir, ["-d", "climate"], "simple"))
+
+        cmd = mock_run.call_args[0][0]
+        assert "-d" in cmd
+        assert "climate" in cmd
+
+    @patch("redi.parallel.backends.dragon.subprocess.run")
+    def test_subprocess_worker_timeout(self, mock_run):
+        """_subprocess_worker returns failure dict on TimeoutExpired."""
+        import subprocess as sp
+        from redi.parallel.backends.dragon import _subprocess_worker
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd="redi", timeout=3600)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _subprocess_worker(("/data/slow.nc", tmpdir, [], "simple"))
+
+        assert result["success"] is False
+        assert "timeout" in result["error"]
+
+    @patch("redi.cli.run_pipeline")
+    def test_inprocess_worker_success(self, mock_run_pipeline):
+        """_inprocess_worker calls run_pipeline and returns success."""
+        from redi.parallel.backends.dragon import _inprocess_worker
+
+        mock_run_pipeline.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _inprocess_worker(("/data/file.nc", tmpdir, "climate", "", "npz"))
+
+        assert result["success"] is True
+        mock_run_pipeline.assert_called_once()
+        call_kwargs = mock_run_pipeline.call_args[1]
+        assert call_kwargs["input_path"] == "/data/file.nc"
+        assert call_kwargs["domain"] == "climate"
+
+    @patch("redi.cli.run_pipeline")
+    def test_inprocess_worker_failure(self, mock_run_pipeline):
+        """_inprocess_worker captures exceptions from run_pipeline."""
+        from redi.parallel.backends.dragon import _inprocess_worker
+
+        mock_run_pipeline.side_effect = RuntimeError("domain detection failed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _inprocess_worker(("/data/bad.nc", tmpdir, "auto", "", "npz"))
+
+        assert result["success"] is False
+        assert "domain detection failed" in result["error"]
+
+    @patch("redi.cli.run_pipeline")
+    def test_inprocess_worker_stages(self, mock_run_pipeline):
+        """_inprocess_worker passes stages as a list when comma-separated string given."""
+        from redi.parallel.backends.dragon import _inprocess_worker
+
+        mock_run_pipeline.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _inprocess_worker(("/data/f.nc", tmpdir, "hpc", "ingest,preprocess", "npz"))
+
+        call_kwargs = mock_run_pipeline.call_args[1]
+        assert call_kwargs["stages"] == ["ingest", "preprocess"]
+
+    @patch("redi.cli.run_pipeline")
+    def test_inprocess_worker_no_stages(self, mock_run_pipeline):
+        """_inprocess_worker passes stages=None when empty string given."""
+        from redi.parallel.backends.dragon import _inprocess_worker
+
+        mock_run_pipeline.return_value = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _inprocess_worker(("/data/f.nc", tmpdir, "auto", "", "npz"))
+
+        call_kwargs = mock_run_pipeline.call_args[1]
+        assert call_kwargs["stages"] is None
+
+
+class TestDragonBackend:
+    """Tests for DragonBackend."""
+
+    def test_name(self):
+        assert DragonBackend(ParallelConfig(backend="dragon")).name == "dragon"
+
+    def test_check_available_false_without_dragon(self):
+        """check_available returns False when dragonhpc is not installed."""
+        import importlib
+        backend = DragonBackend(ParallelConfig(backend="dragon"))
+        # On this machine dragon is not installed — should return False.
+        # If someone later installs it, the test adapts gracefully.
+        result = backend.check_available()
+        assert result == (importlib.util.find_spec("dragon") is not None)
+
+    def test_generate_scripts_local(self):
+        """generate_scripts produces dragon_runner.py, run_dragon.sh, input_files.txt."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(backend="dragon", workers=8, output_dir=tmpdir)
+            backend = DragonBackend(config)
+            files = [Path(f"/data/file{i}.nc") for i in range(4)]
+            scripts = backend.generate_scripts(files, Path(tmpdir) / "scripts", config)
+
+            assert "dragon_runner.py" in scripts
+            assert "run_dragon.sh" in scripts
+            assert "input_files.txt" in scripts
+
+    def test_generate_scripts_runner_is_executable(self):
+        """dragon_runner.py is chmod +x."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(backend="dragon", workers=4, output_dir=tmpdir)
+            backend = DragonBackend(config)
+            scripts = backend.generate_scripts(
+                [Path("/data/a.nc")], Path(tmpdir) / "s", config
+            )
+            runner = scripts["dragon_runner.py"]
+            assert os.access(runner, os.X_OK)
+
+    def test_generate_scripts_file_list_content(self):
+        """input_files.txt contains one path per line."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(backend="dragon", workers=4, output_dir=tmpdir)
+            backend = DragonBackend(config)
+            files = [Path(f"/data/file{i}.nc") for i in range(3)]
+            scripts = backend.generate_scripts(files, Path(tmpdir) / "s", config)
+            lines = scripts["input_files.txt"].read_text().strip().splitlines()
+            assert lines == ["/data/file0.nc", "/data/file1.nc", "/data/file2.nc"]
+
+    def test_generate_scripts_runner_imports_dragon(self):
+        """dragon_runner.py imports dragon and dragon.multiprocessing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(backend="dragon", workers=4, output_dir=tmpdir)
+            backend = DragonBackend(config)
+            scripts = backend.generate_scripts(
+                [Path("/d/f.nc")], Path(tmpdir) / "s", config
+            )
+            content = scripts["dragon_runner.py"].read_text()
+            assert "import dragon" in content
+            assert "dragon.multiprocessing" in content
+
+    def test_generate_scripts_slurm_launcher(self):
+        """SLURM launcher mode produces a run_dragon.sh with #SBATCH directives."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(
+                backend="dragon",
+                workers=16,
+                output_dir=tmpdir,
+                dragon_nodes=4,
+                dragon_launcher="slurm",
+                slurm_account="myacct",
+                slurm_time="2:00:00",
+            )
+            backend = DragonBackend(config)
+            scripts = backend.generate_scripts(
+                [Path("/d/f.nc")], Path(tmpdir) / "s", config
+            )
+            sh = scripts["run_dragon.sh"].read_text()
+            assert "#SBATCH" in sh
+            assert "--account=myacct" in sh
+            assert "#SBATCH --nodes=4" in sh
+            assert "dragon --nodes 4" in sh
+
+    def test_generate_scripts_local_launcher(self):
+        """Local launcher produces a run_dragon.sh without #SBATCH."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(
+                backend="dragon", workers=8, output_dir=tmpdir, dragon_launcher="local"
+            )
+            backend = DragonBackend(config)
+            scripts = backend.generate_scripts(
+                [Path("/d/f.nc")], Path(tmpdir) / "s", config
+            )
+            sh = scripts["run_dragon.sh"].read_text()
+            assert "#SBATCH" not in sh
+            assert "dragon" in sh
+
+    def test_execute_empty_files(self):
+        """execute() with no files returns success immediately."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(backend="dragon", workers=2, output_dir=tmpdir)
+            backend = DragonBackend(config)
+            result = backend.execute([], config)
+            assert result.success is True
+            assert result.total_files == 0
+            assert result.completed == 0
+            assert result.failed == 0
+
+    @patch("redi.parallel.backends.dragon.DragonBackend._pool")
+    def test_execute_subprocess_mode(self, mock_pool_factory):
+        """execute() uses _subprocess_worker and aggregates results correctly."""
+        mock_pool = MagicMock()
+        mock_pool.__enter__ = MagicMock(return_value=mock_pool)
+        mock_pool.__exit__ = MagicMock(return_value=False)
+        mock_pool.map.return_value = [
+            {"success": True,  "file": "/d/a.nc", "output": "/out/a"},
+            {"success": True,  "file": "/d/b.nc", "output": "/out/b"},
+            {"success": False, "file": "/d/c.nc", "error": "bad format"},
+        ]
+        mock_pool_factory.return_value = mock_pool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(
+                backend="dragon", workers=2, output_dir=tmpdir, dragon_mode="subprocess"
+            )
+            backend = DragonBackend(config)
+            files = [Path("/d/a.nc"), Path("/d/b.nc"), Path("/d/c.nc")]
+            result = backend.execute([[f] for f in files], config)
+
+        assert result.total_files == 3
+        assert result.completed == 2
+        assert result.failed == 1
+        assert result.success is False
+        assert any("bad format" in e for e in result.errors)
+
+    @patch("redi.parallel.backends.dragon.DragonBackend._pool")
+    def test_execute_inprocess_mode(self, mock_pool_factory):
+        """execute() routes to _inprocess_worker when dragon_mode=inprocess."""
+        from redi.parallel.backends.dragon import _inprocess_worker
+
+        mock_pool = MagicMock()
+        mock_pool.__enter__ = MagicMock(return_value=mock_pool)
+        mock_pool.__exit__ = MagicMock(return_value=False)
+        mock_pool.map.return_value = [
+            {"success": True, "file": "/d/a.nc", "output": "/out/a"},
+        ]
+        mock_pool_factory.return_value = mock_pool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(
+                backend="dragon", workers=2, output_dir=tmpdir,
+                dragon_mode="inprocess", dragon_domain="climate",
+                dragon_stages="ingest,preprocess", dragon_output_format="npz",
+            )
+            backend = DragonBackend(config)
+            backend.execute([[Path("/d/a.nc")]], config)
+
+        # Confirm inprocess worker was passed (args tuple has domain/stages/fmt)
+        call_args = mock_pool.map.call_args[0]
+        worker_fn, work_args = call_args[0], call_args[1]
+        assert worker_fn is _inprocess_worker
+        assert work_args[0][2] == "climate"   # domain
+        assert work_args[0][3] == "ingest,preprocess"  # stages
+
+    @patch("redi.parallel.backends.dragon.DragonBackend._pool")
+    def test_execute_all_success(self, mock_pool_factory):
+        """execute() returns success=True when all files succeed."""
+        mock_pool = MagicMock()
+        mock_pool.__enter__ = MagicMock(return_value=mock_pool)
+        mock_pool.__exit__ = MagicMock(return_value=False)
+        mock_pool.map.return_value = [
+            {"success": True, "file": "/d/a.nc", "output": "/out/a"},
+            {"success": True, "file": "/d/b.nc", "output": "/out/b"},
+        ]
+        mock_pool_factory.return_value = mock_pool
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = ParallelConfig(backend="dragon", workers=2, output_dir=tmpdir)
+            backend = DragonBackend(config)
+            result = backend.execute(
+                [[Path("/d/a.nc")], [Path("/d/b.nc")]], config
+            )
+
+        assert result.success is True
+        assert result.completed == 2
+        assert result.failed == 0
+        assert result.errors == []
+
+
 class TestBackendRegistry:
     """Tests for backend registry."""
 
@@ -395,6 +697,12 @@ class TestBackendRegistry:
         config = ParallelConfig(backend="mpi")
         backend = get_backend("mpi", config)
         assert isinstance(backend, MpiBackend)
+
+    def test_get_dragon_backend(self):
+        """Test getting Dragon backend."""
+        config = ParallelConfig(backend="dragon")
+        backend = get_backend("dragon", config)
+        assert isinstance(backend, DragonBackend)
 
     def test_slurm_deprecated_alias(self):
         """Test that 'slurm' still works as a deprecated alias for 'gnu'."""
@@ -512,6 +820,16 @@ class TestParallelConfigAutoWorkers:
         """GNU backend derives workers from slurm_nodes."""
         config = ParallelConfig(backend="gnu", slurm_nodes=6)
         assert config.workers == 6
+
+    def test_dragon_auto_workers_single_node(self):
+        """Dragon backend derives workers from cpu_count × 1 node."""
+        config = ParallelConfig(backend="dragon")
+        assert config.workers == (os.cpu_count() or 4)
+
+    def test_dragon_auto_workers_multi_node(self):
+        """Dragon backend derives workers from cpu_count × dragon_nodes."""
+        config = ParallelConfig(backend="dragon", dragon_nodes=4)
+        assert config.workers == (os.cpu_count() or 4) * 4
 
     def test_explicit_workers_not_overridden(self):
         """Explicit workers value is never overridden."""
@@ -829,6 +1147,51 @@ class TestConfigIntegration:
         }
         issues = validate_config(config)
         assert len(issues) == 0
+
+        # Valid dragon backend
+        config = {
+            "parallel": {
+                "enabled": True,
+                "backend": "dragon",
+                "distribution": "round_robin",
+                "dragon": {"mode": "subprocess", "nodes": 4, "launcher": "local"},
+            }
+        }
+        issues = validate_config(config)
+        assert len(issues) == 0
+
+        # Invalid dragon mode
+        config = {
+            "parallel": {
+                "enabled": True,
+                "backend": "dragon",
+                "dragon": {"mode": "invalid_mode"},
+            }
+        }
+        issues = validate_config(config)
+        assert any("dragon.mode" in issue for issue in issues)
+
+        # Invalid dragon launcher
+        config = {
+            "parallel": {
+                "enabled": True,
+                "backend": "dragon",
+                "dragon": {"launcher": "kubernetes"},
+            }
+        }
+        issues = validate_config(config)
+        assert any("dragon.launcher" in issue for issue in issues)
+
+        # Invalid dragon nodes
+        config = {
+            "parallel": {
+                "enabled": True,
+                "backend": "dragon",
+                "dragon": {"nodes": -1},
+            }
+        }
+        issues = validate_config(config)
+        assert any("dragon.nodes" in issue for issue in issues)
 
         # Invalid backend
         config = {

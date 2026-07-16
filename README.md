@@ -1,8 +1,12 @@
 # REDI - Readiness Engine for Data Integration
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+
 A modular pipeline for transforming raw scientific data into AI-ready datasets.
 
-REDI operates in three modes:
+REDI operates in four modes:
+- **Demo** (`redi demo`) - Download a sample dataset and run the pipeline end-to-end (start here)
 - **Orchestrator** (`redi run`) - Run the full pipeline on your data
 - **Analyze** (`redi analyze`) - Observe existing workflows (Snakemake, Nextflow)
 - **Discovery** (`redi discover`) - Analyze unknown datasets and propose pipelines
@@ -134,6 +138,15 @@ description: REDI transforms raw scientific data into AI-ready datasets...
 In a Claude Code conversation, type `/redi` to activate the skill. Claude will then use the REDI CLI to process your datasets.
 
 ## Quick Start
+
+### Try it in 30 seconds (no data needed)
+
+```bash
+redi demo                          # Download UCI Wine Quality and run the pipeline
+redi demo --domain hpc             # Synthetic HPC job telemetry
+redi demo --domain climate         # NOAA daily weather station data
+redi demo --list                   # See all available demos
+```
 
 ### Orchestrator Mode (Run Pipeline)
 
@@ -331,11 +344,13 @@ See `examples/` for complete configuration examples.
 redi <command> [options]
 
 Commands:
+  demo       Download a sample dataset and run the pipeline end-to-end
   run        Run the REDI pipeline (orchestrator mode) - default
   analyze    Observe existing workflows (analyze mode)
   discover   Analyze unknown datasets and propose pipelines
 
 For command-specific help:
+  redi demo --help
   redi run --help
   redi analyze --help
   redi discover --help

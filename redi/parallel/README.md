@@ -11,13 +11,14 @@ REDI supports two types of parallelism:
 | **Type 1** | Multiple files distributed across workers/nodes | Implemented |
 | **Type 2** | Single large file chunked across workers | Future |
 
-Three backends are available:
+Four backends are available:
 
 | Backend | Description | Use Case |
 |---------|-------------|----------|
 | `local` | GNU parallel on a single machine | Workstation / login node |
 | `gnu` | SLURM + GNU parallel across nodes | HPC, no inter-rank communication needed |
 | `mpi` | SLURM + mpi4py across nodes | HPC, unified output with allreduce/gather |
+| `dragon` | Dragon HPC distributed runtime | HPC, Pythonic multi-node with no SLURM scripts |
 
 > **Note:** `--backend slurm` is a deprecated alias for `--backend gnu`.
 
@@ -37,6 +38,20 @@ brew install parallel
 # RHEL/CentOS
 sudo yum install parallel
 ```
+
+### Dragon Backend
+
+**Dragon** must be installed:
+
+```bash
+pip install dragonhpc          # CPU-only
+pip install dragonhpc[gpu]     # GPU-aware channels
+```
+
+Dragon replaces Python's `multiprocessing` with a scalable distributed runtime.
+It works on a single machine (no configuration needed) and scales to thousands
+of nodes over HPE Cray Slingshot, InfiniBand, or standard Ethernet without any
+SLURM job scripts — just allocate nodes and call `dragon`.
 
 ### GNU / MPI Backends (HPC)
 
@@ -58,6 +73,41 @@ redi run data/*.nc --parallel --workers 4
 
 # Use balanced distribution (by file size)
 redi run data/*.nc --parallel --distribution balanced
+```
+
+### Dragon Backend (Recommended for Modern HPC)
+
+Dragon provides a drop-in `multiprocessing.Pool` that scales across nodes.
+No SLURM scripts, no MPI rank bookkeeping — just a Python Pool.
+
+```bash
+# Single machine: process all NetCDF files via Dragon pool
+redi run data/*.nc --parallel --backend dragon
+
+# Explicit worker count
+redi run data/*.nc --parallel --backend dragon --workers 32
+
+# Multi-node: allocate nodes first, then launch
+salloc --nodes=4 --partition=batch --account=myacct bash
+redi run data/*.nc --parallel --backend dragon --dragon-nodes 4 --workers 224
+
+# In-process mode: pipeline runs inside Dragon workers (no subprocess overhead)
+redi run data/*.nc --parallel --backend dragon --dragon-mode inprocess
+
+# Generate launcher scripts only (for inspection or SLURM submission)
+redi run data/*.nc --parallel --backend dragon \
+    --slurm-account myacct --dragon-nodes 4 \
+    --generate-only
+```
+
+**Dragon Runner (direct launch):**
+
+```bash
+# Generate scripts, then launch manually
+dragon dragon_scripts/dragon_runner.py --workers 32 --output ./out
+
+# Multi-node via Dragon's own launcher
+dragon --nodes 4 dragon_scripts/dragon_runner.py --workers 224
 ```
 
 ### MPI Runner (Recommended for HPC)
@@ -123,7 +173,15 @@ redi run data/*.nc --parallel --backend gnu \
 | `--distribution` | round_robin | Distribution: `round_robin` or `balanced` |
 | `--generate-only` | - | Generate scripts without executing |
 
-### SLURM Options (gnu and mpi backends)
+### Dragon Options (dragon backend)
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--dragon-mode` | subprocess | `subprocess` or `inprocess` |
+| `--dragon-nodes` | 1 | Number of nodes for multi-node Dragon launch |
+| `--dragon-launcher` | local | `local` (call `dragon` directly) or `slurm` |
+
+### SLURM Options (gnu, mpi, and dragon backends)
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -256,11 +314,12 @@ redi/parallel/
 ├── mpi_runner.py         # MPI entry point (python -m redi.parallel.mpi_runner)
 ├── chunking.py           # Type 2 chunking interface (future)
 ├── backends/
-│   ├── __init__.py       # Backend registry (local, gnu, mpi)
+│   ├── __init__.py       # Backend registry (local, gnu, mpi, dragon)
 │   ├── base.py           # Abstract ParallelBackend
 │   ├── local.py          # LocalBackend (GNU parallel, single machine)
 │   ├── gnu.py            # GnuBackend (SLURM + GNU parallel across nodes)
-│   └── mpi.py            # MpiBackend (SLURM + mpi4py)
+│   ├── mpi.py            # MpiBackend (SLURM + mpi4py)
+│   └── dragon.py         # DragonBackend (Dragon HPC distributed runtime)
 └── README.md             # This file
 ```
 
@@ -297,6 +356,32 @@ print(f"Errors: {result.errors}")
 ```
 
 ## Execution Flow
+
+### Dragon Backend
+
+```
+dragon dragon_runner.py --workers N          # (or via SLURM batch script)
+    │
+    ▼
+dragon.multiprocessing.Pool(N workers)
+    │
+    ├── Worker 0: _subprocess_worker(file_0)  →  redi run file_0 -o out/file_0/
+    ├── Worker 1: _subprocess_worker(file_1)  →  redi run file_1 -o out/file_1/
+    ├── ...
+    └── Worker N-1: _subprocess_worker(file_M)  →  redi run file_M -o out/file_M/
+    │
+    ▼
+Pool.map() collects results back to coordinator
+    │
+    └── ParallelResult(completed, failed, output_dirs, errors)
+
+In-process mode (dragon_mode=inprocess):
+    Worker N calls redi.cli.run_pipeline() directly.
+    Large numpy arrays live in Dragon managed memory — no pipe serialisation.
+```
+
+Multi-node: Dragon transparently places workers on remote nodes.  No change to
+Python code required — just launch with ``dragon --nodes N``.
 
 ### MPI Backend
 
@@ -416,3 +501,4 @@ pytest tests/test_parallel.py -v
 | `backends/local.py` | `LocalBackend` (GNU parallel, single machine) |
 | `backends/gnu.py` | `GnuBackend` (SLURM + GNU parallel across nodes) |
 | `backends/mpi.py` | `MpiBackend` (SLURM + mpi4py) |
+| `backends/dragon.py` | `DragonBackend` (Dragon HPC distributed runtime) |
