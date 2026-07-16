@@ -3286,7 +3286,7 @@ def _handle_run_command(args):
     verbose = bool(args.verbose) or config.get('verbose', False)
     show_skipped = (args.verbose >= 2) or config.get('show_skipped', False)
     if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("redi").setLevel(logging.DEBUG)
 
     # Handle input from config if not provided on CLI
     if not input_paths:
@@ -3587,7 +3587,7 @@ def _handle_validate_command(args):
 
     verbose = args.verbose
     if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("redi").setLevel(logging.DEBUG)
 
     run_validate(
         input_dir=args.input,
