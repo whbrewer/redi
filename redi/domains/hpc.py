@@ -1080,12 +1080,18 @@ def _get_date_filter_step():
                 return ctx
 
             df = ctx.data
-            # Prefer canonical submit_time; fall back to start_time.
+            # Prefer canonical submit_time; fall back to start_time. A dataset can
+            # override which timestamp defines "day membership" via the
+            # date_filter_field config key (e.g. end_time, when the ground truth
+            # it's being compared against buckets jobs by completion day rather
+            # than submission day).
             # AutoMapColumns stores mapping in metadata but does NOT rename columns,
             # so we also check the mapping to find the original column name.
             col_mapping = ctx.metadata.get("raps_column_mapping", {})  # canonical → orig
+            candidates = [ctx.config["date_filter_field"]] if ctx.config.get("date_filter_field") else []
+            candidates += ["submit_time", "start_time"]
             col = None
-            for canonical in ("submit_time", "start_time"):
+            for canonical in candidates:
                 if canonical in df.columns:
                     col = canonical
                     break
