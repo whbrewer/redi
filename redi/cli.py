@@ -496,6 +496,7 @@ def run_pipeline(
             _priority_policy = _raps_cfg.get("priority_policy") if isinstance(_raps_cfg, dict) else None
             _id_strip_suffix = bool(_raps_cfg.get("id_strip_suffix")) if isinstance(_raps_cfg, dict) else False
             _col_scalars = _raps_cfg.get("column_scalars") if isinstance(_raps_cfg, dict) else None
+            _gpu_residual_cfg = _raps_cfg.get("gpu_power_residual") if isinstance(_raps_cfg, dict) else None
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
@@ -508,6 +509,7 @@ def run_pipeline(
                 priority_policy=_priority_policy,
                 id_strip_suffix=_id_strip_suffix,
                 column_scalars=_col_scalars,
+                gpu_residual_config=_gpu_residual_cfg,
             )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline

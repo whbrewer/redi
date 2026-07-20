@@ -38,3 +38,12 @@ raps_jobs:
     num_cores_alloc: cpu_cores_required
     num_gpus_alloc: gpu_units_required
     nodes: scheduled_nodes
+
+  # This source has no dedicated per-GPU power column (the auto-mapper's
+  # best fuzzy match, node_power_consumption, is node-total power, not GPU
+  # power). Derive gpu_trace as a residual instead, the same way RAPS's own
+  # marconi100 dataloader does: node - cpu - mem - nic_term - nvme_term.
+  gpu_power_residual:
+    node_power_col: node_power_consumption
+    cpu_power_col: cpu_power_consumption
+    mem_power_col: mem_power_consumption

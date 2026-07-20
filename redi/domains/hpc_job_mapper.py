@@ -676,6 +676,26 @@ def _parse_trace_string(s: str) -> Any:
     return 0
 
 
+def _as_float_array(value: Any) -> Optional[np.ndarray]:
+    """Coerce a raw cell value (scalar, string, list, or ndarray) to a float array.
+
+    Returns ``None`` when the value is missing/NaN or not trace-like, so
+    callers can skip a residual computation cleanly instead of propagating
+    garbage.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = _parse_trace_string(value)
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    if isinstance(value, (int, float)):
+        return np.array([float(value)])
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return np.asarray(value, dtype=float)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 5. JobDictBuilder
 # ---------------------------------------------------------------------------
@@ -726,7 +746,8 @@ class JobDictBuilder:
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
                  priority_policy: Optional[str] = None,
-                 id_strip_suffix: bool = False):
+                 id_strip_suffix: bool = False,
+                 gpu_residual_config: Optional[Dict[str, Any]] = None):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
@@ -736,6 +757,7 @@ class JobDictBuilder:
         self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
         self._priority_fn = _PRIORITY_POLICIES.get(priority_policy) if priority_policy else None
         self.id_strip_suffix = id_strip_suffix
+        self.gpu_residual_config = gpu_residual_config
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -975,6 +997,8 @@ class JobDictBuilder:
             for fs, raw, col_name in trace_fields:
                 job[fs.canonical_name] = self._convert_trace(
                     raw, fs, col_name, wall_time, nodes_req)
+            if self.gpu_residual_config:
+                self._apply_gpu_residual(job, row, nodes_req)
 
         # Convert scheduled_nodes with system-specific xname converter
         if self.topology and isinstance(job.get("scheduled_nodes"), list):
@@ -1133,6 +1157,51 @@ class JobDictBuilder:
             job["gpu_trace"] = 0
 
         return True
+
+    def _apply_gpu_residual(self, job: Dict[str, Any], row: pd.Series,
+                            nodes_required: int) -> None:
+        """Derive gpu_trace as a power residual for sources with no dedicated
+        per-GPU column, matching RAPS's own marconi100 dataloader::
+
+            gpu_power = node_power - cpu_power - mem_power
+                        - nodes_required * nics_per_node * power_nic
+                        - nodes_required * power_nvme
+
+        Overwrites whatever column AutoMapColumns fuzzy-matched to gpu_trace
+        (there is no real per-GPU signal to match against in these sources,
+        so that mapping is never correct). Only runs when ``gpu_residual_config``
+        names all three source columns explicitly — this is opt-in per system,
+        not inferred, since guessing which columns represent node/cpu/mem
+        power would be the same class of mistake this method exists to fix.
+        """
+        cfg = self.gpu_residual_config
+        node_col = cfg.get("node_power_col")
+        cpu_col = cfg.get("cpu_power_col")
+        mem_col = cfg.get("mem_power_col")
+        if not (node_col and cpu_col and mem_col):
+            return
+
+        node_arr = _as_float_array(row.get(node_col))
+        cpu_arr = _as_float_array(row.get(cpu_col))
+        mem_arr = _as_float_array(row.get(mem_col))
+        if node_arr is None or cpu_arr is None or mem_arr is None:
+            return
+
+        min_len = min(len(node_arr), len(cpu_arr), len(mem_arr))
+        if min_len == 0:
+            job["gpu_trace"] = []
+            return
+        node_arr, cpu_arr, mem_arr = node_arr[:min_len], cpu_arr[:min_len], mem_arr[:min_len]
+
+        nics_per_node = self.power_config.get("nics_per_node", 0) or 0
+        power_nic = self.power_config.get("power_nic", 0) or 0
+        power_nvme = self.power_config.get("power_nvme", 0) or 0
+        overhead = nodes_required * (nics_per_node * power_nic + power_nvme)
+
+        gpu_power = node_arr - cpu_arr - mem_arr - overhead
+        job["gpu_trace"] = self.trace_normalizer.normalize_trace(
+            gpu_power.tolist(), "gpu_trace", "gpu_power_residual",
+            wall_time=0, nodes_required=nodes_required)
 
     def _convert_value(self, raw: Any, fs: FieldSpec, col_name: str,
                        ref_time: float) -> Any:
@@ -1444,6 +1513,7 @@ def load_raps_system_params(system_name: str) -> Optional[Dict[str, Any]]:
             "nics_per_node": sys.nics_per_node,
             "power_nic": pwr.power_nic or 0,
             "power_mem": pwr.power_mem,
+            "power_nvme": pwr.power_nvme or 0,
         },
         "trace_quanta": cfg.scheduler.trace_quanta,
         "topology": {
@@ -1619,7 +1689,8 @@ class BuildJobDicts(PipelineStep):
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
                  priority_policy: Optional[str] = None,
-                 id_strip_suffix: bool = False):
+                 id_strip_suffix: bool = False,
+                 gpu_residual_config: Optional[Dict[str, Any]] = None):
         super().__init__()
         self.power_config = power_config
         self.trace_quanta = trace_quanta
@@ -1627,6 +1698,7 @@ class BuildJobDicts(PipelineStep):
         self.system_name = system_name
         self.priority_policy = priority_policy
         self.id_strip_suffix = id_strip_suffix
+        self.gpu_residual_config = gpu_residual_config
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1649,6 +1721,7 @@ class BuildJobDicts(PipelineStep):
             system_name=self.system_name,
             priority_policy=self.priority_policy,
             id_strip_suffix=self.id_strip_suffix,
+            gpu_residual_config=self.gpu_residual_config,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 

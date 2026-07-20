@@ -1206,6 +1206,10 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
             (e.g. "1242841.aurora" → "1242841") to match RAPS GT id format.
         column_scalars: Dict mapping original_column_name → float multiplier for
             unit conversions (e.g. {"timelimit": 60} for SLURM minutes → seconds).
+        gpu_residual_config: Dict with node_power_col/cpu_power_col/mem_power_col
+            naming source columns to derive gpu_trace as a power residual
+            (node - cpu - mem - nic - nvme), for sources with no dedicated
+            per-GPU column. Matches RAPS's own marconi100 dataloader.
     """
     from .hpc_job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
     from ..pipeline.output import WriteChecksums
@@ -1220,7 +1224,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
                       topology=topology, system_name=system_name,
-                      priority_policy=priority_policy, id_strip_suffix=id_strip_suffix),
+                      priority_policy=priority_policy, id_strip_suffix=id_strip_suffix,
+                      gpu_residual_config=gpu_residual_config),
         SaveJobDicts(output_format=output_format, system_name=system_name),
         WriteChecksums(),
     ]
