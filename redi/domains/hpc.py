@@ -1080,36 +1080,96 @@ def _get_date_filter_step():
                 return ctx
 
             df = ctx.data
-            # Prefer canonical submit_time; fall back to start_time. A dataset can
-            # override which timestamp defines "day membership" via the
-            # date_filter_field config key (e.g. end_time, when the ground truth
-            # it's being compared against buckets jobs by completion day rather
-            # than submission day).
             # AutoMapColumns stores mapping in metadata but does NOT rename columns,
             # so we also check the mapping to find the original column name.
             col_mapping = ctx.metadata.get("raps_column_mapping", {})  # canonical → orig
-            candidates = [ctx.config["date_filter_field"]] if ctx.config.get("date_filter_field") else []
-            candidates += ["submit_time", "start_time"]
-            col = None
-            for canonical in candidates:
-                if canonical in df.columns:
-                    col = canonical
-                    break
-                orig = col_mapping.get(canonical)
-                if orig and orig in df.columns:
-                    col = orig
-                    break
+
+            def _resolve(canonical_candidates):
+                for canonical in canonical_candidates:
+                    if canonical in df.columns:
+                        return canonical
+                    orig = col_mapping.get(canonical)
+                    if orig and orig in df.columns:
+                        return orig
+                return None
+
+            def _to_epoch_seconds(series):
+                epoch = pd.Timestamp("1970-01-01")
+                if pd.api.types.is_datetime64_any_dtype(series):
+                    # Unit-agnostic: pandas datetime64 resolution varies
+                    # (ns/us/s depending on pandas version and how the column
+                    # was parsed), so a fixed int64/1e9 divisor silently gives
+                    # wrong epoch seconds when the unit isn't ns (e.g.
+                    # datetime64[us]).
+                    return (series - epoch) / pd.Timedelta(seconds=1)
+                numeric = pd.to_numeric(series, errors="coerce")
+                if numeric.notna().sum() == 0:
+                    # Not numeric (epoch) -- try parsing as a datetime string
+                    # (e.g. Lassen's CSM CSV stores "2019-10-17 11:53:14"
+                    # directly; this pipeline runs before DeriveJobFields,
+                    # which is where such strings would normally get parsed).
+                    parsed = pd.to_datetime(series, errors="coerce")
+                    if parsed.notna().any():
+                        numeric = (parsed - epoch) / pd.Timedelta(seconds=1)
+                return numeric
+
+            mode = ctx.config.get("date_filter_mode", "point")
+            pre = len(df)
+
+            if mode == "overlap":
+                # Job overlaps the window if it hasn't ended before the
+                # window starts and was submitted before the window ends --
+                # mirrors ExaDigiT/RAPS's own replay-window semantics (see
+                # e.g. raps/dataloaders/lassen.py), which is a two-sided
+                # overlap filter rather than a single-field "submitted
+                # within [start,end)" bucketing. Needed whenever the ground
+                # truth being validated against was itself windowed this
+                # way, since jobs that started before the window but are
+                # still running into it would otherwise be dropped from
+                # REDI but kept in the ground truth.
+                end_col = _resolve(
+                    ([ctx.config["date_filter_end_field"]] if ctx.config.get("date_filter_end_field") else [])
+                    + ["end_time"]
+                )
+                submit_col = _resolve(
+                    ([ctx.config["date_filter_field"]] if ctx.config.get("date_filter_field") else [])
+                    + ["submit_time", "start_time"]
+                )
+                if end_col is None or submit_col is None:
+                    logger.warning("Date filter (overlap): missing submit_time/end_time column")
+                    return ctx
+
+                end_series = _to_epoch_seconds(df[end_col])
+                submit_series = _to_epoch_seconds(df[submit_col])
+
+                mask = pd.Series(True, index=df.index)
+                if ts0 is not None:
+                    mask &= end_series >= ts0
+                if ts1 is not None:
+                    mask &= submit_series < ts1
+
+                ctx.data = df[mask].reset_index(drop=True)
+                logger.info(
+                    f"Date filter (overlap) [{_ds} – {_de}] on {submit_col}/{end_col}: "
+                    f"{pre:,} → {len(ctx.data):,} jobs"
+                )
+                return ctx
+
+            # mode == "point" (default): single-field bucketing. A dataset
+            # can override which timestamp defines "day membership" via the
+            # date_filter_field config key (e.g. end_time, when the ground
+            # truth it's being compared against buckets jobs by completion
+            # day rather than submission day).
+            col = _resolve(
+                ([ctx.config["date_filter_field"]] if ctx.config.get("date_filter_field") else [])
+                + ["submit_time", "start_time"]
+            )
             if col is None:
                 logger.warning("Date filter: no submit_time/start_time column found")
                 return ctx
 
-            series = df[col]
-            if pd.api.types.is_datetime64_any_dtype(series):
-                series = series.astype("int64") / 1e9  # ns → s
-            else:
-                series = pd.to_numeric(series, errors="coerce")
+            series = _to_epoch_seconds(df[col])
 
-            pre = len(df)
             mask = pd.Series(True, index=df.index)
             if ts0 is not None:
                 mask &= series >= ts0
@@ -1128,7 +1188,8 @@ def _get_date_filter_step():
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
                       jobprofile_path=None, topology=None, priority_policy=None,
-                      id_strip_suffix=False, column_scalars=None):
+                      id_strip_suffix=False, column_scalars=None,
+                      gpu_residual_config=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
