@@ -13,6 +13,7 @@ transformations, and feature engineering required for its scientific domain.
 | `redi.domains.fusion` | [`fusion.py`](../../redi/domains/fusion.py) |
 | `redi.domains.hpc` | [`hpc/__init__.py`](../../redi/domains/hpc/__init__.py) |
 | `redi.domains.hpc.job_mapper` | [`hpc/job_mapper.py`](../../redi/domains/hpc/job_mapper.py) |
+| `redi.domains.hpc.cross_replay` | [`hpc/cross_replay.py`](../../redi/domains/hpc/cross_replay.py) |
 | `redi.domains.hpc.power_qc` | [`hpc/power_qc.py`](../../redi/domains/hpc/power_qc.py) |
 | `redi.domains.hpc.qc_validation` | [`hpc/qc_validation.py`](../../redi/domains/hpc/qc_validation.py) |
 | `redi.domains.hpc.sacct_loader` | [`hpc/sacct_loader.py`](../../redi/domains/hpc/sacct_loader.py) |
