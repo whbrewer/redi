@@ -474,7 +474,7 @@ def run_pipeline(
             from .domains.fusion import get_full_pipeline
         elif domain == "hpc":
             from .domains.hpc import get_full_pipeline as _get_hpc_pipeline
-            from .domains.hpc_job_mapper import load_raps_system_params
+            from .domains.hpc.job_mapper import load_raps_system_params
             _raps_cfg = config.get("raps_jobs", {}) if config else {}
             _col_overrides = _raps_cfg.get("column_overrides") if isinstance(_raps_cfg, dict) else None
             _out_fmt = config.get("output_format", "npz") if config else "npz"

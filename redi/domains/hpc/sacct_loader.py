@@ -390,7 +390,7 @@ def parse_sacct_dump(path: Union[str, Path]) -> pd.DataFrame:
 def _build_load_adastra_sacct_dump_step():
     """Build the LoadAdastraSacctDump PipelineStep class (lazy import of
     ..pipeline to match the pattern used elsewhere in this package)."""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadAdastraSacctDump(PipelineStep):
         """Load an Adastra Slurm `sacct` accounting dump (pipe-delimited).

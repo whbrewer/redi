@@ -10,7 +10,7 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from redi.domains.hpc_job_mapper import (
+from redi.domains.hpc.job_mapper import (
     FIELD_REGISTRY,
     ColumnMapper,
     ColumnMapping,

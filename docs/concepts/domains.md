@@ -38,7 +38,8 @@ Each domain has a dedicated processor module under `redi/domains/`:
 * [`redi.domains.geospatial`](../../redi/domains/geospatial.py)
 * [`redi.domains.sphenix`](../../redi/domains/sphenix.py) — sPHENIX TPC processor for `nuclear_physics`
 
-The HPC domain additionally includes [`redi.domains.hpc_job_mapper`](../../redi/domains/hpc_job_mapper.py) for
+The HPC domain lives in [`redi/domains/hpc/`](../../redi/domains/hpc/) rather than a single module,
+and additionally includes [`redi.domains.hpc.job_mapper`](../../redi/domains/hpc/job_mapper.py) for
 constructing structured job objects from raw telemetry (`--raps-jobs` flag).
 
 ## OpenFold (Life Sciences specialization)

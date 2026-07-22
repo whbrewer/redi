@@ -58,14 +58,14 @@ Entry points:
   - `run_vv_suite(substrate, envelopes, ...)` — full seeded protocol,
     returns nested per-mode/per-seed scores for ours + naive rule.
   - `qc1_detection_boundary(substrate, envelope, epsilon)` — limits math.
-  - `python -m redi.domains.hpc_qc_validation` — runs the whole suite
+  - `python -m redi.domains.hpc.qc_validation` — runs the whole suite
     against the real Adastra dump and prints a structured report; exits
     nonzero if any structural check fails.
 
 Input contract: the DataFrame produced by
-`redi.domains.hpc_sacct_loader.parse_sacct_dump` (columns: partition,
+`redi.domains.hpc.sacct_loader.parse_sacct_dump` (columns: partition,
 energy_joules [Float64], elapsed_seconds [Int64], nodes_required [Int64],
-...), as consumed by `redi.domains.hpc_power_qc.qc1_envelope_check`.
+...), as consumed by `redi.domains.hpc.power_qc.qc1_envelope_check`.
 """
 
 import logging
@@ -74,7 +74,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from .hpc_power_qc import (
+from .power_qc import (
     PROVISIONAL_ADASTRA_ENVELOPES,
     QC1_VERDICTS,
     PartitionEnvelope,
@@ -631,7 +631,7 @@ if __name__ == "__main__":
     print("  confirmed, D8 pending); recall/FP numbers are conditional on them.")
 
     # --- [0] Load real dump + build the clean substrate --------------------
-    from redi.domains.hpc_sacct_loader import parse_sacct_dump
+    from redi.domains.hpc.sacct_loader import parse_sacct_dump
 
     print(f"\n[0] Clean substrate from real dump: {DUMP_PATH}")
     t0 = time.time()

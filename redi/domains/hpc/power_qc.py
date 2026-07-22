@@ -40,13 +40,13 @@ Entry points:
     function returning a `Qc3StreamReport`.
   - `PowerEnvelopeQC` — a PREPROCESS-stage `PipelineStep` wrapping QC1.
     NOT registered in any get_*_steps() list — wiring is a separate change,
-    same policy as `LoadAdastraSacctDump` in hpc_sacct_loader.py.
-  - `python -m redi.domains.hpc_power_qc` — synthetic known-answer tests
+    same policy as `LoadAdastraSacctDump` in sacct_loader.py.
+  - `python -m redi.domains.hpc.power_qc` — synthetic known-answer tests
     (exit nonzero on any failure) followed by a QC1 verification report on
     the real Adastra sacct dump.
 
 Input contract: the DataFrame produced by
-`redi.domains.hpc_sacct_loader.parse_sacct_dump` (columns: partition,
+`redi.domains.hpc.sacct_loader.parse_sacct_dump` (columns: partition,
 energy_joules [Float64, may exceed 2^63 on u64 counter wraparound],
 elapsed_seconds [Int64], nodes_required [Int64], node_list [list of node-name
 strings], start_time / end_time [epoch seconds, Float64], ...).
@@ -431,7 +431,7 @@ def _parse_envelope_config(raw: Dict) -> Dict[str, PartitionEnvelope]:
 def _build_power_envelope_qc_step():
     """Build the PowerEnvelopeQC PipelineStep class (lazy import of
     ..pipeline to match the pattern used elsewhere in this package)."""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class PowerEnvelopeQC(PipelineStep):
         """QC1 dimensionless power-envelope check as a PREPROCESS step.
@@ -1148,7 +1148,7 @@ if __name__ == "__main__":
     print("    ! (D8 request). Do not quote these numbers without that caveat.")
     print("    " + "!" * 70)
 
-    from redi.domains.hpc_sacct_loader import parse_sacct_dump
+    from redi.domains.hpc.sacct_loader import parse_sacct_dump
 
     t0 = time.time()
     try:

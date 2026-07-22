@@ -58,8 +58,8 @@ def _parse_date_range(start_str, end_str):
 
 def get_ingest_steps():
     """Get HPC-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
-    from ..pipeline.ingest import DetectFormat
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline.ingest import DetectFormat
 
     class LoadHPCData(PipelineStep):
         """Load HPC job accounting data"""
@@ -564,8 +564,8 @@ def get_ingest_steps():
 
             return ctx
 
-    from .hpc_swf_loader import LoadSWFData
-    from .hpc_sacct_loader import LoadAdastraSacctDump
+    from .swf_loader import LoadSWFData
+    from .sacct_loader import LoadAdastraSacctDump
 
     return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(),
             LoadPhillyData(), LoadSWFData(), LoadAdastraSacctDump()]
@@ -573,7 +573,7 @@ def get_ingest_steps():
 
 def get_preprocess_steps():
     """Get HPC-specific preprocess steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CleanHPCData(PipelineStep):
         """Clean HPC job data"""
@@ -665,7 +665,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get HPC-specific transform steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class EngineerHPCFeatures(PipelineStep):
         """Engineer HPC-specific features"""
@@ -839,7 +839,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get HPC-specific structure steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class PrepareForML(PipelineStep):
         """Prepare data for ML model training"""
@@ -911,7 +911,7 @@ def get_structure_steps():
 
 def get_output_steps():
     """Get HPC-specific output steps"""
-    from ..pipeline.output import get_output_steps
+    from ...pipeline.output import get_output_steps
     return get_output_steps(output_format="npz")
 
 
@@ -926,7 +926,7 @@ def _get_raps_preprocess_steps():
     Heavier validation (start <= end, wall_time > 0, nodes > 0) is handled
     downstream by the JobDictBuilder which has access to the mapped fields.
     """
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CleanHPCForRAPS(PipelineStep):
         """Clean HPC data for RAPS job extraction."""
@@ -993,7 +993,7 @@ def _get_load_jobprofile_step(jobprofile_path=None):
     if not jobprofile_path:
         return []
 
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadJobProfile(PipelineStep):
         """Load jobprofile telemetry data for per-timestep trace arrays."""
@@ -1054,7 +1054,7 @@ def _get_date_filter_step():
     Runs after AutoMapColumns so column names are canonical (submit_time / start_time).
     Is a no-op when neither start nor end is set in the config.
     """
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class FilterByDateRange(PipelineStep):
         """Filter jobs to the configured date window."""
@@ -1211,8 +1211,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
             (node - cpu - mem - nic - nvme), for sources with no dedicated
             per-GPU column. Matches RAPS's own marconi100 dataloader.
     """
-    from .hpc_job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
-    from ..pipeline.output import WriteChecksums
+    from .job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
+    from ...pipeline.output import WriteChecksums
 
     ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
     jobprofile = _get_load_jobprofile_step(jobprofile_path)  # optional jobprofile load

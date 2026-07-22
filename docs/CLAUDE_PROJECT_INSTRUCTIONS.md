@@ -35,7 +35,7 @@ Each domain module (`redi/domains/<name>.py`) provides specialized step implemen
 - `inspect/` — Snapshot capture, quality checks (NaN/outlier/distribution shift), transformation parameter detection, data leakage detection, Snakemake/Nextflow log parsing.
 - `downloaders/` — ESGF (CMIP6) and CDS (ERA5) data acquisition with `BaseDownloader` ABC.
 - `dataloaders/` — GESTS, SST-Binary, and Zarr loaders with `BaseDataLoader` ABC.
-- `domains/hpc_job_mapper.py` — RAPS-compatible job extraction from HPC telemetry with 4-phase fuzzy column matching.
+- `domains/hpc/` — HPC domain package (`job_mapper.py`, `power_qc.py`, `qc_validation.py`, `sacct_loader.py`, `swf_loader.py`). `job_mapper.py` does RAPS-compatible job extraction from HPC telemetry with 4-phase fuzzy column matching.
 
 ## Key Terminology
 
@@ -45,7 +45,7 @@ Each domain module (`redi/domains/<name>.py`) provides specialized step implemen
 - **MaturityLevel**: 5-level readiness taxonomy: RAW (1), CLEANED (2), LABELED (3), FEATURE_ENGINEERED (4), FULLY_READY (5).
 - **Data Card**: Structured metadata document with 8 sections (overview, provenance, characteristics, sensitive attributes, transformations, annotations, limitations, readiness).
 - **Flowcept**: Optional provenance tracking. Steps are auto-instrumented via `PipelineStep.__init_subclass__`.
-- **RAPS Job**: Standardized HPC job representation used by ExaDigiT. The `hpc_job_mapper.py` auto-maps arbitrary HPC telemetry to this format.
+- **RAPS Job**: Standardized HPC job representation used by ExaDigiT. The `hpc/job_mapper.py` auto-maps arbitrary HPC telemetry to this format.
 - **Array mode** (`--array`): Skips DataFrame-centric steps for high-dimensional data; uses direct NumPy normalization.
 
 ## Coding Conventions
