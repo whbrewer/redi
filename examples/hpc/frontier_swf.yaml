@@ -1,0 +1,91 @@
+# REDI RAPS Job Extraction — Frontier public SWF workload trace (JSSPP 2026)
+#
+# Data: Standard Workload Format (SWF) scheduler trace, Parallel Workloads
+#       Archive-style, whitespace-delimited with a `;`-commented header.
+# Source: /opt/data/hpc/frontier/frontier-2024.swf, frontier-2025.swf
+# Records: ~1.22M jobs (2024) + ~0.98M jobs (2025)
+# Columns: 21 fields (job_id, timing, requested/used nodes, RAM, a GPU count,
+#          and a site-specific "frontier:excl:<N>x112" descriptor field)
+#
+# This is a DIFFERENT dataset from examples/hpc/frontier.yaml (the private
+# Frontier-24-01-18 SLURM joblive/jobprofile telemetry): the public SWF trace
+# has scheduler scalars only, no per-timestep power/CPU/GPU utilization
+# traces. It is useful for the universal-dataloader / schema-mapping
+# demonstration (Table I-style AI-readiness census), NOT for RAPS replay or
+# the replay-equivalence/envelope-check validation (Sec. IV-B / V-A), which
+# require power telemetry this dataset does not have.
+#
+# Node-count caveat (see redi/domains/hpc/swf_loader.py docstring, "D7"):
+# the raw numeric node/core field (SWF fields 4/7) is frequently unreliable
+# on this trace; the loader derives a corrected `nodes_required_canonical`
+# from the site-specific descriptor field instead. The column_overrides
+# below map to that corrected field, not the raw one.
+
+domain: hpc
+input_path: "/opt/data/hpc/frontier/*.swf"
+output_dir: ./output/frontier_swf_raps
+
+raps_jobs:
+  enabled: true
+  system_name: frontier
+  trace_quanta: 15
+
+  column_overrides:
+    # SWF canonical fields (redi/domains/hpc/swf_loader.py) → RAPS fields
+    job_id: id
+    submit_time: submit_time
+    start_time: start_time
+    end_time: end_time
+    walltime_limit: time_limit
+    runtime: expected_run_time
+    nodes_required_canonical: nodes_required   # D7-corrected node count, not nodes_numeric_raw
+    user_id: account
+    used_gpus: gpu_units_required
+
+    # The auto-mapper's token/fuzzy matching (redi/domains/hpc/job_mapper.py
+    # ColumnMapper) otherwise pulls these into the WRONG canonical fields,
+    # since SWF genuinely has no analogue for cpu_trace/gpu_trace/name/
+    # partition/end_state/scheduled_nodes/cpu_cores_required and the token
+    # overlap on abbreviated SWF names is coincidental, not semantic:
+    #   nodes_numeric_raw          -> would fuzzy-match "scheduled_nodes"
+    #                                 (it's the D7-unreliable raw node/core
+    #                                 count, not a node-name list)
+    #   required_nodes_numeric_raw -> would fuzzy-match "cpu_cores_required"
+    #                                 (same D7-unreliable field, not cores)
+    #   cpu_time_used              -> would fuzzy-match "cpu_trace" (it's a
+    #                                 scalar the header claims equals
+    #                                 runtime but doesn't; NOT a utilization
+    #                                 time series)
+    #   job_status                 -> would fuzzy-match "name" (numeric,
+    #                                 undocumented semantics; not a string)
+    #   queue_id                   -> would fuzzy-match "partition" (this
+    #                                 field is a constant -1 sentinel in
+    #                                 both files, i.e. "not used")
+    #   preceding_job              -> would fuzzy-match "end_state" (it's a
+    #                                 job-dependency ID, not a completion
+    #                                 state)
+    # Routing them here to an unused pseudo-field consumes the source
+    # column so later matching phases skip it, leaving the true canonical
+    # fields at their honest defaults (empty/zero) instead of silently
+    # populated with unrelated data.
+    nodes_numeric_raw: _unused_raw_nodes
+    required_nodes_numeric_raw: _unused_raw_required_nodes
+    cpu_time_used: _unused_cpu_time_used
+    job_status: _unused_job_status
+    queue_id: _unused_queue_id
+    preceding_job: _unused_preceding_job
+    # Second-order fuzzy matches that only surface once the columns above
+    # are suppressed (each re-run of `redi run` re-exposes the next-best
+    # fuzzy guess -- verified by inspecting raps_mapping_metadata.json):
+    #   partition_id               -> would fuzzy-match "partition" (also a
+    #                                 constant -1 sentinel, "not used")
+    #   cores_per_node_descriptor  -> would fuzzy-match "cpu_cores_required"
+    #                                 (it's the "112" in "frontier:excl:Nx112",
+    #                                 a per-FILE constant from the trace
+    #                                 generator, not a per-job core count)
+    #   nodes_mismatch             -> would fuzzy-match "scheduled_nodes"
+    #                                 (it's a boolean D7 QC flag, not a node
+    #                                 list)
+    partition_id: _unused_partition_id
+    cores_per_node_descriptor: _unused_cores_per_node_descriptor
+    nodes_mismatch: _unused_nodes_mismatch
