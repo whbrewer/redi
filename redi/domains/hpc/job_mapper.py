@@ -75,7 +75,7 @@ class FieldSpec:
     """Specification for a single RAPS Job field."""
     canonical_name: str
     aliases: List[str]
-    field_type: str  # "int", "str", "timestamp", "trace", "state", "list", "float"
+    field_type: str  # "int", "str", "timestamp", "trace", "state", "list", "float", "array"
     required: bool = False
     default: Any = None
 
@@ -197,6 +197,20 @@ FIELD_REGISTRY: List[FieldSpec] = [
         field_type="str",
         required=False,
         default="",
+    ),
+    FieldSpec(
+        canonical_name="perf_class",
+        aliases=["perf_class", "pclass", "performance_class"],
+        field_type="str",
+        required=False,
+        default="",
+    ),
+    FieldSpec(
+        canonical_name="job_embedding",
+        aliases=["job_embedding", "embedding"],
+        field_type="array",
+        required=False,
+        default=None,
     ),
     FieldSpec(
         canonical_name="scheduled_nodes",
@@ -1236,6 +1250,13 @@ class JobDictBuilder:
 
         if fs.field_type == "list":
             return _parse_node_list(raw)
+
+        if fs.field_type == "array":
+            if isinstance(raw, np.ndarray):
+                return raw.tolist()
+            if isinstance(raw, (list, tuple)):
+                return list(raw)
+            return raw
 
         return raw
 
