@@ -199,15 +199,25 @@ FIELD_REGISTRY: List[FieldSpec] = [
         default="",
     ),
     FieldSpec(
+        # NOTE: deliberately excludes "perf_class" itself and any alias
+        # sharing tokens/character-runs with common scheduler fields —
+        # "perf_class" fuzzy-matched Lassen's unrelated "user_flags" column
+        # at a 0.600 SequenceMatcher ratio (just over the 0.6 auto-match
+        # threshold) during verification. Narrower aliases avoid it while
+        # still catching Fugaku's real "pclass" column via manual override.
         canonical_name="perf_class",
-        aliases=["perf_class", "pclass", "performance_class"],
+        aliases=["pclass", "performance_class"],
         field_type="str",
         required=False,
         default="",
     ),
     FieldSpec(
+        # NOTE: deliberately excludes "job_embedding" itself — its "job"
+        # token collided with the ubiquitous job_id/job_type/job_name-style
+        # columns present on nearly every other dataset (confirmed on
+        # Lassen and MIT Supercloud during verification, both via "job_type").
         canonical_name="job_embedding",
-        aliases=["job_embedding", "embedding"],
+        aliases=["embedding"],
         field_type="array",
         required=False,
         default=None,
