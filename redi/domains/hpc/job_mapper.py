@@ -223,6 +223,28 @@ FIELD_REGISTRY: List[FieldSpec] = [
         default=None,
     ),
     FieldSpec(
+        # Raw (un-normalized) per-job min/max power, Watts -- distinct from
+        # cpu_trace (avgpcon run through TraceNormalizer's power->utilization
+        # formula, used as the model's cpu_util input channel). field_type
+        # "float" deliberately, not "trace": TraceNormalizer derives its
+        # power_config lookup key by stripping a literal "_trace" suffix off
+        # canonical_name, which only works for exactly "cpu_trace"/"gpu_trace"
+        # -- routing these through "trace" would silently zero them out the
+        # same way the dangling raps install zeroed cpu_trace itself.
+        canonical_name="cpu_power_min",
+        aliases=["minpcon"],
+        field_type="float",
+        required=False,
+        default=0.0,
+    ),
+    FieldSpec(
+        canonical_name="cpu_power_max",
+        aliases=["maxpcon"],
+        field_type="float",
+        required=False,
+        default=0.0,
+    ),
+    FieldSpec(
         canonical_name="scheduled_nodes",
         aliases=["scheduled_nodes", "nodes", "xnames", "exec_host",
                  "nodelist", "machineId"],

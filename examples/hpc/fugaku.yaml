@@ -44,3 +44,7 @@ raps_jobs:
                                    # embedding (usr+jnam+jobenv_req), shipped by
                                    # F-Data itself; usable as a static per-job
                                    # fingerprint feature for historical jobs
+    minpcon: cpu_power_min         # Raw per-job min power (Watts), NOT run
+    maxpcon: cpu_power_max         # through TraceNormalizer -- distinct from
+                                   # avgpcon's cpu_trace (already-normalized
+                                   # utilization channel used as model input)
