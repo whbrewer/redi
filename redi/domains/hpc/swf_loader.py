@@ -350,6 +350,26 @@ class LoadSWFData(PipelineStep):
                 return ctx
 
             df = pd.concat(dfs, axis=0, ignore_index=True) if len(dfs) > 1 else dfs[0]
+
+            if len(dfs) > 1:
+                # job_id is only unique WITHIN a single SWF file -- each file's
+                # IDs are independently sequential starting from 1 (verified:
+                # frontier-2024.swf is 1..1,217,397, frontier-2025.swf is
+                # 1..977,884, a full 977,884-row overlap). Left alone, the
+                # generic RAPS-oriented CleanHPCForRAPS step downstream (which
+                # dedups by job_id, keep="last") would silently splice
+                # unrelated 2024/2025 jobs together under reused IDs rather
+                # than just dropping rows -- a correctness bug, not merely an
+                # undercount. Namespace job_id by source file so it's globally
+                # unique before that step runs; the original per-file ID is
+                # preserved in job_id_in_file.
+                df["job_id_in_file"] = df["job_id"]
+                df["job_id"] = df["source_file"].astype(str) + ":" + df["job_id"].astype(str)
+                logger.info(
+                    f"     {len(dfs)} SWF files loaded together; job_id "
+                    f"namespaced by source file to avoid cross-file ID collisions"
+                )
+
             ctx.data = df
 
             ctx.metadata["num_rows"] = len(df)

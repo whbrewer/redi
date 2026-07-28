@@ -7,13 +7,13 @@
 # Columns: 21 fields (job_id, timing, requested/used nodes, RAM, a GPU count,
 #          and a site-specific "frontier:excl:<N>x112" descriptor field)
 #
-# This is a DIFFERENT dataset from examples/hpc/frontier.yaml (the private
-# Frontier-24-01-18 SLURM joblive/jobprofile telemetry): the public SWF trace
-# has scheduler scalars only, no per-timestep power/CPU/GPU utilization
-# traces. It is useful for the universal-dataloader / schema-mapping
-# demonstration (Table I-style AI-readiness census), NOT for RAPS replay or
-# the replay-equivalence/envelope-check validation (Sec. IV-B / V-A), which
-# require power telemetry this dataset does not have.
+# This is the source of Table III's "Frontier-SWF" row (2,195,281 jobs,
+# 729 d, Corr/MAE/F1 all "--" since no RAPS ground-truth loader exists for
+# SWF): scheduler scalars only, no per-timestep power/CPU/GPU utilization
+# traces, so it cannot feed RAPS replay or the replay-equivalence/
+# envelope-check validation (those need power telemetry this dataset lacks).
+# Distinct from examples/hpc/frontier.yaml (private SLURM joblive/jobprofile
+# telemetry, a different Frontier dataset).
 #
 # Node-count caveat (see redi/domains/hpc/swf_loader.py docstring, "D7"):
 # the raw numeric node/core field (SWF fields 4/7) is frequently unreliable
@@ -89,3 +89,9 @@ raps_jobs:
     partition_id: _unused_partition_id
     cores_per_node_descriptor: _unused_cores_per_node_descriptor
     nodes_mismatch: _unused_nodes_mismatch
+    # job_id_in_file (added when loading both 2024+2025 files together, see
+    # swf_loader.py's cross-file job_id-collision fix) would otherwise
+    # fuzzy-match "name" -- it's the original per-file numeric job_id, not a
+    # job name. Suppressing it lets `name` fall back to its normal
+    # random-hex derivation (same as every other system lacking a name field).
+    job_id_in_file: _unused_job_id_in_file
