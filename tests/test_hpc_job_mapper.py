@@ -570,8 +570,9 @@ class TestJobDictBuilder:
         )
         jobs, _ = builder.build_jobs(df, mapping)
         assert jobs[0]["trace_time"] == 3600
-        assert jobs[0]["trace_start_time"] == jobs[0]["end_time"]
-        assert jobs[0]["trace_end_time"] == jobs[0]["start_time"]
+        # Job-relative offsets (RAPS convention): scalar trace spans [0, wall_time]
+        assert jobs[0]["trace_start_time"] == 0
+        assert jobs[0]["trace_end_time"] == jobs[0]["end_time"]
 
     def test_trace_quanta_from_config(self):
         """trace_quanta should be loaded from RAPS scheduler config."""
@@ -625,14 +626,16 @@ class TestJobDictBuilder:
         normalizer = TraceNormalizer(power_config={
             "cpu": {"idle": 90, "max": 280, "per_node": 1},
         })
-        # sum_power=27000, wall_time=100, nodes=3 → watts=90 → 90/90-1=0 → 0/(280/90-1)=0
+        # value is a per-sample power reading (Watts), summed across nodes —
+        # NOT accumulated energy, so it is not divided by wall_time (D-E13a).
+        # sum_power=270, nodes=3 → watts=90 → (90/90-1)/(280/90-1)=0
         val = normalizer.normalize_trace(
-            27000.0, "cpu_trace", "cpu_power", wall_time=100, nodes_required=3)
+            270.0, "cpu_trace", "cpu_power", wall_time=100, nodes_required=3)
         assert val == pytest.approx(0.0, abs=0.01)
 
-        # Higher power: sum=84000, wall=100, nodes=3 → watts=280 → (280/90-1)/(280/90-1)=1.0
+        # Higher power: sum=840, nodes=3 → watts=280 → (280/90-1)/(280/90-1)=1.0
         val2 = normalizer.normalize_trace(
-            84000.0, "cpu_trace", "cpu_power", wall_time=100, nodes_required=3)
+            840.0, "cpu_trace", "cpu_power", wall_time=100, nodes_required=3)
         assert val2 == pytest.approx(1.0, abs=0.01)
 
     def test_trace_scalar_not_list(self):
@@ -956,8 +959,10 @@ class TestJobprofileJoin:
         jobs, _ = builder.build_jobs(joblive_df, mapping)
 
         for job in jobs:
-            # has_timeseries should be True → trace_missing_values=False
-            assert job["trace_missing_values"] is False
+            # Both jobs ran 3600s but the jobprofile telemetry only covers a
+            # few minutes (5 and 3 samples at quanta=60) — trace is shorter
+            # than run_time, so trace_missing_values should be flagged True.
+            assert job["trace_missing_values"] is True
             assert job["trace_quanta"] == 60
             # trace_time = len(cpu_trace) * quanta
             assert job["trace_time"] == len(job["cpu_trace"]) * 60
