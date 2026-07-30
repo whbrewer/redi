@@ -352,6 +352,23 @@ def _load_raps_jobs_dict(path: Path) -> Optional[Dict[str, dict]]:
     """
     _install_raps_stub()
 
+    def _norm_id(v) -> str:
+        # Job ID columns sometimes get upcast to float64 upstream (e.g. a
+        # source CSV column with a stray NaN forces pandas to promote an
+        # otherwise-integer ID column to float), producing "618722.0"
+        # instead of "618722" -- and by the time it reaches here it may
+        # already be the *string* "618722.0" (stringified post-upcast), not
+        # a float instance. Normalize both cases so REDI and GT IDs from the
+        # same underlying integer compare equal regardless of which side (or
+        # stage) hit the upcast. Non-numeric IDs (e.g. hashed strings) pass
+        # through unchanged.
+        s = str(v)
+        try:
+            f = float(s)
+        except (TypeError, ValueError):
+            return s
+        return str(int(f)) if f.is_integer() else s
+
     def _load_one(p: Path) -> Optional[Dict[str, dict]]:
         if p.suffix.lower() != ".npz":
             return None
@@ -365,7 +382,7 @@ def _load_raps_jobs_dict(path: Path) -> Optional[Dict[str, dict]]:
             jobs = data["jobs"]
             if jobs.ndim != 1 or len(jobs) == 0 or not isinstance(jobs[0], dict):
                 return None
-            return {str(j.get("id", i)): j for i, j in enumerate(jobs)}
+            return {_norm_id(j.get("id", i)): j for i, j in enumerate(jobs)}
         except Exception:
             return None
 

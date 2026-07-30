@@ -1,7 +1,7 @@
 # REDI RAPS Job Extraction — Lassen (LLNL, Livermore)
 #
 # Data: CSM (Cluster System Manager) allocation history (CSV, hashed user IDs)
-# Source: /opt/data/lassen/Lassen-Supercomputer-Job-Dataset/final_csm_allocation_history_hashed.csv
+# Source: /store/datasets/hpc/lassen/Lassen-Supercomputer-Job-Dataset/final_csm_allocation_history_hashed.csv
 # Records: ~1,467,747 jobs
 # Columns: 26 (CSM allocation fields with hashed identifiers)
 #
@@ -10,8 +10,15 @@
 #   - final_csm_step_history.csv — job step-level granularity
 
 domain: hpc
-input_path: /opt/data/lassen/Lassen-Supercomputer-Job-Dataset/final_csm_allocation_history_hashed.csv
+input_path: /store/datasets/hpc/lassen/Lassen-Supercomputer-Job-Dataset/final_csm_allocation_history_hashed.csv
 output_dir: ./output/lassen_raps
+
+# ExaDigiT/RAPS's Lassen dataloader windows jobs by overlap (end_time >=
+# window_start AND submit_time < window_end), not by submit_time alone --
+# see raps/dataloaders/lassen.py. Match that semantics here so a windowed
+# validation run (--start/--end) doesn't asymmetrically drop jobs that
+# started before the window but ran into it.
+date_filter_mode: overlap
 
 raps_jobs:
   enabled: true

@@ -1,7 +1,7 @@
 # REDI RAPS Job Extraction — Adastra MI250 (CINES, France)
 #
 # Data: SLURM job accounting with per-node power telemetry
-# Source: /opt/data/adastraMI250/AdastaJobsMI250_15days.parquet
+# Source: /opt/data/hpc/adastra/AdastaJobsMI250_15days.parquet
 # Records: ~15,285 jobs over 15 days
 # Columns: 35 (SLURM fields + node/mem/cpu power consumption)
 #
@@ -9,7 +9,7 @@
 # (raps/config/adastraMI250.yaml) — no need to duplicate it here.
 
 domain: hpc
-input_path: /opt/data/adastraMI250/AdastaJobsMI250_15days.parquet
+input_path: /opt/data/hpc/adastra/AdastaJobsMI250_15days.parquet
 output_dir: ./output/adastra_mi250_raps
 
 raps_jobs:

@@ -34,4 +34,17 @@ raps_jobs:
     pri: priority
     cnumr: cpu_cores_required     # Core number requested
     avgpcon: cpu_trace            # Average power consumption
-    pclass: partition             # Partition class
+    pclass: perf_class            # Compute-bound/memory-bound Roofline label (was
+                                   # miswired to `partition`, an unrelated scheduler
+                                   # queue/partition field expecting int values
+                                   # downstream — see JobDictBuilder's "Ensure
+                                   # partition is int" coercion, which silently
+                                   # zeroed out the pclass string on every job)
+    embedding: job_embedding       # Pre-anonymization Sentence-BERT identity
+                                   # embedding (usr+jnam+jobenv_req), shipped by
+                                   # F-Data itself; usable as a static per-job
+                                   # fingerprint feature for historical jobs
+    minpcon: cpu_power_min         # Raw per-job min power (Watts), NOT run
+    maxpcon: cpu_power_max         # through TraceNormalizer -- distinct from
+                                   # avgpcon's cpu_trace (already-normalized
+                                   # utilization channel used as model input)

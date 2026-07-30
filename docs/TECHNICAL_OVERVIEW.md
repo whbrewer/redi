@@ -89,7 +89,7 @@ Domain auto-detection (`domains/__init__.py`) works in two passes:
 | **HPC** (~631 lines) | pandas, sklearn | `LoadHPCData`, `CleanHPCData`, `ParseTimestamps`, `EngineerHPCFeatures` (wait_time, core_hours), `EncodeHPCCategoricals` |
 | **Geospatial** (~551 lines) | h3, geopandas | `LoadGeospatialData`, `HexifyData` (lat/lon → H3 hexagons), `AggregateH3Cells`, `TemporalAggregation`, `SpatialSplit` |
 
-### HPC Job Mapper (`hpc_job_mapper.py`, ~1,689 lines)
+### HPC Job Mapper (`hpc/job_mapper.py`, ~1,689 lines)
 
 A standalone subsystem for extracting structured RAPS Job objects from raw HPC telemetry. Uses a multi-phase column-mapping strategy (exact match → token overlap → fuzzy matching) with confidence scores, then derives missing fields and normalizes timestamps.
 

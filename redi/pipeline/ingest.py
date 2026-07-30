@@ -37,6 +37,8 @@ class DetectFormat(PipelineStep):
         ".parquet": "parquet",
         ".json": "json",
         ".txt": "txt",  # For manifest files (train.txt, test.txt, etc.)
+        # HPC scheduler traces
+        ".swf": "swf",  # Standard Workload Format (Parallel Workloads Archive)
         # Climate
         ".nc": "netcdf",
         ".nc4": "netcdf",
@@ -92,6 +94,20 @@ class DetectFormat(PipelineStep):
                 # Check for FASTA
                 if first_line.startswith('>'):
                     return "fasta"
+
+                # Standard Workload Format (SWF): ';'-prefixed comment header
+                # with "; Key: value" metadata lines. Must be checked BEFORE
+                # the generic delimiter test below, which would otherwise
+                # misread the ';' comment prefix as a CSV delimiter.
+                if first_line.startswith(';'):
+                    header_lines = text.split('\n')
+                    if any(re.match(r"^;\s*(Version|UnixStartTime|MaxJobs|MaxNodes|Computer)\s*:", ln)
+                           for ln in header_lines):
+                        return "swf"
+
+                # Slurm sacct pipe-delimited accounting dump (header signature)
+                if first_line.startswith("AllocCPUS|") and "ConsumedEnergyRaw" in first_line:
+                    return "sacct-dump"
 
                 # Check for CSV/TSV (has delimiters)
                 if ',' in first_line or '\t' in first_line or ';' in first_line:

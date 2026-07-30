@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class FieldSpec:
     """Specification for a single RAPS Job field."""
     canonical_name: str
     aliases: List[str]
-    field_type: str  # "int", "str", "timestamp", "trace", "state", "list", "float"
+    field_type: str  # "int", "str", "timestamp", "trace", "state", "list", "float", "array"
     required: bool = False
     default: Any = None
 
@@ -197,6 +197,52 @@ FIELD_REGISTRY: List[FieldSpec] = [
         field_type="str",
         required=False,
         default="",
+    ),
+    FieldSpec(
+        # NOTE: deliberately excludes "perf_class" itself and any alias
+        # sharing tokens/character-runs with common scheduler fields —
+        # "perf_class" fuzzy-matched Lassen's unrelated "user_flags" column
+        # at a 0.600 SequenceMatcher ratio (just over the 0.6 auto-match
+        # threshold) during verification. Narrower aliases avoid it while
+        # still catching Fugaku's real "pclass" column via manual override.
+        canonical_name="perf_class",
+        aliases=["pclass", "performance_class"],
+        field_type="str",
+        required=False,
+        default="",
+    ),
+    FieldSpec(
+        # NOTE: deliberately excludes "job_embedding" itself — its "job"
+        # token collided with the ubiquitous job_id/job_type/job_name-style
+        # columns present on nearly every other dataset (confirmed on
+        # Lassen and MIT Supercloud during verification, both via "job_type").
+        canonical_name="job_embedding",
+        aliases=["embedding"],
+        field_type="array",
+        required=False,
+        default=None,
+    ),
+    FieldSpec(
+        # Raw (un-normalized) per-job min/max power, Watts -- distinct from
+        # cpu_trace (avgpcon run through TraceNormalizer's power->utilization
+        # formula, used as the model's cpu_util input channel). field_type
+        # "float" deliberately, not "trace": TraceNormalizer derives its
+        # power_config lookup key by stripping a literal "_trace" suffix off
+        # canonical_name, which only works for exactly "cpu_trace"/"gpu_trace"
+        # -- routing these through "trace" would silently zero them out the
+        # same way the dangling raps install zeroed cpu_trace itself.
+        canonical_name="cpu_power_min",
+        aliases=["minpcon"],
+        field_type="float",
+        required=False,
+        default=0.0,
+    ),
+    FieldSpec(
+        canonical_name="cpu_power_max",
+        aliases=["maxpcon"],
+        field_type="float",
+        required=False,
+        default=0.0,
     ),
     FieldSpec(
         canonical_name="scheduled_nodes",
@@ -604,10 +650,15 @@ class TraceNormalizer:
 
         For power data with full RAPS config (per_node present), uses::
 
-            watts = sum_power / (wall_time * nodes_required)
+            watts = sum_power / nodes_required
             util  = (watts / idle - per_node) / (max / idle - 1.0)
 
-        Otherwise falls back to simple linear normalization.
+        ``value`` is a per-sample power reading (Watts), already summed
+        across the job's allocated nodes at that instant, not accumulated
+        energy: dividing by wall_time in addition to nodes_required was a
+        confirmed defect (D-E13a) that silently drove every normalized
+        utilization sample to exactly 0 for any job longer than a couple of
+        seconds. Otherwise falls back to simple linear normalization.
         Values are NOT clamped — RAPS allows >1 for GPU utilization.
         """
         if np.isnan(value):
@@ -622,9 +673,9 @@ class TraceNormalizer:
             max_p = cfg.get("max", 0)
             per_node = cfg.get("per_node", 0)
 
-            if idle > 0 and max_p > 0 and per_node > 0 and wall_time > 0 and nodes_required > 0:
+            if idle > 0 and max_p > 0 and per_node > 0 and nodes_required > 0:
                 # Full RAPS formula
-                watts = value / (wall_time * nodes_required)
+                watts = value / nodes_required
                 util = (watts / idle - per_node) / (max_p / idle - 1.0)
                 return max(0.0, float(util))
             elif max_p > idle > 0:
@@ -669,6 +720,26 @@ def _parse_trace_string(s: str) -> Any:
         pass
 
     return 0
+
+
+def _as_float_array(value: Any) -> Optional[np.ndarray]:
+    """Coerce a raw cell value (scalar, string, list, or ndarray) to a float array.
+
+    Returns ``None`` when the value is missing/NaN or not trace-like, so
+    callers can skip a residual computation cleanly instead of propagating
+    garbage.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = _parse_trace_string(value)
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    if isinstance(value, (int, float)):
+        return np.array([float(value)])
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return np.asarray(value, dtype=float)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +792,8 @@ class JobDictBuilder:
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
                  priority_policy: Optional[str] = None,
-                 id_strip_suffix: bool = False):
+                 id_strip_suffix: bool = False,
+                 gpu_residual_config: Optional[Dict[str, Any]] = None):
         self.trace_normalizer = TraceNormalizer(power_config=power_config)
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
@@ -731,6 +803,7 @@ class JobDictBuilder:
         self._jp_groups: Optional[Dict[str, pd.DataFrame]] = None
         self._priority_fn = _PRIORITY_POLICIES.get(priority_policy) if priority_policy else None
         self.id_strip_suffix = id_strip_suffix
+        self.gpu_residual_config = gpu_residual_config
 
     def build_jobs(self, df: pd.DataFrame, mapping: ColumnMapping) -> Tuple[List[Dict[str, Any]], float]:
         """Build list of RAPS job dicts from a DataFrame.
@@ -970,6 +1043,8 @@ class JobDictBuilder:
             for fs, raw, col_name in trace_fields:
                 job[fs.canonical_name] = self._convert_trace(
                     raw, fs, col_name, wall_time, nodes_req)
+            if self.gpu_residual_config:
+                self._apply_gpu_residual(job, row, nodes_req)
 
         # Convert scheduled_nodes with system-specific xname converter
         if self.topology and isinstance(job.get("scheduled_nodes"), list):
@@ -1002,7 +1077,7 @@ class JobDictBuilder:
 
         # Determine whether we have real per-timestep trace arrays
         cpu_trace = job.get("cpu_trace")
-        has_timeseries = isinstance(cpu_trace, (list, np.ndarray)) and len(cpu_trace) > 1
+        has_timeseries = isinstance(cpu_trace, (list, np.ndarray)) and len(cpu_trace) >= 1
 
         job["current_state"] = "PENDING"      # scheduler moves to RUNNING
         job["current_run_time"] = 0
@@ -1012,19 +1087,37 @@ class JobDictBuilder:
         job["dilated"] = False
 
         if has_timeseries:
-            # Real per-timestep trace data
+            # Real per-timestep trace data.  RAPS convention (see
+            # raps/dataloaders/frontier.py): trace_start_time /
+            # trace_end_time are JOB-RELATIVE offsets in [0, run_time]
+            # placing the telemetry window within the job's own timeline.
             quanta = self.trace_quanta or 1
+            trace_time = len(cpu_trace) * quanta
+            run_time = end - start
+            trace_start_time = 0
+            trace_end_time = trace_time
+            trace_missing_values = False
+            if run_time > trace_time:
+                trace_missing_values = True
+                if start < 0:
+                    # Job started before the telemetry window: the trace
+                    # covers the tail of the job, pad the head.
+                    trace_start_time = int(run_time - trace_time)
+                    trace_end_time = run_time
+                # else: trace covers the head of the job (job ran past
+                # the telemetry window, or interior gaps) — keep defaults.
             job["trace_quanta"] = quanta
-            job["trace_time"] = len(cpu_trace) * quanta
-            job["trace_start_time"] = end     # RAPS convention
-            job["trace_end_time"] = start     # RAPS convention
-            job["trace_missing_values"] = False
+            job["trace_time"] = trace_time
+            job["trace_start_time"] = trace_start_time
+            job["trace_end_time"] = trace_end_time
+            job["trace_missing_values"] = trace_missing_values
         else:
-            # Scalar or no trace data — RAPS convention for scalar traces
+            # Scalar or no trace data — job-relative offsets over the
+            # whole (expected) runtime, flagged as missing values.
             job["trace_quanta"] = self.trace_quanta
             job["trace_time"] = wall_time
-            job["trace_start_time"] = end     # RAPS convention
-            job["trace_end_time"] = start     # RAPS convention
+            job["trace_start_time"] = 0
+            job["trace_end_time"] = wall_time
             job["trace_missing_values"] = True
 
         # Ensure partition is int (RAPS expects int | None, not str)
@@ -1111,6 +1204,51 @@ class JobDictBuilder:
 
         return True
 
+    def _apply_gpu_residual(self, job: Dict[str, Any], row: pd.Series,
+                            nodes_required: int) -> None:
+        """Derive gpu_trace as a power residual for sources with no dedicated
+        per-GPU column, matching RAPS's own marconi100 dataloader::
+
+            gpu_power = node_power - cpu_power - mem_power
+                        - nodes_required * nics_per_node * power_nic
+                        - nodes_required * power_nvme
+
+        Overwrites whatever column AutoMapColumns fuzzy-matched to gpu_trace
+        (there is no real per-GPU signal to match against in these sources,
+        so that mapping is never correct). Only runs when ``gpu_residual_config``
+        names all three source columns explicitly — this is opt-in per system,
+        not inferred, since guessing which columns represent node/cpu/mem
+        power would be the same class of mistake this method exists to fix.
+        """
+        cfg = self.gpu_residual_config
+        node_col = cfg.get("node_power_col")
+        cpu_col = cfg.get("cpu_power_col")
+        mem_col = cfg.get("mem_power_col")
+        if not (node_col and cpu_col and mem_col):
+            return
+
+        node_arr = _as_float_array(row.get(node_col))
+        cpu_arr = _as_float_array(row.get(cpu_col))
+        mem_arr = _as_float_array(row.get(mem_col))
+        if node_arr is None or cpu_arr is None or mem_arr is None:
+            return
+
+        min_len = min(len(node_arr), len(cpu_arr), len(mem_arr))
+        if min_len == 0:
+            job["gpu_trace"] = []
+            return
+        node_arr, cpu_arr, mem_arr = node_arr[:min_len], cpu_arr[:min_len], mem_arr[:min_len]
+
+        nics_per_node = self.power_config.get("nics_per_node", 0) or 0
+        power_nic = self.power_config.get("power_nic", 0) or 0
+        power_nvme = self.power_config.get("power_nvme", 0) or 0
+        overhead = nodes_required * (nics_per_node * power_nic + power_nvme)
+
+        gpu_power = node_arr - cpu_arr - mem_arr - overhead
+        job["gpu_trace"] = self.trace_normalizer.normalize_trace(
+            gpu_power.tolist(), "gpu_trace", "gpu_power_residual",
+            wall_time=0, nodes_required=nodes_required)
+
     def _convert_value(self, raw: Any, fs: FieldSpec, col_name: str,
                        ref_time: float) -> Any:
         """Convert a raw value to the expected type for a canonical field."""
@@ -1144,6 +1282,13 @@ class JobDictBuilder:
 
         if fs.field_type == "list":
             return _parse_node_list(raw)
+
+        if fs.field_type == "array":
+            if isinstance(raw, np.ndarray):
+                return raw.tolist()
+            if isinstance(raw, (list, tuple)):
+                return list(raw)
+            return raw
 
         return raw
 
@@ -1421,6 +1566,7 @@ def load_raps_system_params(system_name: str) -> Optional[Dict[str, Any]]:
             "nics_per_node": sys.nics_per_node,
             "power_nic": pwr.power_nic or 0,
             "power_mem": pwr.power_mem,
+            "power_nvme": pwr.power_nvme or 0,
         },
         "trace_quanta": cfg.scheduler.trace_quanta,
         "topology": {
@@ -1596,7 +1742,8 @@ class BuildJobDicts(PipelineStep):
                  topology: Optional[Dict[str, Any]] = None,
                  system_name: str = "unknown",
                  priority_policy: Optional[str] = None,
-                 id_strip_suffix: bool = False):
+                 id_strip_suffix: bool = False,
+                 gpu_residual_config: Optional[Dict[str, Any]] = None):
         super().__init__()
         self.power_config = power_config
         self.trace_quanta = trace_quanta
@@ -1604,6 +1751,7 @@ class BuildJobDicts(PipelineStep):
         self.system_name = system_name
         self.priority_policy = priority_policy
         self.id_strip_suffix = id_strip_suffix
+        self.gpu_residual_config = gpu_residual_config
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         if not isinstance(ctx.data, pd.DataFrame):
@@ -1626,6 +1774,7 @@ class BuildJobDicts(PipelineStep):
             system_name=self.system_name,
             priority_policy=self.priority_policy,
             id_strip_suffix=self.id_strip_suffix,
+            gpu_residual_config=self.gpu_residual_config,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 

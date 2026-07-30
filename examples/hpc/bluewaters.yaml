@@ -9,10 +9,18 @@
 # dataset directory (same style as: `raps run -f /opt/data/bluewaters ...`).
 
 domain: hpc
-input_path: /opt/data/bluewaters
+input_path: /opt/data/hpc/bluewaters
 output_dir: ./output/bluewaters_raps
-start: "2017-03-28T00:00"
-end: "2017-03-29T00:00"
+# RAPS's ground truth for this system buckets jobs by which single day-file
+# (torque_logs/20170328) their completion ("E") record lands in -- i.e. by
+# end_time on Blue Waters' local clock (America/Chicago, CDT = UTC-5 on this
+# date), not by submit_time. Match that population here: filter on end_time,
+# with the window shifted to compensate for REDI's naive-local (host is EDT,
+# UTC-4) date parsing, so the effective boundary is 2017-03-28T00:00 CDT to
+# 2017-03-29T00:00 CDT (2017-03-28T05:00Z to 2017-03-29T05:00Z).
+start: "2017-03-28T01:00:00"
+end: "2017-03-29T01:00:00"
+date_filter_field: end_time
 
 raps_jobs:
   enabled: true

@@ -27,7 +27,7 @@ The core framework is **production-ready**. All three operating modes and all si
 
 **Downloaders:** ESGF (CMIP6) and CDS (ERA5) — both production-ready with search, download, checksum verification.
 
-**HPC Job Mapper** (`hpc_job_mapper.py`, 1690 lines) — Complete RAPS-compatible job extraction with 4-phase fuzzy column matching, field derivation, trace normalization, multi-format output. This was a major planned feature (see `HPC_TELEMETRY_PLAN.md`) that is **fully delivered**.
+**HPC Job Mapper** (`hpc/job_mapper.py`, 1690 lines) — Complete RAPS-compatible job extraction with 4-phase fuzzy column matching, field derivation, trace normalization, multi-format output. This was a major planned feature (see `HPC_TELEMETRY_PLAN.md`) that is **fully delivered**.
 
 **Data loaders:** GESTS, SST-Binary, and Zarr loaders all implement the `BaseDataLoader` abstract class.
 
@@ -49,7 +49,7 @@ Three plan documents in the repo describe unimplemented features:
 
 2. **`SIDECAR_IMPROVEMENT_PLAN.md`** — Documents the evolution of `redi inspect` (formerly "sidecar", previously "analyze"). The plan itself shows most items as **DONE** (snapshot, quality, transforms, Snakemake/Nextflow parsing, data leakage detection, watch mode). The remaining items mentioned in the plan (if any) would need closer reading of the full document to identify.
 
-3. **`HPC_TELEMETRY_PLAN.md`** — Describes the RAPS Job auto-extraction system. **Fully delivered** in `hpc_job_mapper.py`.
+3. **`HPC_TELEMETRY_PLAN.md`** — Describes the RAPS Job auto-extraction system. **Fully delivered** in `hpc/job_mapper.py`.
 
 ## Minor Rough Edges
 

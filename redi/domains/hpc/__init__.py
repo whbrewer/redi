@@ -58,8 +58,8 @@ def _parse_date_range(start_str, end_str):
 
 def get_ingest_steps():
     """Get HPC-specific ingest steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
-    from ..pipeline.ingest import DetectFormat
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline.ingest import DetectFormat
 
     class LoadHPCData(PipelineStep):
         """Load HPC job accounting data"""
@@ -564,12 +564,16 @@ def get_ingest_steps():
 
             return ctx
 
-    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(), LoadPhillyData()]
+    from .swf_loader import LoadSWFData
+    from .sacct_loader import LoadAdastraSacctDump
+
+    return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(),
+            LoadPhillyData(), LoadSWFData(), LoadAdastraSacctDump()]
 
 
 def get_preprocess_steps():
     """Get HPC-specific preprocess steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CleanHPCData(PipelineStep):
         """Clean HPC job data"""
@@ -661,7 +665,7 @@ def get_preprocess_steps():
 
 def get_transform_steps():
     """Get HPC-specific transform steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class EngineerHPCFeatures(PipelineStep):
         """Engineer HPC-specific features"""
@@ -835,7 +839,7 @@ def get_transform_steps():
 
 def get_structure_steps():
     """Get HPC-specific structure steps"""
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class PrepareForML(PipelineStep):
         """Prepare data for ML model training"""
@@ -907,7 +911,7 @@ def get_structure_steps():
 
 def get_output_steps():
     """Get HPC-specific output steps"""
-    from ..pipeline.output import get_output_steps
+    from ...pipeline.output import get_output_steps
     return get_output_steps(output_format="npz")
 
 
@@ -922,7 +926,7 @@ def _get_raps_preprocess_steps():
     Heavier validation (start <= end, wall_time > 0, nodes > 0) is handled
     downstream by the JobDictBuilder which has access to the mapped fields.
     """
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class CleanHPCForRAPS(PipelineStep):
         """Clean HPC data for RAPS job extraction."""
@@ -989,7 +993,7 @@ def _get_load_jobprofile_step(jobprofile_path=None):
     if not jobprofile_path:
         return []
 
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class LoadJobProfile(PipelineStep):
         """Load jobprofile telemetry data for per-timestep trace arrays."""
@@ -1050,7 +1054,7 @@ def _get_date_filter_step():
     Runs after AutoMapColumns so column names are canonical (submit_time / start_time).
     Is a no-op when neither start nor end is set in the config.
     """
-    from ..pipeline import PipelineStep, PipelineStage, PipelineContext
+    from ...pipeline import PipelineStep, PipelineStage, PipelineContext
 
     class FilterByDateRange(PipelineStep):
         """Filter jobs to the configured date window."""
@@ -1076,30 +1080,96 @@ def _get_date_filter_step():
                 return ctx
 
             df = ctx.data
-            # Prefer canonical submit_time; fall back to start_time.
             # AutoMapColumns stores mapping in metadata but does NOT rename columns,
             # so we also check the mapping to find the original column name.
             col_mapping = ctx.metadata.get("raps_column_mapping", {})  # canonical → orig
-            col = None
-            for canonical in ("submit_time", "start_time"):
-                if canonical in df.columns:
-                    col = canonical
-                    break
-                orig = col_mapping.get(canonical)
-                if orig and orig in df.columns:
-                    col = orig
-                    break
+
+            def _resolve(canonical_candidates):
+                for canonical in canonical_candidates:
+                    if canonical in df.columns:
+                        return canonical
+                    orig = col_mapping.get(canonical)
+                    if orig and orig in df.columns:
+                        return orig
+                return None
+
+            def _to_epoch_seconds(series):
+                epoch = pd.Timestamp("1970-01-01")
+                if pd.api.types.is_datetime64_any_dtype(series):
+                    # Unit-agnostic: pandas datetime64 resolution varies
+                    # (ns/us/s depending on pandas version and how the column
+                    # was parsed), so a fixed int64/1e9 divisor silently gives
+                    # wrong epoch seconds when the unit isn't ns (e.g.
+                    # datetime64[us]).
+                    return (series - epoch) / pd.Timedelta(seconds=1)
+                numeric = pd.to_numeric(series, errors="coerce")
+                if numeric.notna().sum() == 0:
+                    # Not numeric (epoch) -- try parsing as a datetime string
+                    # (e.g. Lassen's CSM CSV stores "2019-10-17 11:53:14"
+                    # directly; this pipeline runs before DeriveJobFields,
+                    # which is where such strings would normally get parsed).
+                    parsed = pd.to_datetime(series, errors="coerce")
+                    if parsed.notna().any():
+                        numeric = (parsed - epoch) / pd.Timedelta(seconds=1)
+                return numeric
+
+            mode = ctx.config.get("date_filter_mode", "point")
+            pre = len(df)
+
+            if mode == "overlap":
+                # Job overlaps the window if it hasn't ended before the
+                # window starts and was submitted before the window ends --
+                # mirrors ExaDigiT/RAPS's own replay-window semantics (see
+                # e.g. raps/dataloaders/lassen.py), which is a two-sided
+                # overlap filter rather than a single-field "submitted
+                # within [start,end)" bucketing. Needed whenever the ground
+                # truth being validated against was itself windowed this
+                # way, since jobs that started before the window but are
+                # still running into it would otherwise be dropped from
+                # REDI but kept in the ground truth.
+                end_col = _resolve(
+                    ([ctx.config["date_filter_end_field"]] if ctx.config.get("date_filter_end_field") else [])
+                    + ["end_time"]
+                )
+                submit_col = _resolve(
+                    ([ctx.config["date_filter_field"]] if ctx.config.get("date_filter_field") else [])
+                    + ["submit_time", "start_time"]
+                )
+                if end_col is None or submit_col is None:
+                    logger.warning("Date filter (overlap): missing submit_time/end_time column")
+                    return ctx
+
+                end_series = _to_epoch_seconds(df[end_col])
+                submit_series = _to_epoch_seconds(df[submit_col])
+
+                mask = pd.Series(True, index=df.index)
+                if ts0 is not None:
+                    mask &= end_series >= ts0
+                if ts1 is not None:
+                    mask &= submit_series < ts1
+
+                ctx.data = df[mask].reset_index(drop=True)
+                logger.info(
+                    f"Date filter (overlap) [{_ds} – {_de}] on {submit_col}/{end_col}: "
+                    f"{pre:,} → {len(ctx.data):,} jobs"
+                )
+                return ctx
+
+            # mode == "point" (default): single-field bucketing. A dataset
+            # can override which timestamp defines "day membership" via the
+            # date_filter_field config key (e.g. end_time, when the ground
+            # truth it's being compared against buckets jobs by completion
+            # day rather than submission day).
+            col = _resolve(
+                ([ctx.config["date_filter_field"]] if ctx.config.get("date_filter_field") else [])
+                + ["submit_time", "start_time"]
+            )
             if col is None:
                 logger.warning("Date filter: no submit_time/start_time column found")
                 return ctx
 
-            series = df[col]
-            if pd.api.types.is_datetime64_any_dtype(series):
-                series = series.astype("int64") / 1e9  # ns → s
-            else:
-                series = pd.to_numeric(series, errors="coerce")
+            series = _to_epoch_seconds(df[col])
 
-            pre = len(df)
             mask = pd.Series(True, index=df.index)
             if ts0 is not None:
                 mask &= series >= ts0
@@ -1118,7 +1188,8 @@ def _get_date_filter_step():
 def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=None,
                       output_format="npz", system_name="unknown",
                       jobprofile_path=None, topology=None, priority_policy=None,
-                      id_strip_suffix=False, column_scalars=None):
+                      id_strip_suffix=False, column_scalars=None,
+                      gpu_residual_config=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -1135,9 +1206,13 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
             (e.g. "1242841.aurora" → "1242841") to match RAPS GT id format.
         column_scalars: Dict mapping original_column_name → float multiplier for
             unit conversions (e.g. {"timelimit": 60} for SLURM minutes → seconds).
+        gpu_residual_config: Dict with node_power_col/cpu_power_col/mem_power_col
+            naming source columns to derive gpu_trace as a power residual
+            (node - cpu - mem - nic - nvme), for sources with no dedicated
+            per-GPU column. Matches RAPS's own marconi100 dataloader.
     """
-    from .hpc_job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
-    from ..pipeline.output import WriteChecksums
+    from .job_mapper import AutoMapColumns, ApplyColumnScalars, DeriveJobFields, BuildJobDicts, SaveJobDicts
+    from ...pipeline.output import WriteChecksums
 
     ingest = get_ingest_steps()                          # DetectFormat + LoadHPCData
     jobprofile = _get_load_jobprofile_step(jobprofile_path)  # optional jobprofile load
@@ -1149,7 +1224,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         DeriveJobFields(),                               # derive missing fields
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
                       topology=topology, system_name=system_name,
-                      priority_policy=priority_policy, id_strip_suffix=id_strip_suffix),
+                      priority_policy=priority_policy, id_strip_suffix=id_strip_suffix,
+                      gpu_residual_config=gpu_residual_config),
         SaveJobDicts(output_format=output_format, system_name=system_name),
         WriteChecksums(),
     ]

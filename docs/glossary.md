@@ -52,12 +52,12 @@ no changes to step implementations required.
 
 **RAPS Job**
 : Standardised HPC job representation used by the ExaDigiT framework.
-The [`redi.domains.hpc_job_mapper`](../redi/domains/hpc_job_mapper.py) module auto-maps arbitrary
+The [`redi.domains.hpc.job_mapper`](../redi/domains/hpc/job_mapper.py) module auto-maps arbitrary
 HPC telemetry columns to this format using a four-phase fuzzy column
 matching strategy.
 
 **HPC Job Mapper**
-: Standalone subsystem in [`redi.domains.hpc_job_mapper`](../redi/domains/hpc_job_mapper.py) for
+: Standalone subsystem in [`redi.domains.hpc.job_mapper`](../redi/domains/hpc/job_mapper.py) for
 extracting structured RAPS Job objects from raw HPC telemetry.
 Uses exact match → token overlap → fuzzy matching with confidence
 scores, then derives missing fields and normalises timestamps.

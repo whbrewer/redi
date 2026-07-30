@@ -11,8 +11,13 @@ transformations, and feature engineering required for its scientific domain.
 | `redi.domains.materials` | [`materials.py`](../../redi/domains/materials.py) |
 | `redi.domains.life_sciences` | [`life_sciences.py`](../../redi/domains/life_sciences.py) |
 | `redi.domains.fusion` | [`fusion.py`](../../redi/domains/fusion.py) |
-| `redi.domains.hpc` | [`hpc.py`](../../redi/domains/hpc.py) |
-| `redi.domains.hpc_job_mapper` | [`hpc_job_mapper.py`](../../redi/domains/hpc_job_mapper.py) |
+| `redi.domains.hpc` | [`hpc/__init__.py`](../../redi/domains/hpc/__init__.py) |
+| `redi.domains.hpc.job_mapper` | [`hpc/job_mapper.py`](../../redi/domains/hpc/job_mapper.py) |
+| `redi.domains.hpc.cross_replay` | [`hpc/cross_replay.py`](../../redi/domains/hpc/cross_replay.py) |
+| `redi.domains.hpc.power_qc` | [`hpc/power_qc.py`](../../redi/domains/hpc/power_qc.py) |
+| `redi.domains.hpc.qc_validation` | [`hpc/qc_validation.py`](../../redi/domains/hpc/qc_validation.py) |
+| `redi.domains.hpc.sacct_loader` | [`hpc/sacct_loader.py`](../../redi/domains/hpc/sacct_loader.py) |
+| `redi.domains.hpc.swf_loader` | [`hpc/swf_loader.py`](../../redi/domains/hpc/swf_loader.py) |
 | `redi.domains.geospatial` | [`geospatial.py`](../../redi/domains/geospatial.py) |
 | `redi.domains.openfold` | [`openfold.py`](../../redi/domains/openfold.py) |
 | `redi.domains.sphenix` | [`sphenix.py`](../../redi/domains/sphenix.py) |
