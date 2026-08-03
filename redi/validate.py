@@ -313,6 +313,16 @@ def _load_npz_with_raps_fallback(path: Path) -> np.ndarray:
             jobs = data["jobs"]
             if jobs.ndim == 1 and len(jobs) > 0 and isinstance(jobs[0], dict):
                 return _raps_jobs_to_matrix(jobs)
+            if jobs.ndim <= 1 and len(jobs) == 0:
+                # Empty partition (e.g. a Philly/MIT Supercloud GPU-partition
+                # split with zero jobs in the validated window): an empty
+                # object array serializes with numpy's default float64 dtype
+                # (nothing to infer an object dtype from), so without this
+                # check it falls through to the generic numeric fallback
+                # below and comes back as this same array, shape (0,) --
+                # 1-D, and not concatenable with other partitions' (N, F)
+                # matrices. Return a properly-shaped empty matrix instead.
+                return np.empty((0, len(_RAPS_SCALAR_FIELDS) + 2), dtype=np.float32)
         except Exception:
             pass
 
