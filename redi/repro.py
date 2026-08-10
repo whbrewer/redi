@@ -5,6 +5,8 @@ This module tracks commands run during a session and appends them to a
 repro.sh script in the output directory for experiment reproducibility.
 """
 
+import hashlib
+import json
 import os
 import shlex
 import socket
@@ -295,3 +297,73 @@ def log_discover_run(
     """
     comment = f"Discover mode: analyzing {input_path}"
     return log_command(output_dir, comment=comment)
+
+
+def _fingerprint_inputs(input_paths: List[str]) -> str:
+    """Cheap content fingerprint for input paths (size + mtime, not a full hash).
+
+    Lets a version record show whether the underlying data actually changed
+    between runs without paying the cost of hashing large scientific files.
+    """
+    parts = []
+    for raw in input_paths:
+        path = Path(raw)
+        try:
+            if path.is_file():
+                stat = path.stat()
+                parts.append(f"{path}:{stat.st_size}:{int(stat.st_mtime)}")
+            elif path.is_dir():
+                for child in sorted(path.rglob("*")):
+                    if child.is_file():
+                        stat = child.stat()
+                        parts.append(f"{child}:{stat.st_size}:{int(stat.st_mtime)}")
+            else:
+                parts.append(str(path))
+        except OSError:
+            parts.append(str(path))
+    digest = hashlib.sha256("|".join(parts).encode()).hexdigest()
+    return digest[:12]
+
+
+def record_run(
+    output_dir: str,
+    mode: str,
+    input_paths: Optional[List[str]] = None,
+    domain: Optional[str] = None,
+    metadata_filename: str = "metadata.json",
+) -> dict:
+    """Build a versioned provenance record for this run, carrying forward history.
+
+    Reads the prior run's history out of the existing metadata file (if any)
+    before it gets overwritten, so metadata.json accumulates a "v1, v2, v3, ..."
+    run history scoped to this output directory, rather than each run clobbering
+    the last one's provenance.
+
+    Returns a dict with "current" (this run's record) and "history" (all
+    records including this one, oldest first) — ready to drop into
+    metadata_dict["provenance"].
+    """
+    output_path = Path(output_dir)
+    metadata_file = output_path / metadata_filename
+
+    history = []
+    if metadata_file.exists():
+        try:
+            existing = json.loads(metadata_file.read_text())
+            history = existing.get("provenance", {}).get("history", [])
+        except (json.JSONDecodeError, OSError):
+            history = []
+
+    run_number = len(history) + 1
+    env = get_environment_info()
+    record = {
+        "version": f"v{run_number}",
+        "run_number": run_number,
+        "mode": mode,
+        "domain": domain,
+        "input_fingerprint": _fingerprint_inputs(input_paths) if input_paths else None,
+        **env,
+    }
+    history.append(record)
+
+    return {"current": record, "history": history}

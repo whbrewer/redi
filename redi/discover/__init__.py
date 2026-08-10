@@ -104,12 +104,19 @@ def run_discover(
     # plain dicts and are handled separately by render_processing_plan).
     discoveries: list[FileDiscovery] = inspection.pop("discoveries", [])
 
+    from redi.repro import record_run
+    provenance = record_run(
+        str(out_path), mode="discover", input_paths=[str(path)],
+        metadata_filename="discovery_report.json",
+    )
+
     report = {
         "input_path": str(path),
         "mode": "discover",
         "inspection": inspection,
         "inference": inference,
         "proposal": proposal,
+        "provenance": provenance,
     }
 
     report_path = out_path / "discovery_report.json"

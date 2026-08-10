@@ -309,22 +309,6 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
     return data_card
 
 
-def _generate_enriched_datacard(primary_path, domain, config, ctx, step_results) -> str:
-    """Build a DATA_CARD.md string enriched with actual pipeline metadata."""
-    from .assess import PipelineRecommender
-
-    data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
-    recommender = PipelineRecommender(data_card)
-    return "\n".join([
-        "=" * 60,
-        "REDI - Data Readiness Analysis",
-        "=" * 60 + "\n",
-        data_card.to_markdown(),
-        "\n" + "=" * 60 + "\n",
-        recommender.get_recommendations_markdown(),
-    ])
-
-
 def run_pipeline(
     input_path: Optional[str] = None,
     output_dir: str = "./output",
@@ -467,6 +451,12 @@ def run_pipeline(
 
     # Enable step verification if requested
     ctx.verify_steps = verify
+
+    # Record run provenance/version now, before the pipeline's own SaveMetadata
+    # step overwrites metadata.json — otherwise we'd read back this same run's
+    # fresh file instead of the prior run's history.
+    from .repro import record_run
+    provenance = record_run(str(ctx.output_dir), mode="run", input_paths=[str(p) for p in paths], domain=domain)
 
     # Load domain-specific pipeline
     if style == "rich":
@@ -878,21 +868,11 @@ def run_pipeline(
                 print_metric("Val", str(split.get("val_size", "N/A")))
                 print_metric("Test", str(split.get("test_size", "N/A")))
 
-        # Generate and save Data Card
-        print_section("Data Card")
+        # Compute readiness recommendations (Data Cards now live in SetGo, not here)
         try:
             from .assess import PipelineRecommender
 
             data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
-            report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
-
-            ctx.output_dir.mkdir(parents=True, exist_ok=True)
-            datacard_path = ctx.output_dir / "DATA_CARD.md"
-            datacard_path.write_text(report)
-            if "saved_files" not in ctx.metadata:
-                ctx.metadata["saved_files"] = []
-            ctx.metadata["saved_files"].append(str(datacard_path))
-            print(f"    📋 {Colors.BOLD}DATA_CARD.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
             if getattr(ctx, "with_flowcept", False):
                 from .provenance_card import render_provenance_summary
@@ -900,7 +880,7 @@ def run_pipeline(
                 render_provenance_summary(
                     ctx=ctx,
                     style="rich",
-                    datacard_path=datacard_path,
+                    datacard_path=None,
                     print_section=print_section,
                     printer=print,
                     colors=Colors,
@@ -979,9 +959,9 @@ def run_pipeline(
             print(f"    {Colors.BOLD}Output Formats:{Colors.END} {', '.join(rec['output_formats'])}")
 
         except Exception as e:
-            print(f"    {Colors.YELLOW}⚠ Could not generate Data Card: {e}{Colors.END}")
+            print(f"    {Colors.YELLOW}⚠ Could not compute pipeline recommendations: {e}{Colors.END}")
 
-        # Always write metadata.json regardless of Data Card success
+        # Always write metadata.json regardless of recommendation success
         import json as json_module
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = ctx.output_dir / "metadata.json"
@@ -990,7 +970,8 @@ def run_pipeline(
             "domain": domain,
             "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
             "errors": ctx.errors,
-            **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+            **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))},
+            "provenance": provenance,
         }
         with open(metadata_path, 'w') as f:
             json_module.dump(metadata_dict, f, indent=2, default=str)
@@ -1025,19 +1006,10 @@ def run_pipeline(
                             if not check["passed"]:
                                 print(f"  - {check['name']}: {check.get('message', 'FAILED')}")
 
-        # Save metadata.json and DATA_CARD.md for simple/json modes too
+        # Save metadata.json for simple mode too
         try:
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Save DATA_CARD.md
-            report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
-            datacard_path = ctx.output_dir / "DATA_CARD.md"
-            datacard_path.write_text(report)
-            if "saved_files" not in ctx.metadata:
-                ctx.metadata["saved_files"] = []
-            ctx.metadata["saved_files"].append(str(datacard_path))
-
-            # Save metadata.json
             metadata_path = ctx.output_dir / "metadata.json"
             import json as json_module
             metadata_dict = {
@@ -1045,10 +1017,13 @@ def run_pipeline(
                 "domain": domain,
                 "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
                 "errors": ctx.errors,
-                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))},
+                "provenance": provenance,
             }
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
+            if "saved_files" not in ctx.metadata:
+                ctx.metadata["saved_files"] = []
             ctx.metadata["saved_files"].append(str(metadata_path))
         except Exception:
             pass  # Silent in simple mode
@@ -1075,16 +1050,12 @@ def run_pipeline(
                 print(f"  Output: {f}")
 
     elif style == "json":
-        # Save metadata.json and DATA_CARD.md for json mode too
+        # Save metadata.json for json mode too
         try:
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
-            report = _generate_enriched_datacard(primary_path, domain, config, ctx, step_results)
-            datacard_path = ctx.output_dir / "DATA_CARD.md"
-            datacard_path.write_text(report)
             if "saved_files" not in ctx.metadata:
                 ctx.metadata["saved_files"] = []
-            ctx.metadata["saved_files"].append(str(datacard_path))
 
             metadata_path = ctx.output_dir / "metadata.json"
             import json as json_module
@@ -1093,7 +1064,8 @@ def run_pipeline(
                 "domain": domain,
                 "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
                 "errors": ctx.errors,
-                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
+                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))},
+                "provenance": provenance,
             }
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
@@ -1420,6 +1392,12 @@ def _analyze_snakemake(workflow_path: Path, output_dir: str, watch: bool, style:
             "file_provenance": log_report.file_provenance,
             "errors": log_report.errors[:5] if log_report.errors else [],
         }
+
+    from .repro import record_run
+    report["provenance"] = record_run(
+        str(out_path), mode="analyze", input_paths=[str(workflow_path)],
+        metadata_filename="analyze_report.json",
+    )
 
     import json
     report_path = out_path / "analyze_report.json"
@@ -2026,6 +2004,12 @@ def _analyze_nextflow(workflow_path: Path, output_dir: str, watch: bool, style: 
     # Add log info
     if log_info:
         report["execution_logs"] = log_info
+
+    from .repro import record_run
+    report["provenance"] = record_run(
+        str(out_path), mode="analyze", input_paths=[str(workflow_path)],
+        metadata_filename="analyze_report.json",
+    )
 
     import json
     report_path = out_path / "analyze_report.json"
