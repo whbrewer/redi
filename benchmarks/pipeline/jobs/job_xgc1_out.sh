@@ -1,7 +1,7 @@
 #!/bin/bash
 # ── REDI Output Run: XGC1 ITER ────────────────────────────────────────────────
 # Runs the full REDI pipeline on the XGC1 ITER case (5 timesteps) and writes
-# DATA_CARD.md, metadata.json, and PT output to the shared Lustre path.
+# READINESS_REPORT.md, metadata.json, and PT output to the shared Lustre path.
 #SBATCH -A stf053
 #SBATCH -J redi_out_xgc1
 #SBATCH -N 1

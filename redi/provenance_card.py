@@ -61,7 +61,7 @@ def generate_provenance_artifacts(output_dir: Path, flowcept_ref: Any = None) ->
 
 
 def link_datacard_to_provenance(datacard_path: Path, provenance_filename: str = "PROVENANCE_CARD.md") -> bool:
-    """Insert provenance link into DATA_CARD.md under '## 2. Provenance' if missing."""
+    """Insert a provenance link under the '## 2. Provenance' section of the given report, if missing."""
     if not datacard_path.exists():
         return False
 

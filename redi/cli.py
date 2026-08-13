@@ -309,6 +309,42 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
     return data_card
 
 
+def _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance) -> str:
+    """Build a READINESS_REPORT.md string: readiness assessment + recommendations for this run.
+
+    Unlike the old DATA_CARD.md, this describes what REDI did in this run
+    (readiness level reached, transformations applied, recommended next steps)
+    rather than describing the dataset itself — dataset-level Data Cards now
+    live in SetGo.
+    """
+    from .assess import PipelineRecommender
+
+    data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
+    recommender = PipelineRecommender(data_card)
+    current = provenance["current"]
+
+    provenance_md = "\n".join([
+        "## Run Provenance\n",
+        f"- **Version:** {current['version']} (run {current['run_number']} against this output directory)",
+        f"- **Mode:** {current['mode']}",
+        f"- **Timestamp:** {current['timestamp']}",
+        f"- **REDI version:** {current['redi_version']}",
+        f"- **Git commit:** {current['git_commit']}",
+        f"- **Host:** {current['hostname']} (user: {current['user']})",
+    ])
+
+    return "\n".join([
+        "=" * 60,
+        "REDI - Data Readiness Report",
+        "=" * 60 + "\n",
+        data_card.to_markdown(),
+        "\n" + "=" * 60 + "\n",
+        recommender.get_recommendations_markdown(),
+        "\n" + "=" * 60 + "\n",
+        provenance_md,
+    ])
+
+
 def run_pipeline(
     input_path: Optional[str] = None,
     output_dir: str = "./output",
@@ -868,11 +904,22 @@ def run_pipeline(
                 print_metric("Val", str(split.get("val_size", "N/A")))
                 print_metric("Test", str(split.get("test_size", "N/A")))
 
-        # Compute readiness recommendations (Data Cards now live in SetGo, not here)
+        # Generate and save the readiness report (Data Cards now live in SetGo, not here)
+        print_section("Readiness Report")
         try:
             from .assess import PipelineRecommender
 
             data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
+
+            ctx.output_dir.mkdir(parents=True, exist_ok=True)
+            readiness_report_path = ctx.output_dir / "READINESS_REPORT.md"
+            readiness_report_path.write_text(
+                _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance)
+            )
+            if "saved_files" not in ctx.metadata:
+                ctx.metadata["saved_files"] = []
+            ctx.metadata["saved_files"].append(str(readiness_report_path))
+            print(f"    📋 {Colors.BOLD}READINESS_REPORT.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
             if getattr(ctx, "with_flowcept", False):
                 from .provenance_card import render_provenance_summary
@@ -880,7 +927,7 @@ def run_pipeline(
                 render_provenance_summary(
                     ctx=ctx,
                     style="rich",
-                    datacard_path=None,
+                    datacard_path=readiness_report_path,
                     print_section=print_section,
                     printer=print,
                     colors=Colors,
@@ -959,7 +1006,7 @@ def run_pipeline(
             print(f"    {Colors.BOLD}Output Formats:{Colors.END} {', '.join(rec['output_formats'])}")
 
         except Exception as e:
-            print(f"    {Colors.YELLOW}⚠ Could not compute pipeline recommendations: {e}{Colors.END}")
+            print(f"    {Colors.YELLOW}⚠ Could not generate readiness report: {e}{Colors.END}")
 
         # Always write metadata.json regardless of recommendation success
         import json as json_module
@@ -1006,9 +1053,18 @@ def run_pipeline(
                             if not check["passed"]:
                                 print(f"  - {check['name']}: {check.get('message', 'FAILED')}")
 
-        # Save metadata.json for simple mode too
+        # Save metadata.json and READINESS_REPORT.md for simple mode too
         try:
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
+
+            if "saved_files" not in ctx.metadata:
+                ctx.metadata["saved_files"] = []
+
+            readiness_report_path = ctx.output_dir / "READINESS_REPORT.md"
+            readiness_report_path.write_text(
+                _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance)
+            )
+            ctx.metadata["saved_files"].append(str(readiness_report_path))
 
             metadata_path = ctx.output_dir / "metadata.json"
             import json as json_module
@@ -1022,8 +1078,6 @@ def run_pipeline(
             }
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
-            if "saved_files" not in ctx.metadata:
-                ctx.metadata["saved_files"] = []
             ctx.metadata["saved_files"].append(str(metadata_path))
         except Exception:
             pass  # Silent in simple mode
@@ -1034,7 +1088,7 @@ def run_pipeline(
             render_provenance_summary(
                 ctx=ctx,
                 style="simple",
-                datacard_path=datacard_path if 'datacard_path' in locals() else None,
+                datacard_path=readiness_report_path if 'readiness_report_path' in locals() else None,
                 printer=print,
             )
 
@@ -1050,12 +1104,18 @@ def run_pipeline(
                 print(f"  Output: {f}")
 
     elif style == "json":
-        # Save metadata.json for json mode too
+        # Save metadata.json and READINESS_REPORT.md for json mode too
         try:
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
             if "saved_files" not in ctx.metadata:
                 ctx.metadata["saved_files"] = []
+
+            readiness_report_path = ctx.output_dir / "READINESS_REPORT.md"
+            readiness_report_path.write_text(
+                _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance)
+            )
+            ctx.metadata["saved_files"].append(str(readiness_report_path))
 
             metadata_path = ctx.output_dir / "metadata.json"
             import json as json_module

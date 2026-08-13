@@ -1,7 +1,7 @@
 #!/bin/bash
 # ── REDI Output Run: OpenFold / OpenProteinSet ────────────────────────────────
 # Runs the full REDI pipeline on the OpenProteinSet (5000 proteins by default)
-# and writes DATA_CARD.md, metadata.json, and HDF5 output to shared Lustre path.
+# and writes READINESS_REPORT.md, metadata.json, and HDF5 output to shared Lustre path.
 #SBATCH -A stf053
 #SBATCH -J redi_out_openfold
 #SBATCH -N 1

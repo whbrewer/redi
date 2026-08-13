@@ -78,9 +78,9 @@ echo "metadata.json:"
 show_metadata "$LUSTRE/xgc1/metadata.json"
 pause 2
 
-# ── DATA_CARD sample ──────────────────────────────────────────────────────────
-banner "DATA_CARD.md — OC22 / HydraGNN"
-head -60 "$LUSTRE/oc22/DATA_CARD.md"
+# ── READINESS_REPORT sample ──────────────────────────────────────────────────────────
+banner "READINESS_REPORT.md — OC22 / HydraGNN"
+head -60 "$LUSTRE/oc22/READINESS_REPORT.md"
 pause 3
 
 echo

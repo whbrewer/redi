@@ -432,7 +432,7 @@ Options:
 Use when you want REDI to own the data processing pipeline:
 - Processes data through all stages (ingest → preprocess → transform → structure → output)
 - Auto-detects or uses specified domain
-- Generates Data Card and metadata
+- Generates a Readiness Report and metadata
 - Best for: ad-hoc processing, domains without existing pipelines
 
 ### Analyze Mode (`redi analyze`)
@@ -548,7 +548,7 @@ ctx = pipeline.execute(ctx)
 ```
 redi/
 ├── cli.py              # Command-line interface (run, analyze, discover)
-├── analyze.py          # Data Card generation and analysis
+├── analyze.py          # Data Card model and readiness analysis
 ├── config.py           # YAML configuration handling
 ├── pipeline/
 │   ├── __init__.py     # Pipeline, PipelineStep, PipelineContext
@@ -578,7 +578,7 @@ redi run /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 # ├── train.npz    (80% of data)
 # ├── val.npz      (10% of data)
 # ├── test.npz     (10% of data)
-# ├── DATA_CARD.md
+# ├── READINESS_REPORT.md
 # └── metadata.json
 ```
 
