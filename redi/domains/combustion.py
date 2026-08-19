@@ -7,6 +7,7 @@ Supports AMReX plotfile format (HyperCLaw-V1.1) with multiple refinement levels.
 Tools: numpy (native AMReX reader, no external dependencies required)
 """
 
+import json
 import logging
 import re
 import struct
@@ -132,9 +133,15 @@ def _read_level_header(level_dir: Path) -> List[Tuple[str, int]]:
     return entries
 
 
-def _read_fab(level_dir: Path, filename: str, byte_offset: int) -> Tuple[np.ndarray, List[int], List[int]]:
+def _read_fab(
+    level_dir: Path, filename: str, byte_offset: int, spacedim: Optional[int] = None
+) -> Tuple[np.ndarray, List[int], List[int]]:
     """
     Read one AMReX FAB from a binary Cell_D file.
+
+    Args:
+        spacedim: known spatial dimensionality from the plotfile Header, used
+            to disambiguate the box parse (tried first, before falling back).
 
     Returns:
         data:  float64 array of shape (ncomp, *spatial_dims), C-order
@@ -152,6 +159,7 @@ def _read_fab(level_dir: Path, filename: str, byte_offset: int) -> Tuple[np.ndar
                 break
             header_bytes += ch
         header_line = header_bytes.decode("ascii", errors="ignore").strip()
+        data_start = f.tell()
 
         # Parse box bounds from header
         # Format: FAB ((...)) (((lo0,lo1) (hi0,hi1) (t0,t1))) ncomp
@@ -166,21 +174,28 @@ def _read_fab(level_dir: Path, filename: str, byte_offset: int) -> Tuple[np.ndar
         # Typical: format section has 18 ints (two format descriptors of 9 each)
         # Then 3*dim ints for the box
         # Total pattern: [18 format ints] [3*dim box ints] [ncomp]
-        # We know spacedim from the main header but let's infer from count
         remaining = nums[:-1]  # exclude ncomp
-        # Find box by looking at last group of ints
-        # Try dim=2 first (3*2=6 box ints), then dim=3
-        for dim in (2, 3):
+        # Try the known spacedim first (if given), then fall back to the other option.
+        dims_to_try = [d for d in (spacedim, 2, 3) if d in (2, 3)]
+        dims_to_try = list(dict.fromkeys(dims_to_try))  # dedupe, preserve order
+        for dim in dims_to_try:
+            if len(remaining) < 3 * dim:
+                continue
             box_ints = remaining[-(3 * dim):]
             lo = box_ints[:dim]
             hi = box_ints[dim:2 * dim]
             nx = [hi[i] - lo[i] + 1 for i in range(dim)]
+            if any(n <= 0 for n in nx):
+                # Wrong dimensionality guess produced an invalid box; try the next.
+                continue
             ncells = 1
             for n in nx:
                 ncells *= n
             total_expected = ncomp * ncells * 8  # float64
 
-            # Read and verify size matches
+            # Read and verify size matches (re-seek since a prior failed
+            # attempt may have consumed bytes from the wrong dimensionality)
+            f.seek(data_start)
             raw = f.read(total_expected)
             if len(raw) == total_expected:
                 arr = np.frombuffer(raw, dtype=np.float64)
@@ -231,7 +246,7 @@ def _load_amrex_plotfile(plotfile_dir: Path) -> dict:
 
         for fname, offset in fab_entries:
             try:
-                fab_arr, lo, hi = _read_fab(level_dir, fname, offset)
+                fab_arr, lo, hi = _read_fab(level_dir, fname, offset, spacedim=hdr["spacedim"])
                 # fab_arr shape: (ncomp, nx, ny[, nz])
                 boxes.append((lo, hi))
                 for i, var in enumerate(hdr["var_names"]):
@@ -258,8 +273,11 @@ def _composite_to_uniform(amr_data: dict, target_level: Optional[int] = None) ->
 
     Coarser-level cells are up-sampled (replicated) to fill fine-level cells
     that are not covered by finer data, following standard AMR convention.
+    Works for any spatial dimensionality (2D or 3D) using the box's own
+    number of axes rather than hard-coding x/y.
 
-    Returns dict mapping var_name → 2D array at finest resolution.
+    Returns dict mapping var_name → array at finest resolution, shape
+    (nx, ny) for 2D or (nx, ny, nz) for 3D data.
     """
     hdr = amr_data["header"]
     levels = amr_data["levels"]
@@ -267,15 +285,14 @@ def _composite_to_uniform(amr_data: dict, target_level: Optional[int] = None) ->
         return {}
 
     finest = target_level if target_level is not None else hdr["finest_level"]
-    finest_level_data = levels[finest]
+    dim = hdr["spacedim"]
 
-    # Determine finest domain size from domain box
+    # Determine finest domain shape from domain box
     dom_lo, dom_hi = hdr["domain_boxes"][finest]
-    nx = dom_hi[0] - dom_lo[0] + 1
-    ny = dom_hi[1] - dom_lo[1] + 1 if hdr["spacedim"] >= 2 else 1
+    shape = tuple(dom_hi[d] - dom_lo[d] + 1 for d in range(dim))
 
     var_names = hdr["var_names"]
-    composite = {v: np.full((nx, ny), np.nan, dtype=np.float64) for v in var_names}
+    composite = {v: np.full(shape, np.nan, dtype=np.float64) for v in var_names}
 
     # Fill from coarsest to finest so finer data overwrites coarser
     for lev_data in levels:
@@ -288,27 +305,25 @@ def _composite_to_uniform(amr_data: dict, target_level: Optional[int] = None) ->
             ratio *= hdr["ref_ratios"][r] if r < len(hdr["ref_ratios"]) else 2
 
         for box_idx, (lo, hi) in enumerate(lev_data["boxes"]):
+            fine_lo = [lo[d] * ratio for d in range(dim)]
+            fine_hi = [(hi[d] + 1) * ratio - 1 for d in range(dim)]
+
+            # Clamp to domain
+            starts = [max(fine_lo[d] - dom_lo[d], 0) for d in range(dim)]
+            stops = [min(fine_hi[d] - dom_lo[d] + 1, shape[d]) for d in range(dim)]
+            if any(stops[d] <= starts[d] for d in range(dim)):
+                continue
+
+            target_slices = tuple(slice(starts[d], stops[d]) for d in range(dim))
+            source_slices = tuple(slice(0, stops[d] - starts[d]) for d in range(dim))
+
             for var in var_names:
-                box_arr = lev_data["data"][var][box_idx]  # shape (bx, by)
-                # Map to fine-grid indices
-                fine_lo_x = lo[0] * ratio
-                fine_hi_x = (hi[0] + 1) * ratio - 1
-                fine_lo_y = lo[1] * ratio if hdr["spacedim"] >= 2 else 0
-                fine_hi_y = (hi[1] + 1) * ratio - 1 if hdr["spacedim"] >= 2 else 0
-
-                # Clamp to domain
-                x0 = max(fine_lo_x - dom_lo[0], 0)
-                x1 = min(fine_hi_x - dom_lo[0] + 1, nx)
-                y0 = max(fine_lo_y - dom_lo[1], 0) if hdr["spacedim"] >= 2 else 0
-                y1 = min(fine_hi_y - dom_lo[1] + 1, ny) if hdr["spacedim"] >= 2 else 1
-
-                # Up-sample using np.repeat
-                bx, by = box_arr.shape if box_arr.ndim >= 2 else (box_arr.shape[0], 1)
-                upsampled = np.repeat(np.repeat(box_arr.reshape(bx, by), ratio, axis=0), ratio, axis=1)
-
-                # Slice to target region
-                region = upsampled[:x1 - x0, :y1 - y0]
-                composite[var][x0:x1, y0:y1] = region
+                box_arr = lev_data["data"][var][box_idx]  # shape (bx0, bx1, ...)
+                upsampled = box_arr
+                if ratio > 1:
+                    for d in range(dim):
+                        upsampled = np.repeat(upsampled, ratio, axis=d)
+                composite[var][target_slices] = upsampled[source_slices]
 
     return composite
 
@@ -587,30 +602,30 @@ def get_structure_steps():
                     ctx.add_error("Compositing produced no data")
                     return ctx
 
-                # Stack all variables into a single (C, H, W) array
+                # Stack all variables into a single (nvar, *spatial) array
                 var_names = list(composite.keys())
                 arrays = [composite[v] for v in var_names]
-                # Each array is (nx, ny); stack to (nvar, nx, ny)
                 X = np.stack(arrays, axis=0).astype(np.float32)
                 nan_count = np.isnan(X).sum()
                 if nan_count > 0:
                     logger.warning(f"  {nan_count:,} NaN cells in composite (uncovered AMR regions)")
                     X = np.nan_to_num(X, nan=0.0)
 
+                dim = hdr["spacedim"]
                 dom_lo, dom_hi = hdr["domain_boxes"][hdr["finest_level"]]
-                nx = dom_hi[0] - dom_lo[0] + 1
-                ny = dom_hi[1] - dom_lo[1] + 1 if hdr["spacedim"] >= 2 else 1
+                grid_shape = [dom_hi[d] - dom_lo[d] + 1 for d in range(dim)]
                 dx_fine = hdr["dx_per_level"][hdr["finest_level"]]
 
-                # Coordinate arrays
-                x_coords = (np.arange(nx) + 0.5) * dx_fine[0] + hdr["prob_lo"][0]
-                y_coords = (np.arange(ny) + 0.5) * dx_fine[1] + hdr["prob_lo"][1] if hdr["spacedim"] >= 2 else np.array([0.0])
+                # Coordinate arrays, one per spatial axis
+                axis_names = ["x_coords", "y_coords", "z_coords"]
+                coords = {
+                    axis_names[d]: (np.arange(grid_shape[d]) + 0.5) * dx_fine[d] + hdr["prob_lo"][d]
+                    for d in range(dim)
+                }
 
                 ctx.data = {
                     "X": X,
                     "var_names": var_names,
-                    "x_coords": x_coords,
-                    "y_coords": y_coords,
                     "time": hdr["time"],
                     "spacedim": hdr["spacedim"],
                     "finest_level": hdr["finest_level"],
@@ -618,12 +633,14 @@ def get_structure_steps():
                     "ref_ratios": hdr["ref_ratios"],
                     "prob_lo": hdr["prob_lo"],
                     "prob_hi": hdr["prob_hi"],
+                    **coords,
                 }
                 ctx.metadata["output_shape"] = list(X.shape)
                 ctx.metadata["var_names"] = var_names
+                grid_str = "×".join(str(n) for n in grid_shape)
                 logger.info(
                     f"Composited to uniform grid: {X.shape} "
-                    f"({len(var_names)} vars × {nx}×{ny} cells)"
+                    f"({len(var_names)} vars × {grid_str} cells)"
                 )
             except Exception as e:
                 ctx.add_error(f"Error compositing AMR levels: {e}")
@@ -705,7 +722,7 @@ def get_output_steps():
         description = "Save AMR field arrays to NPZ"
 
         def validate(self, ctx: PipelineContext) -> bool:
-            return isinstance(ctx.data, dict) and "X" in ctx.data
+            return not ctx.is_multi_file and isinstance(ctx.data, dict) and "X" in ctx.data
 
         def execute(self, ctx: PipelineContext) -> PipelineContext:
             try:
@@ -733,7 +750,244 @@ def get_output_steps():
                 ctx.add_error(f"Error saving combustion NPZ: {e}")
             return ctx
 
-    return [SaveCombustionNPZ(), WriteChecksums(), SaveMetadata()]
+    class SavePerLevelNPZ(PipelineStep):
+        """
+        Save per-level AMR field arrays (structure_mode='per_level') to NPZ.
+
+        Box arrays for a given level/variable are stacked into one array when
+        every box has the same shape (the common case for a fixed AMReX grid
+        layout); otherwise they're saved as a ragged object array.
+        """
+
+        name = "save_per_level_npz"
+        stage = PipelineStage.OUTPUT
+        description = "Save per-level AMR field arrays to NPZ"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return (
+                not ctx.is_multi_file
+                and isinstance(ctx.data, dict)
+                and isinstance(ctx.data.get("levels"), dict)
+            )
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                output_dir = ctx.output_dir
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                save_kwargs = {}
+                for level_key, level_info in ctx.data["levels"].items():
+                    level_vars = level_info.get("data", {})
+                    boxes = level_info.get("boxes", [])
+
+                    for var, box_arrays in level_vars.items():
+                        key = f"{level_key}__{var}"
+                        shapes = {arr.shape for arr in box_arrays}
+                        if len(shapes) == 1:
+                            save_kwargs[key] = np.stack(box_arrays, axis=0)
+                        else:
+                            obj_arr = np.empty(len(box_arrays), dtype=object)
+                            for i, arr in enumerate(box_arrays):
+                                obj_arr[i] = arr
+                            save_kwargs[key] = obj_arr
+
+                    save_kwargs[f"{level_key}__box_lo"] = np.array([b[0] for b in boxes])
+                    save_kwargs[f"{level_key}__box_hi"] = np.array([b[1] for b in boxes])
+                    save_kwargs[f"{level_key}__dx"] = np.array(level_info.get("dx", []))
+
+                save_kwargs["var_names"] = np.array(ctx.data.get("var_names", []))
+                save_kwargs["time"] = np.array(ctx.data.get("time", 0.0))
+                save_kwargs["spacedim"] = np.array(ctx.data.get("spacedim", 0))
+                save_kwargs["num_levels"] = np.array(ctx.data.get("num_levels", 0))
+                save_kwargs["ref_ratios"] = np.array(ctx.data.get("ref_ratios", []))
+                save_kwargs["prob_lo"] = np.array(ctx.data.get("prob_lo", []))
+                save_kwargs["prob_hi"] = np.array(ctx.data.get("prob_hi", []))
+
+                out_path = output_dir / "snapshot.npz"
+                np.savez_compressed(out_path, **save_kwargs)
+                ctx.metadata["output_files"] = [str(out_path)]
+                logger.info(f"Saved per-level AMReX snapshot: {out_path} ({out_path.stat().st_size // 1024} KB)")
+
+            except Exception as e:
+                ctx.add_error(f"Error saving per-level combustion NPZ: {e}")
+            return ctx
+
+    class SaveTimeSeriesHDF5(PipelineStep):
+        """
+        Consolidate a time series of AMR plotfiles into one HDF5 file with
+        full/train/val/test groups.
+
+        Activates only when multiple plotfile paths are passed in (e.g.
+        `redi run plt00000 plt00100 ... -d combustion`). Each snapshot is run
+        through the domain's own ingest->preprocess->transform->structure
+        steps (reused as-is, so field values match single-file processing),
+        forced to structure_mode='composite' so every snapshot lands on the
+        same fixed-shape uniform grid -- AMReX regrids its refined levels as
+        the flame moves (box counts genuinely differ run to run), so raw
+        per-box arrays can't be stacked across time; compositing to the
+        finest-level grid is what makes a shared tensor shape possible.
+
+        Snapshots are stacked into a single (time, var, *spatial) tensor.
+        Splits are chronological, not shuffled: consecutive plotfiles are
+        states of one continuously evolving flow, so a random split would
+        scatter near-duplicate neighboring timesteps across train/val/test
+        and leak information between them.
+        """
+
+        name = "save_time_series_hdf5"
+        stage = PipelineStage.OUTPUT
+        description = "Stack AMR snapshots across time; save full/train/val/test HDF5"
+
+        def __init__(self, train_ratio: float = 0.8, val_ratio: float = 0.1, test_ratio: float = 0.1):
+            super().__init__()
+            self.train_ratio = train_ratio
+            self.val_ratio = val_ratio
+            self.test_ratio = test_ratio
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.is_multi_file and ctx.metadata.get("file_format") == "amrex-plotfile"
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import h5py
+            except ImportError:
+                from ..pipeline import missing_dependency_error
+                ctx.add_error(missing_dependency_error("h5py", "hdf5"))
+                return ctx
+
+            from ..pipeline import create_context
+
+            try:
+                split_cfg = ctx.config.get("split", {})
+                if not isinstance(split_cfg, dict):
+                    split_cfg = {}
+                train_ratio = split_cfg.get("train_ratio", self.train_ratio)
+                val_ratio = split_cfg.get("val_ratio", self.val_ratio)
+                test_ratio = split_cfg.get("test_ratio", self.test_ratio)
+
+                snapshot_steps = (
+                    get_ingest_steps() + get_preprocess_steps()
+                    + get_transform_steps() + get_structure_steps()
+                )
+                # Compositing (not per-box) is required so every snapshot shares
+                # one fixed grid shape, regardless of AMR regridding over time.
+                snap_combustion_cfg = dict(ctx.config.get("combustion", {}))
+                snap_combustion_cfg["structure_mode"] = "composite"
+
+                snapshots = []
+                for path in ctx.input_paths:
+                    snap_ctx = create_context(
+                        input_path=str(path),
+                        output_dir=str(ctx.output_dir),
+                        domain="combustion",
+                        combustion=snap_combustion_cfg,
+                    )
+                    for step in snapshot_steps:
+                        if step.validate(snap_ctx):
+                            snap_ctx = step.execute(snap_ctx)
+                    if snap_ctx.errors:
+                        ctx.add_error(f"Snapshot {path.name} failed: {snap_ctx.errors}")
+                        continue
+                    if not (isinstance(snap_ctx.data, dict) and "X" in snap_ctx.data):
+                        ctx.add_error(f"Snapshot {path.name} produced no composited data")
+                        continue
+                    snapshots.append(snap_ctx.data)
+
+                if not snapshots:
+                    ctx.add_error("No snapshots loaded for time-series consolidation")
+                    return ctx
+
+                # Chronological order (physical time), independent of path/glob order
+                snapshots.sort(key=lambda s: s.get("time", 0.0))
+                n_time = len(snapshots)
+                times = np.array([s.get("time", 0.0) for s in snapshots])
+
+                ref_shape = snapshots[0]["X"].shape
+                mismatched = [i for i, s in enumerate(snapshots) if s["X"].shape != ref_shape]
+                if mismatched:
+                    ctx.add_error(
+                        f"Composited grid shape differs across snapshots "
+                        f"(e.g. domain size changed): {ref_shape} vs "
+                        f"{snapshots[mismatched[0]]['X'].shape}"
+                    )
+                    return ctx
+
+                X_all = np.stack([s["X"] for s in snapshots], axis=0)  # (n_time, nvar, *spatial)
+
+                consolidated: Dict[str, np.ndarray] = {"X": X_all, "times": times}
+                for coord_key in ("x_coords", "y_coords", "z_coords"):
+                    if coord_key in snapshots[0]:
+                        consolidated[coord_key] = snapshots[0][coord_key]
+
+                # Chronological split (no shuffling -- see class docstring)
+                train_end = min(int(round(n_time * train_ratio)), n_time)
+                val_end = min(max(train_end + int(round(n_time * val_ratio)), train_end), n_time)
+                indices = np.arange(n_time)
+                split_indices = {
+                    "train": indices[:train_end],
+                    "val": indices[train_end:val_end],
+                    "test": indices[val_end:],
+                }
+                for split_name, idx in split_indices.items():
+                    if len(idx) == 0:
+                        logger.warning(f"  Split '{split_name}' has 0 snapshots (only {n_time} snapshots total)")
+
+                def make_group(idx: np.ndarray) -> Dict[str, np.ndarray]:
+                    g = {}
+                    for k, v in consolidated.items():
+                        if isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == n_time:
+                            g[k] = v[idx]
+                        else:
+                            g[k] = v
+                    return g
+
+                groups = {"full": consolidated}
+                groups.update({name: make_group(idx) for name, idx in split_indices.items()})
+
+                output_dir = ctx.output_dir
+                output_dir.mkdir(parents=True, exist_ok=True)
+                out_path = output_dir / "dataset.h5"
+
+                with h5py.File(out_path, "w") as f:
+                    f.attrs["n_snapshots"] = n_time
+                    f.attrs["var_names"] = json.dumps(snapshots[0].get("var_names", []))
+                    f.attrs["spacedim"] = snapshots[0].get("spacedim", 0)
+                    f.attrs["ref_ratios"] = json.dumps(snapshots[0].get("ref_ratios", []))
+                    f.attrs["prob_lo"] = json.dumps(snapshots[0].get("prob_lo", []))
+                    f.attrs["prob_hi"] = json.dumps(snapshots[0].get("prob_hi", []))
+
+                    for group_name, group_data in groups.items():
+                        grp = f.create_group(group_name)
+                        for k, v in group_data.items():
+                            if v.size == 0:
+                                continue
+                            kw = {} if v.ndim == 0 else {"compression": "gzip", "chunks": True}
+                            grp.create_dataset(k, data=v, **kw)
+
+                ctx.metadata["output_files"] = [str(out_path)]
+                ctx.metadata["time_series"] = {
+                    "n_snapshots": n_time,
+                    "tensor_shape": list(X_all.shape),
+                    "times": times.tolist(),
+                    "split": {
+                        name: {
+                            "n_snapshots": len(idx),
+                            "time_range": [float(times[idx[0]]), float(times[idx[-1]])] if len(idx) else None,
+                        }
+                        for name, idx in split_indices.items()
+                    },
+                }
+                logger.info(
+                    f"Saved consolidated time-series HDF5: {out_path} "
+                    f"(X: {X_all.shape}; train={len(split_indices['train'])}, "
+                    f"val={len(split_indices['val'])}, test={len(split_indices['test'])})"
+                )
+
+            except Exception as e:
+                ctx.add_error(f"Error consolidating time series: {e}")
+            return ctx
+
+    return [SaveCombustionNPZ(), SavePerLevelNPZ(), SaveTimeSeriesHDF5(), WriteChecksums(), SaveMetadata()]
 
 
 def get_full_pipeline():
