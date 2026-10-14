@@ -25,10 +25,16 @@ class NormalizeNumeric(PipelineStep):
     stage = PipelineStage.TRANSFORM
     description = "Normalize numerical columns (z-score or min-max)"
 
-    def __init__(self, method: str = "zscore", columns: Optional[List[str]] = None):
+    def __init__(
+        self,
+        method: str = "zscore",
+        columns: Optional[List[str]] = None,
+        exclude: Optional[List[str]] = None,
+    ):
         super().__init__()
         self.method = method  # "zscore", "minmax", "robust"
         self.columns = columns  # None = all numeric columns
+        self.exclude = list(exclude or [])  # never normalized (e.g. the target)
 
     def validate(self, ctx: PipelineContext) -> bool:
         import pandas as pd
@@ -48,6 +54,7 @@ class NormalizeNumeric(PipelineStep):
             else:
                 cols = ctx.data.select_dtypes(include=['number']).columns.tolist()
                 logger.debug(f"     Auto-selected {len(cols)} numeric columns")
+            cols = [c for c in cols if c not in self.exclude]
 
             logger.debug(f"     Normalization method: {self.method}")
 
@@ -102,12 +109,14 @@ class EncodeCategorical(PipelineStep):
         self,
         method: str = "onehot",
         columns: Optional[List[str]] = None,
-        max_categories: int = 50
+        max_categories: int = 50,
+        exclude: Optional[List[str]] = None,
     ):
         super().__init__()
         self.method = method  # "onehot", "label", "frequency"
         self.columns = columns
         self.max_categories = max_categories
+        self.exclude = list(exclude or [])  # never encoded (e.g. the target)
 
     def validate(self, ctx: PipelineContext) -> bool:
         import pandas as pd
@@ -126,6 +135,7 @@ class EncodeCategorical(PipelineStep):
             else:
                 cols = ctx.data.select_dtypes(include=['object', 'category']).columns.tolist()
                 logger.debug(f"     Auto-selected {len(cols)} categorical columns")
+            cols = [c for c in cols if c not in self.exclude]
 
             logger.debug(f"     Encoding method: {self.method}")
             logger.debug(f"     Max categories for one-hot: {self.max_categories}")
@@ -295,12 +305,14 @@ class SelectFeatures(PipelineStep):
         self,
         method: str = "variance",
         threshold: float = 0.01,
-        target_column: Optional[str] = None
+        target_column: Optional[str] = None,
+        exclude: Optional[List[str]] = None,
     ):
         super().__init__()
         self.method = method  # "variance", "correlation", "mutual_info"
         self.threshold = threshold
         self.target_column = target_column
+        self.exclude = list(exclude or [])  # never dropped (e.g. the target)
 
     def validate(self, ctx: PipelineContext) -> bool:
         import pandas as pd
@@ -313,7 +325,8 @@ class SelectFeatures(PipelineStep):
             if not isinstance(ctx.data, pd.DataFrame):
                 return ctx
 
-            numeric_cols = ctx.data.select_dtypes(include=['number']).columns.tolist()
+            numeric_cols = [c for c in ctx.data.select_dtypes(include=['number']).columns.tolist()
+                            if c not in self.exclude]
             removed = []
 
             logger.debug(f"     Selection method: {self.method}")
@@ -357,24 +370,99 @@ class SelectFeatures(PipelineStep):
         return ctx
 
 
+class EncodeTarget(PipelineStep):
+    """Label-encode a non-numeric target column so it can be saved as a numeric array.
+
+    A numeric target is left untouched. Codes are assigned in sorted label order, so the
+    mapping is deterministic, and it is recorded in ``metadata["target_encoding"]``.
+    """
+
+    name = "encode_target"
+    stage = PipelineStage.TRANSFORM
+    description = "Label-encode a non-numeric target column"
+
+    def __init__(self, target_column: str):
+        super().__init__()
+        self.target_column = target_column
+
+    def validate(self, ctx: PipelineContext) -> bool:
+        import pandas as pd
+        return isinstance(ctx.data, pd.DataFrame)
+
+    def execute(self, ctx: PipelineContext) -> PipelineContext:
+        try:
+            import pandas as pd
+            if not isinstance(ctx.data, pd.DataFrame):
+                return ctx
+
+            col = self.target_column
+            if col not in ctx.data.columns:
+                ctx.add_error(
+                    f"Target column '{col}' not found in the data "
+                    f"(columns: {', '.join(map(str, list(ctx.data.columns)[:10]))}...)"
+                )
+                return ctx
+
+            series = ctx.data[col]
+            if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+                ctx.metadata["target_encoding"] = {"column": col, "method": "none"}
+                return ctx
+
+            labels = sorted(series.dropna().unique().tolist(), key=str)
+            codes = {label: i for i, label in enumerate(labels)}
+            ctx.data[col] = series.map(codes)
+            if ctx.data[col].isna().any():
+                ctx.add_error(f"Target column '{col}' has missing values after preprocessing")
+            else:
+                ctx.data[col] = ctx.data[col].astype("int64")
+            ctx.metadata["target_encoding"] = {
+                "column": col,
+                "method": "label",
+                "mapping": {str(i): str(label) for label, i in codes.items()},
+            }
+            logger.info(f"Label-encoded target '{col}' ({len(labels)} classes)")
+        except Exception as e:
+            ctx.add_error(f"Error encoding target: {str(e)}")
+        return ctx
+
+
+# Variance below this means the column holds a single value (float noise aside).
+CONSTANT_VARIANCE = 1e-12
+
+
 # Convenience function to get standard transform steps
 def get_transform_steps(
     domain: str = "general",
     normalize: bool = True,
     encode_categoricals: bool = True,
-    auto_features: bool = False
+    auto_features: bool = False,
+    target_column: Optional[str] = None,
+    drop_constant: bool = False,
 ) -> List[PipelineStep]:
-    """Get the standard transform pipeline steps"""
+    """Get the standard transform pipeline steps.
+
+    ``target_column`` keeps that column out of normalization, encoding and feature
+    selection, and label-encodes it if it is not numeric. ``drop_constant`` removes
+    numeric columns with a single value. Both default off, which leaves the steps
+    exactly as they were.
+    """
     steps = []
+    protected = [target_column] if target_column else []
+
+    if target_column:
+        steps.append(EncodeTarget(target_column))
+
+    if drop_constant:
+        steps.append(SelectFeatures(method="variance", threshold=CONSTANT_VARIANCE, exclude=protected))
 
     if auto_features:
         steps.append(AutoFeatureEngineering())
 
     if normalize:
-        steps.append(NormalizeNumeric())
+        steps.append(NormalizeNumeric(exclude=protected))
 
     if encode_categoricals:
-        steps.append(EncodeCategorical())
+        steps.append(EncodeCategorical(exclude=protected))
 
     return steps
 

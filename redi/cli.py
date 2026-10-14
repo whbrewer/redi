@@ -345,6 +345,47 @@ def _generate_readiness_report(primary_path, domain, config, ctx, step_results, 
     ])
 
 
+def _apply_aidrin_report(ctx, report, input_paths, domain, style, applied, apply):
+    """Check the AIDRIN report against this run, show the plan, and record the link.
+
+    ``applied`` is the list of actions the pipeline was configured to take (empty with
+    --aidrin-no-apply or for domain pipelines). See redi.aidrin_manifest.
+    """
+    from .aidrin_manifest import build_plan, check_input, provenance_block
+
+    plan = check_input(report, input_paths) + build_plan(report, domain, applied)
+    block = provenance_block(report, plan, applied)
+    block["mode"] = "apply" if apply else "advisory"
+    ctx.metadata["aidrin_assessment"] = block
+
+    if style == "json":
+        return
+    labels = {
+        "applied": ("✓", Colors.GREEN), "warning": ("⚠", Colors.YELLOW),
+        "advice": ("•", Colors.CYAN), "unsupported": ("✗", Colors.RED),
+    }
+    note = ("Items marked 'applied' change this run; the rest are advisory." if apply
+            else "Advisory only (--aidrin-no-apply): nothing is changed.")
+    if style == "rich":
+        print_section("AIDRIN Assessment")
+        print(f"    {Colors.DIM}{report.path}{Colors.END}")
+        print(f"    {Colors.DIM}{note}{Colors.END}")
+    else:
+        print(f"AIDRIN report: {report.path} ({note})")
+    if not plan:
+        print("    No notes for this run." if style == "rich" else "No notes.")
+    for item in plan:
+        mark, color = labels.get(item.kind, ("•", Colors.CYAN))
+        if style == "rich":
+            print(f"    {color}{mark} {item.kind}{Colors.END} {item.message}")
+            for ev in item.evidence:
+                print(f"        {Colors.DIM}{ev}{Colors.END}")
+        else:
+            print(f"[{item.kind}] {item.message}")
+            for ev in item.evidence:
+                print(f"    {ev}")
+
+
 def run_pipeline(
     input_path: Optional[str] = None,
     output_dir: str = "./output",
@@ -359,6 +400,8 @@ def run_pipeline(
     normalize_method: Optional[str] = None,
     verify: bool = False,
     raps_jobs: bool = False,
+    aidrin_report=None,
+    aidrin_apply: bool = True,
 ):
     """Run the REDI pipeline with engaging visual output
 
@@ -370,6 +413,8 @@ def run_pipeline(
         config: Additional configuration
         verbose: Enable verbose output
         style: Output style (rich, simple, json)
+        aidrin_report: Loaded AIDRIN manifest (redi.aidrin_manifest.AidrinReport), if any
+        aidrin_apply: Act on the report where the pipeline supports it (False = advisory only)
         input_paths: List of input file paths for multi-file processing
         array_mode: If True, optimize pipeline for array data (skip DataFrame steps)
         normalize_method: Normalization method for array data ("minmax" or "zscore")
@@ -487,6 +532,9 @@ def run_pipeline(
 
     # Enable step verification if requested
     ctx.verify_steps = verify
+
+    # Actions from the AIDRIN report that the pipeline is actually configured to take
+    aidrin_applied: List[str] = []
 
     # Record run provenance/version now, before the pipeline's own SaveMetadata
     # step overwrites metadata.json — otherwise we'd read back this same run's
@@ -626,18 +674,34 @@ def run_pipeline(
                     for step in get_preprocess_steps(domain):
                         pipeline.add_step(step)
 
+            # Settings the AIDRIN report supports. They need the DataFrame steps, so they
+            # are only wired in when those stages are present and not in array mode.
+            _target, _stratify, _drop_constant = None, False, False
+            if aidrin_report is not None and aidrin_apply and not array_mode:
+                from .aidrin_manifest import derive_settings
+                _s = derive_settings(aidrin_report)
+                if _s.target_column and "transform" in stages and "structure" in stages:
+                    _target = _s.target_column
+                    aidrin_applied.append("target-role")
+                    if _s.stratify and "output" in stages:
+                        _stratify = True
+                        aidrin_applied.append("stratified-split")
+                if _s.drop_constant and "transform" in stages:
+                    _drop_constant = True
+                    aidrin_applied.append("constant-features")
+
             if "transform" in stages:
                 if not array_mode:  # Skip DataFrame transforms in array mode
-                    for step in get_transform_steps(domain):
+                    for step in get_transform_steps(domain, target_column=_target, drop_constant=_drop_constant):
                         pipeline.add_step(step)
 
             if "structure" in stages:
                 if not array_mode:  # Skip DataFrame structure in array mode
-                    for step in get_structure_steps(domain):
+                    for step in get_structure_steps(domain, target_column=_target):
                         pipeline.add_step(step)
 
             if "output" in stages:
-                for step in get_output_steps():
+                for step in get_output_steps(stratify=_stratify):
                     pipeline.add_step(step)
 
             mode_str = " (array mode)" if array_mode else ""
@@ -652,6 +716,10 @@ def run_pipeline(
         else:
             print(f"Error: Could not load domain module: {e}")
         return None
+
+    if aidrin_report is not None:
+        _apply_aidrin_report(ctx, aidrin_report, [str(p) for p in paths], domain, style,
+                             aidrin_applied, aidrin_apply)
 
     # Execute pipeline with visual feedback
     if style == "rich":
@@ -828,6 +896,15 @@ def run_pipeline(
                 print(f"    {Colors.YELLOW}⚠ Could not generate provenance card: {err}{Colors.END}")
             elif style == "simple":
                 print(f"  [WARN] Could not generate provenance card: {err}")
+
+    if aidrin_report is not None:
+        from .aidrin_manifest import record_outcomes
+        for entry in record_outcomes(ctx.metadata):
+            msg = f"AIDRIN action '{entry['topic']}' was not applied: {entry['detail']}"
+            if style == "rich":
+                print(f"    {Colors.YELLOW}⚠ {msg}{Colors.END}")
+            elif style == "simple":
+                print(f"  [WARN] {msg}")
 
     total_time = time.time() - total_start
 
@@ -2689,6 +2766,13 @@ Download examples (climate domain)::
                            help="Verbose output (-v show steps, -vv also show skipped steps)")
     run_parser.add_argument("--verify", action="store_true",
                            help="Run verification checks after each pipeline step")
+    run_parser.add_argument("--aidrin-report", dest="aidrin_report", metavar="MANIFEST",
+                           help="AIDRIN assessment manifest (aidrin_assessment.json) for this data. "
+                                "Checks it matches the input, acts on the findings the generic pipeline "
+                                "supports (confirmed target role, stratified split, constant columns), "
+                                "prints what it cannot do, and records the link and outcomes in metadata.json.")
+    run_parser.add_argument("--aidrin-no-apply", dest="aidrin_no_apply", action="store_true",
+                           help="With --aidrin-report: only report; change nothing in the pipeline")
     run_parser.add_argument("--raps-jobs", action="store_true", dest="raps_jobs",
                            help="Extract RAPS Job objects from HPC telemetry (HPC domain only)")
     run_parser.add_argument("--start",
@@ -3427,6 +3511,16 @@ def _handle_run_command(args):
         print(f"{Colors.DIM}Tip: Use --download to fetch data from ESGF or CDS{Colors.END}")
         sys.exit(1)
 
+    # Load the AIDRIN report up front so a bad path or version fails before any work
+    aidrin_report = None
+    if getattr(args, 'aidrin_report', None):
+        from .aidrin_manifest import AidrinReportError, load_report
+        try:
+            aidrin_report = load_report(args.aidrin_report)
+        except AidrinReportError as e:
+            print(f"{Colors.RED}Error: {e}{Colors.END}")
+            sys.exit(1)
+
     # Determine output directory
     # If -o is explicitly set, use it directly (no hash)
     # Otherwise, generate hash-based output dir
@@ -3464,6 +3558,10 @@ def _handle_run_command(args):
 
     # Check for parallel execution mode
     parallel_enabled = getattr(args, 'parallel', False) or config.get('parallel', {}).get('enabled', False)
+
+    if parallel_enabled and aidrin_report is not None:
+        print(f"{Colors.RED}Error: --aidrin-report is not supported with parallel execution yet.{Colors.END}")
+        sys.exit(1)
 
     if parallel_enabled:
         run_parallel_pipeline(
@@ -3522,6 +3620,8 @@ def _handle_run_command(args):
         normalize_method=normalize_method,
         verify=verify,
         raps_jobs=raps_jobs,
+        aidrin_report=aidrin_report,
+        aidrin_apply=not getattr(args, 'aidrin_no_apply', False),
     )
 
 

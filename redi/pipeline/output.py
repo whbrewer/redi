@@ -35,7 +35,8 @@ class TrainValTestSplit(PipelineStep):
         test_ratio: float = 0.1,
         shuffle: bool = True,
         random_seed: int = 42,
-        stratify_column: Optional[str] = None
+        stratify_column: Optional[str] = None,
+        stratify: bool = False,
     ):
         super().__init__()
         self.train_ratio = train_ratio
@@ -43,7 +44,12 @@ class TrainValTestSplit(PipelineStep):
         self.test_ratio = test_ratio
         self.shuffle = shuffle
         self.random_seed = random_seed
+        # NOTE: stratify_column is accepted but never used; stratify=True is the working
+        # option and stratifies on the target array ``y``.
         self.stratify_column = stratify_column
+        # Keep each class's share the same in train/val/test. Needs a discrete ``y``;
+        # otherwise falls back to the random split and records why in metadata["split"].
+        self.stratify = stratify
 
     def execute(self, ctx: PipelineContext) -> PipelineContext:
         try:
@@ -113,6 +119,9 @@ class TrainValTestSplit(PipelineStep):
                     "shuffle": self.shuffle,
                     "random_seed": self.random_seed,
                 }
+                if self.stratify:
+                    ctx.metadata["split"]["stratified"] = False
+                    ctx.metadata["split"]["stratify_note"] = "no target array y to stratify on"
                 logger.info(f"Split {len(splittable)} arrays: "
                             f"train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
                 return ctx
@@ -130,17 +139,26 @@ class TrainValTestSplit(PipelineStep):
             if self.shuffle:
                 logger.debug(f"     Random seed: {self.random_seed}")
 
-            if self.shuffle:
-                np.random.seed(self.random_seed)
-                np.random.shuffle(indices)
+            stratify_note = None
+            if self.stratify:
+                stratified, stratify_note = self._stratified_indices(y)
+            else:
+                stratified = None
 
-            # Calculate split points
-            train_end = int(n_samples * self.train_ratio)
-            val_end = train_end + int(n_samples * self.val_ratio)
+            if stratified is not None:
+                train_idx, val_idx, test_idx = stratified
+            else:
+                if self.shuffle:
+                    np.random.seed(self.random_seed)
+                    np.random.shuffle(indices)
 
-            train_idx = indices[:train_end]
-            val_idx = indices[train_end:val_end]
-            test_idx = indices[val_end:]
+                # Calculate split points
+                train_end = int(n_samples * self.train_ratio)
+                val_end = train_end + int(n_samples * self.val_ratio)
+
+                train_idx = indices[:train_end]
+                val_idx = indices[train_end:val_end]
+                test_idx = indices[val_end:]
 
             logger.debug(f"     Train samples: {len(train_idx):,} ({len(train_idx)/n_samples*100:.1f}%)")
             logger.debug(f"     Val samples: {len(val_idx):,} ({len(val_idx)/n_samples*100:.1f}%)")
@@ -176,11 +194,59 @@ class TrainValTestSplit(PipelineStep):
                 "shuffle": self.shuffle,
                 "random_seed": self.random_seed
             }
+            if self.stratify:
+                ctx.metadata["split"]["stratified"] = stratified is not None
+                if stratify_note:
+                    ctx.metadata["split"]["stratify_note"] = stratify_note
             logger.info(f"Split data: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
 
         except Exception as e:
             ctx.add_error(f"Error splitting data: {str(e)}")
         return ctx
+
+
+    def _stratified_indices(self, y):
+        """Per-class split indices, or ``(None, reason)`` when ``y`` cannot be stratified.
+
+        Each class is shuffled with a seeded generator and cut by the same ratios, so every
+        class appears in train/val/test in roughly the overall proportions. A class always
+        keeps at least one sample in train, so a rare class is never test-only.
+        """
+        import numpy as np
+
+        if y is None:
+            return None, "no target array y to stratify on"
+        y = np.asarray(y)
+        if y.ndim != 1:
+            return None, "target is not one-dimensional"
+        if y.dtype.kind == "f":
+            finite = y[np.isfinite(y)]
+            if len(finite) != len(y) or not np.all(finite == np.round(finite)):
+                return None, "target is continuous, not class labels"
+        classes = np.unique(y)
+        if len(classes) > 50:
+            return None, f"target has {len(classes)} distinct values; too many to treat as classes"
+
+        rng = np.random.RandomState(self.random_seed)
+        parts = {"train": [], "val": [], "test": []}
+        for cls in classes:
+            idx = np.where(y == cls)[0]
+            if self.shuffle:
+                rng.shuffle(idx)
+            n = len(idx)
+            n_train = max(1, int(n * self.train_ratio))
+            n_val = int(n * self.val_ratio)
+            parts["train"].append(idx[:n_train])
+            parts["val"].append(idx[n_train:n_train + n_val])
+            parts["test"].append(idx[n_train + n_val:])
+
+        out = []
+        for name in ("train", "val", "test"):
+            merged = np.concatenate(parts[name]) if parts[name] else np.array([], dtype=int)
+            if self.shuffle:
+                rng.shuffle(merged)
+            out.append(merged)
+        return tuple(out), None
 
 
 class ShardData(PipelineStep):
@@ -559,13 +625,14 @@ def get_output_steps(
     output_format: str = "npz",  # "npz", "hdf5", "parquet"
     split: bool = True,
     shard: bool = False,
-    shard_size: int = 10000
+    shard_size: int = 10000,
+    stratify: bool = False,
 ) -> List[PipelineStep]:
     """Get the standard output pipeline steps"""
     steps = []
 
     if split:
-        steps.append(TrainValTestSplit())
+        steps.append(TrainValTestSplit(stratify=stratify))
 
     if shard:
         steps.append(ShardData(shard_size=shard_size, output_format=output_format))
