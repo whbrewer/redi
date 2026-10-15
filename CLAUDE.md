@@ -140,6 +140,15 @@ redi analyze -c analyze_config.yaml
   -c, --config FILE       YAML configuration file
 ```
 
+### redi inspect --headers-only
+
+Read only file headers/metadata (groups, dataset shapes, dtypes, attributes, schemas) and report them. No array data is loaded, and there is no domain detection, readiness scoring, or transform. Accepts a file, directory (recursive), or glob. Supports HDF5/NetCDF, npy/npz, Parquet, CSV/TSV. Files sharing a schema are grouped.
+
+```bash
+redi inspect /path/to/h5store --headers-only
+redi inspect "data-*.h5" --headers-only --style json -o ./hdr   # writes ./hdr/headers.json
+```
+
 ### redi discover
 
 Analyze unknown datasets and propose pipelines.

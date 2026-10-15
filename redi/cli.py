@@ -2882,6 +2882,9 @@ Examples:
                                 help="Append timestamp to output dir for unique runs")
     inspect_parser.add_argument("--data-dir", dest="data_dir",
                                 help="Directory containing data files to scan for statistics")
+    inspect_parser.add_argument("--headers-only", dest="headers_only", action="store_true",
+                                help="Only read file headers/metadata (shapes, dtypes, attributes); "
+                                     "accepts a file, directory, or glob; no domain detection or transforms")
     inspect_parser.add_argument("--watch", action="store_true",
                                 help="Watch for changes and re-run")
     inspect_parser.add_argument("--style", choices=["rich", "simple", "json"], default="rich",
@@ -3659,6 +3662,25 @@ def _run_data_inspect(path: str, output_dir: Optional[str], style: str):
         print(report)
 
 
+def _run_headers_only(path: str, output_dir: Optional[str], style: str):
+    """Extract header metadata only (no data loading, no transforms)."""
+    from .inspect.headers import collect_headers, format_headers_text, headers_to_json
+
+    result = collect_headers(path)
+    if result['n_files'] == 0:
+        print(f"{Colors.RED}Error: no supported data files found for {path}{Colors.END}")
+        sys.exit(1)
+
+    as_json = headers_to_json(result)
+    print(as_json if style == 'json' else format_headers_text(result))
+
+    if output_dir:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "headers.json").write_text(as_json)
+        print(f"\n{Colors.GREEN}Headers saved to {out / 'headers.json'}{Colors.END}")
+
+
 def _handle_inspect_command(args):
     """Handle the 'inspect' subcommand."""
     import yaml
@@ -3684,6 +3706,11 @@ def _handle_inspect_command(args):
         sys.exit(1)
 
     workflow_type = args.workflow_type if args.workflow_type != 'auto' else config.get('workflow_type', 'auto')
+
+    if getattr(args, 'headers_only', False):
+        style = args.style if args.style != 'rich' else config.get('style', 'rich')
+        _run_headers_only(path, args.output, style)
+        return
 
     if _is_workflow(path, workflow_type):
         # Workflow analysis path
