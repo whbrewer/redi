@@ -28,12 +28,24 @@ or catalog publishing.
 
 ## Setup
 
+Python environments differ per machine, so do not assume a venv path. Find it with `afx env`
+(see the `afx-env` skill):
+
 ```bash
-source /opt/venvs/drai/bin/activate    # also sets ESMFMKFILE for the climate domain
-redi --help
+afx env which              # interpreter for the current directory (exit 1 if none is mapped)
+afx env which --activate   # activation command, if one is registered
 ```
 
-If `redi` is not on PATH, the venv is not active. Do not `pip install` into the system Python.
+Run REDI through that environment, for example `"$(dirname "$(afx env which)")/redi" --help`,
+or activate it first. The venv's activation also sets `ESMFMKFILE` for the climate domain.
+
+If `afx env which` finds nothing, or `redi` is missing from the environment it returns:
+
+1. Do not guess a path, do not `pip install` into the system Python, and do not create a venv on
+   your own.
+2. Ask the user where their REDI venv is located, or whether you should create one.
+3. Once they answer, register it with `afx env add <name> <python> --repo <dir>` so later
+   sessions find it.
 
 ## Commands
 

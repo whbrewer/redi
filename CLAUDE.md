@@ -24,8 +24,11 @@ Supports climate, materials science, life sciences, fusion, HPC, and geospatial 
 ## Quick Start
 
 ```bash
-# Activate the environment
-source /opt/venvs/drai/bin/activate
+# Find and activate the environment (paths differ per machine; see the afx-env skill)
+afx env which --activate               # prints the activation command, if one is registered
+afx env which                          # interpreter for this repo; run `$(dirname ...)/redi` from it
+# No env mapped? Ask where your REDI venv is (or whether to create one), then:
+#   afx env add <name> <python> --repo <dir>
 
 # Try redi with no data (downloads a sample dataset automatically)
 redi demo                              # UCI Wine Quality (general domain)
