@@ -3,7 +3,8 @@
 OC22 / HydraGNN parallel speedup benchmark.
 
 Parallelises at the LMDB shard level: each worker runs `redi run <shard>`
-independently via the redi-hydragnn plugin.  Per-shard work is capped at
+independently via the redi-atomistics plugin (domain atomistic; the old
+hydragnn domain name is an alias).  Per-shard work is capped at
 max_samples structures so the 1-worker baseline is feasible.
 
 Fixed workload: 32 shards × 5,000 structures each = 160,000 total.

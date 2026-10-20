@@ -261,7 +261,7 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
     from .pipeline import PipelineStage
 
     # Map plugin domain names to valid ScientificDomain enum values
-    _DOMAIN_ALIAS = {"xgc1": "fusion", "hydragnn": "materials", "climax": "climate"}
+    _DOMAIN_ALIAS = {"xgc1": "fusion", "hydragnn": "materials", "atomistic": "materials", "climax": "climate"}
     card_domain = _DOMAIN_ALIAS.get(domain, domain)
 
     data_card = analyze_dataset(str(primary_path))
