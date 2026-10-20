@@ -52,6 +52,7 @@ You need Python ≥ 3.9 and a virtual environment containing REDI and the atomis
 ```bash
 # from the directory that holds the redi and redi-atomistics checkouts
 pip install -e ./redi
+git clone git@code.ornl.gov:drai/redi-atomistics.git   # the plugin
 pip install -e "./redi-atomistics[table]"     # adds pandas + pyarrow for Parquet/CSV input
 pip install torch torch_geometric             # only needed for -f pt output
 ```
