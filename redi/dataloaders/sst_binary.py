@@ -7,8 +7,14 @@ by buoyancy (Taylor-Green vortex initialization).
 
 File format:
     - Binary files stored directly in data directory
-    - Filenames: {variable}_{timestep} (e.g., u_28.440000, p_28.440000)
-    - Variables: u, v, w (velocity), r/rho (density), p (pressure), pv (potential vorticity)
+    - Filenames: either the real ORNL/OLCF published convention,
+      {variable}.{step} (e.g., u1.99, rho.99 -- step is an integer
+      snapshot index, not a physical time), or a legacy
+      {variable}_{timestep:.6f} convention (e.g., u_28.440000) kept for
+      backward compatibility with data already laid out that way. Both
+      are auto-detected per file, no flag needed.
+    - Variables: u1, u2, u3 (velocity) or legacy u, v, w; r/rho (density),
+      p (pressure), pv (potential vorticity)
     - Data stored in binary format with configurable grid dimensions
     - Grid dimensions encoded in directory name or config
 
@@ -45,14 +51,18 @@ class SSTBinaryDataLoader(BaseDataLoader):
         >>> snapshot = loader.load_snapshot(timestep=28.44)
     """
 
-    # Standard variable names
-    VARIABLES = {"u", "v", "w", "r", "rho", "p", "pv", "ee"}
+    # Standard variable names ("u1"/"u2"/"u3" are the real ORNL/OLCF
+    # published names; "u"/"v"/"w" are kept for the legacy convention)
+    VARIABLES = {"u", "v", "w", "u1", "u2", "u3", "r", "rho", "p", "pv", "ee"}
 
     # Variable descriptions
     VARIABLE_DESCRIPTIONS = {
         "u": "velocity component (x-direction)",
         "v": "velocity component (y-direction)",
         "w": "velocity component (z-direction)",
+        "u1": "velocity component (x-direction)",
+        "u2": "velocity component (y-direction)",
+        "u3": "velocity component (z-direction)",
         "r": "density perturbation",
         "rho": "density",
         "p": "pressure",
@@ -106,13 +116,15 @@ class SSTBinaryDataLoader(BaseDataLoader):
         timesteps = set()
         total_size = 0
 
-        # Pattern for SST files: {variable}_{timestep}
-        # Timestep format: decimal number (e.g., 28.440000)
-        file_pattern = re.compile(r'^([a-z]+)_(\d+\.\d+)$')
+        # Two SST filename conventions, tried per file:
+        #   {variable}.{step}          real ORNL/OLCF data, e.g. u1.99
+        #   {variable}_{timestep:.6f}   legacy/assumed convention, e.g. u_28.440000
+        file_pattern_dot = re.compile(r'^([a-zA-Z][a-zA-Z0-9]*)\.(\d+)$')
+        file_pattern_underscore = re.compile(r'^([a-zA-Z][a-zA-Z0-9]*)_(\d+\.\d+)$')
 
         for f in self.path.iterdir():
             if f.is_file():
-                match = file_pattern.match(f.name)
+                match = file_pattern_dot.match(f.name) or file_pattern_underscore.match(f.name)
                 if match:
                     var_name = match.group(1)
                     ts = float(match.group(2))
@@ -130,7 +142,7 @@ class SSTBinaryDataLoader(BaseDataLoader):
 
         if grid_shape is None and total_size > 0 and variables:
             # Try to infer from file size
-            sample_file = self.path / f"{variables[0]}_{min(timesteps):.6f}"
+            sample_file = self._get_file_for_variable(variables[0], min(timesteps))
             if sample_file.exists():
                 file_size = sample_file.stat().st_size
                 # Assume float32 or float64
@@ -144,8 +156,12 @@ class SSTBinaryDataLoader(BaseDataLoader):
                         break
                     # Check for common anisotropic grids (including 514 variants for SST)
                     common_grids = [
-                        (514, 512, 256),   # P1F4R32 SST dataset
-                        (512, 512, 256),
+                        (514, 512, 256),    # SST-TG-P1F4R3200, on-disk (+2 x-padding) -- confirmed
+                        (512, 512, 256),    # SST-TG-P1F4R3200, logical
+                        (1282, 1280, 640),  # SST-TG-P7F4R3200, on-disk (+2 x-padding) -- confirmed
+                        (1280, 1280, 640),  # SST-TG-P7F4R3200, logical
+                        (3586, 3584, 1792), # SST-TG-P50F4R3200, on-disk (+2 x-padding) -- confirmed
+                        (3584, 3584, 1792), # SST-TG-P50F4R3200, logical
                         (1026, 1024, 512),  # Larger SST with padding
                         (1024, 1024, 512),
                         (4098, 1024, 4096),  # P1F100 with padding
@@ -194,10 +210,16 @@ class SSTBinaryDataLoader(BaseDataLoader):
         )
 
     def _get_file_for_variable(self, variable: str, timestep: float) -> Path:
-        """Get the file path for a variable at a specific timestep."""
-        # Format timestep to 6 decimal places
-        filename = f"{variable}_{timestep:.6f}"
-        return self.path / filename
+        """
+        Get the file path for a variable at a specific timestep, trying
+        the real ORNL/OLCF dot convention (integer step, e.g. `u1.99`)
+        first and falling back to the legacy underscore convention
+        (e.g. `u_28.440000`) -- whichever actually exists on disk.
+        """
+        dot_path = self.path / f"{variable}.{int(round(timestep))}"
+        if dot_path.exists():
+            return dot_path
+        return self.path / f"{variable}_{timestep:.6f}"
 
     def load_variable(
         self,
@@ -304,20 +326,23 @@ class SSTBinaryDataLoader(BaseDataLoader):
         subcube: Optional[Tuple[slice, ...]] = None
     ) -> np.ndarray:
         """
-        Load the full velocity field (u, v, w) as a single array.
+        Load the full velocity field as a single array, using whichever
+        of the real ("u1"/"u2"/"u3") or legacy ("u"/"v"/"w") variable
+        names this dataset actually has.
 
         Args:
             timestep: Timestep to load
             subcube: Optional subcube region
 
         Returns:
-            Numpy array with shape (3, nz, ny, nx) containing [u, v, w]
+            Numpy array with shape (3, nz, ny, nx) containing the three
+            velocity components, in x/y/z order
         """
-        u = self.load_variable("u", timestep=timestep, subcube=subcube)
-        v = self.load_variable("v", timestep=timestep, subcube=subcube)
-        w = self.load_variable("w", timestep=timestep, subcube=subcube)
+        available = set(self.metadata.variables)
+        names = ("u1", "u2", "u3") if {"u1", "u2", "u3"} <= available else ("u", "v", "w")
+        components = [self.load_variable(name, timestep=timestep, subcube=subcube) for name in names]
 
-        return np.stack([u, v, w], axis=0)
+        return np.stack(components, axis=0)
 
     def get_statistics(self, variable: str, timestep: Optional[float] = None) -> Dict[str, float]:
         """
