@@ -637,7 +637,9 @@ def run_pipeline(
                 stages = ["ingest"] + list(stages)
 
             for step in steps:
-                if stages is None or step.stage.value in stages:
+                # Plugin steps may declare stage as a plain string rather than PipelineStage
+                stage_name = getattr(step.stage, "value", step.stage)
+                if stages is None or stage_name in stages:
                     pipeline.add_step(step)
             if style == "rich":
                 print(f"    ✓ Loaded {Colors.BOLD}{len(pipeline.steps)}{Colors.END} steps for {domain} domain")

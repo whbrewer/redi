@@ -109,6 +109,48 @@ class TestPipelineStages:
         assert stages[0] == PipelineStage.INGEST
         assert stages[-1] == PipelineStage.OUTPUT
 
+    def test_stage_filter_accepts_plugin_string_stages(self, sample_csv, temp_dir, monkeypatch):
+        """Test --stages filtering with plugin steps that declare stage as a string."""
+        import types
+        import redi.plugins
+        from redi.cli import run_pipeline
+
+        ran = []
+
+        def make_step(stage_name):
+            class _Step:
+                name = f"{stage_name}_step"
+                stage = stage_name
+                description = ""
+
+                def validate(self, ctx):
+                    return True
+
+                def execute(self, ctx):
+                    ran.append(self.name)
+                    return ctx
+
+            return _Step()
+
+        def get_full_pipeline():
+            return [make_step(s) for s in ("ingest", "preprocess", "output")]
+
+        plugin = types.SimpleNamespace(
+            module=types.SimpleNamespace(get_full_pipeline=get_full_pipeline),
+            get_full_pipeline=get_full_pipeline,
+        )
+        monkeypatch.setattr(redi.plugins, "get_plugin", lambda domain: plugin)
+
+        run_pipeline(
+            input_path=str(sample_csv),
+            output_dir=str(temp_dir / "out"),
+            domain="fake_plugin",
+            stages=["preprocess"],
+            style="simple",
+        )
+
+        assert ran == ["ingest_step", "preprocess_step"]
+
 
 class TestIngestSteps:
     """Tests for ingest pipeline steps."""
