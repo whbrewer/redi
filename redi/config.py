@@ -170,7 +170,13 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     issues = []
 
     # Validate split configuration
+    # (a plugin's own config schema may set 'split' to something other than a
+    # dict; treat that as "nothing to validate here" rather than crashing —
+    # see the 'normalize' handling below for the one shape that IS a
+    # documented plugin convention)
     split = config.get('split', {})
+    if not isinstance(split, dict):
+        split = {}
     if split.get('method') == 'temporal':
         for split_name in ['train', 'val', 'test']:
             split_cfg = split.get(split_name, {})
@@ -179,17 +185,30 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
                     f"Temporal split requires 'start' and 'end' dates for '{split_name}'"
                 )
 
-    # Validate normalization method
+    # Validate normalization method.
+    # Some plugins (e.g. redi-sst) use a bare string here ("minmax"/"zscore")
+    # rather than the core dict shape ({"method": ..., ...}) — merge_with_defaults
+    # simply replaces the dict-shaped default with that string in that case, so
+    # both shapes must be handled explicitly instead of assuming a dict.
     norm = config.get('normalize', {})
     valid_methods = ['zscore', 'minmax', 'none', None]
-    if norm.get('method') not in valid_methods:
-        issues.append(
-            f"Unknown normalization method: {norm.get('method')}. "
-            f"Valid options: {valid_methods}"
-        )
+    if isinstance(norm, str):
+        if norm not in valid_methods:
+            issues.append(
+                f"Unknown normalization method: {norm}. "
+                f"Valid options: {valid_methods}"
+            )
+    elif isinstance(norm, dict):
+        if norm.get('method') not in valid_methods:
+            issues.append(
+                f"Unknown normalization method: {norm.get('method')}. "
+                f"Valid options: {valid_methods}"
+            )
 
     # Validate regrid method
     regrid = config.get('regrid', {})
+    if not isinstance(regrid, dict):
+        regrid = {}
     valid_regrid = ['bilinear', 'conservative', 'nearest_s2d', 'patch', None]
     if regrid.get('method') not in valid_regrid:
         issues.append(
@@ -236,6 +255,8 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
 
     # Validate parallel configuration
     parallel = config.get('parallel', {})
+    if not isinstance(parallel, dict):
+        parallel = {}
     if parallel.get('enabled'):
         # Validate backend
         valid_backends = ['local', 'gnu', 'mpi', 'dragon']
