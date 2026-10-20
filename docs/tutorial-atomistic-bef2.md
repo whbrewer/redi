@@ -85,13 +85,13 @@ Pipeline: 8 steps
   [OK] filter_records
   [OK] flag_force_outliers
   [OK] reference_energies
-  [OK] build_oc22_graphs
-  [OK] assemble_oc22_pyg_data
-  [OK] save_hydragnn_output
+  [OK] build_graphs
+  [OK] assemble_pyg_data
+  [OK] save_output
 Done: 7 ok, 0 warnings, 0 errors
 ```
 
-Eight steps are loaded and seven run. `load_oc22_lmdb` skips itself because the input is
+Eight steps are loaded and seven run. `load_ocp_lmdb` skips itself because the input is
 a table, not an LMDB shard. Each step decides whether it applies from its input, so the
 same `-d atomistic` command also handles OC22/OC20 LMDB data.
 
@@ -103,9 +103,9 @@ What the steps do:
 | `filter_records` | preprocess | Drops structures with NaN/Inf energy or forces, or zero atoms (none here) |
 | `flag_force_outliers` | preprocess | Records max \|F\| per structure and summarizes the distribution |
 | `reference_energies` | transform | Least-squares per-element reference energies |
-| `build_oc22_graphs` | transform | Wraps positions into the cell, builds the periodic radius graph |
-| `assemble_oc22_pyg_data` | structure | Builds PyG `Data` objects (only used for `-f pt`) |
-| `save_hydragnn_output` | output | Splits by trajectory group and writes the files below |
+| `build_graphs` | transform | Wraps positions into the cell, builds the periodic radius graph |
+| `assemble_pyg_data` | structure | Builds PyG `Data` objects (only used for `-f pt`) |
+| `save_output` | output | Splits by trajectory group and writes the files below |
 
 ## 3. What you get
 
