@@ -13,6 +13,7 @@ import glob
 import logging
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -388,6 +389,66 @@ def _apply_aidrin_report(ctx, report, input_paths, domain, style, applied, apply
                 print(f"    {ev}")
 
 
+def _data_shape(ctx) -> Optional[list]:
+    """Shape of ctx.data (DataFrame/array), or None if there is none."""
+    from .pipeline import _snapshot_dataset_state
+    return _snapshot_dataset_state(ctx).get("shape")
+
+
+def _step_changes(step_name: str, old_metadata: dict, ctx, data_before: Optional[list]) -> dict:
+    """
+    What a step changed, for metadata.json: ctx.data shape before/after, the
+    ctx.metadata keys it added or removed, and anything the step reported
+    itself in ctx.metadata["step_changes"][step_name].
+    """
+    out = {}
+    skip = {"step_changes", "pipeline_steps", "pipeline_timing"}
+    added = sorted(k for k in ctx.metadata if k not in old_metadata and k not in skip)
+    removed = sorted(k for k in old_metadata if k not in ctx.metadata and k not in skip)
+    if added:
+        out["metadata_added"] = added
+    if removed:
+        out["metadata_removed"] = removed
+    data_after = _data_shape(ctx)
+    if data_before is not None or data_after is not None:
+        out["data_shape"] = {"before": data_before, "after": data_after}
+    reported = (ctx.metadata.get("step_changes") or {}).get(step_name)
+    if reported:
+        out["changes"] = reported
+    return out
+
+
+def _pipeline_step_records(step_log: list, step_results: list) -> list:
+    """Per-step provenance: stage, status, start/end time, duration, what changed."""
+    records = []
+    starts = [e["result_index"] for e in step_log]
+    ends = starts[1:] + [len(step_results)]
+    for order, (entry, first, end) in enumerate(zip(step_log, starts, ends), 1):
+        if end <= first:        # no result recorded for this step
+            continue
+        status, name, detail, seconds = step_results[end - 1]   # last result wins
+        entry.pop("result_index")
+        started = entry.pop("started_at")
+        rec = {
+            "order": order,
+            "name": name,
+            "stage": entry.pop("stage"),
+            "status": status,
+            "started_at": started.isoformat(timespec="milliseconds"),
+            "ended_at": (started + timedelta(seconds=seconds)).isoformat(timespec="milliseconds"),
+            "seconds": round(seconds, 3),
+        }
+        if status == "skipped":
+            rec["reason"] = "not applicable to this input"
+        elif status in ("warning", "error"):
+            rec["message"] = detail
+        elif detail:
+            rec["detail"] = detail
+        rec.update(entry)
+        records.append(rec)
+    return records
+
+
 def run_pipeline(
     input_path: Optional[str] = None,
     output_dir: str = "./output",
@@ -732,7 +793,9 @@ def run_pipeline(
         print("Processing...")
 
     total_start = time.time()
+    pipeline_started_at = datetime.now()
     step_results = []
+    step_log = []   # one entry per step, same order as step_results; feeds metadata.json pipeline_steps
     prev_error_count = 0
     current_stage = None
     flowcept_started_here = False
@@ -745,6 +808,9 @@ def run_pipeline(
 
     for i, step in enumerate(pipeline.steps, 1):
         step_start = time.time()
+        step_entry = {"stage": getattr(step.stage, "value", step.stage), "started_at": datetime.now(),
+                      "result_index": len(step_results)}
+        step_log.append(step_entry)
         if getattr(ctx, "with_flowcept", False) and flowcept_ref is not None and ctx.flowcept is None:
             ctx.flowcept = flowcept_ref
 
@@ -779,6 +845,7 @@ def run_pipeline(
         # Execute
         try:
             old_metadata = dict(ctx.metadata)
+            data_before = _data_shape(ctx)
             next_ctx = step.execute(ctx)
             if flowcept_ref is not None and getattr(next_ctx, "flowcept", None) is None:
                 try:
@@ -787,6 +854,7 @@ def run_pipeline(
                     pass
             ctx = next_ctx
             step_time = time.time() - step_start
+            step_entry.update(_step_changes(step.name, old_metadata, ctx, data_before))
 
             # Determine what changed
             detail = ""
@@ -878,6 +946,14 @@ def run_pipeline(
             elif style == "simple":
                 print(f"  [FAIL] {step.name}: {str(e)[:60]}")
             step_results.append(("error", step.name, str(e), step_time))
+
+    ctx.metadata["pipeline_steps"] = _pipeline_step_records(step_log, step_results)
+    ctx.metadata["pipeline_timing"] = {
+        "started_at": pipeline_started_at.isoformat(timespec="seconds"),
+        "ended_at": datetime.now().isoformat(timespec="seconds"),
+        "total_seconds": round(time.time() - total_start, 3),
+    }
+    ctx.metadata.pop("step_changes", None)
 
     # Mark the final stage complete
     if current_stage is not None:

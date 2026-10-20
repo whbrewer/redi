@@ -3,8 +3,8 @@
 This walks through turning a raw table of DFT/AIMD frames into training-ready arrays
 with REDI, using the BeF2 PBE-D3 dataset as the example. By the end you will have
 train/val/test files that are periodic-aware, split by trajectory, and described by
-`index.json` and `metadata.json`. Total time is a few minutes; the pipeline itself
-takes about ten seconds.
+`index.json` and `metadata.json`. The pipeline takes 10–40 seconds, depending mostly on
+how quickly the Parquet file is read from Lustre.
 
 ## The dataset
 
@@ -76,7 +76,7 @@ redi run bef2_pbe-d3.parquet -d atomistic --style simple -o ./atomistic_out
 
 Always pass `-o`. Without it REDI chooses a hashed output directory name.
 
-Expected output (about ten seconds of pipeline time):
+Expected output (the time at the end is 10–40 s; reading the input is the slow part):
 
 ```
 Domain: atomistic
@@ -174,6 +174,34 @@ meta = json.load(open("atomistic_out/metadata.json"))
 for f in meta["outputs"]["files"]:
     print(f["path"], f["format"], f.get("n_records"))
 ```
+
+**`metadata.json` → `pipeline_steps`** — what each step changed and how long it took.
+Every step is listed in order with its status, start/end time and duration; steps that did
+not apply (here `load_ocp_lmdb`) are recorded as `skipped`. Steps also report their own
+numbers under `changes`, and `metadata_added` / `metadata_removed` list the pipeline
+state a step created or discarded:
+
+```python
+for s in meta["pipeline_steps"]:
+    print(f'{s["order"]}. {s["name"]:22} {s["status"]:8} {s["seconds"]:7.2f}s', s.get("changes", ""))
+print(meta["pipeline_timing"])   # started_at, ended_at, total_seconds
+```
+
+For BeF2 this records, for example (one run; times vary with file caching):
+
+| Step | Seconds | What it recorded |
+|------|--------:|------------------|
+| `load_ocp_lmdb` | 0.00 | skipped, not applicable to this input |
+| `load_atom_table` | 25.6 | 401,598 rows → 1,998 structures; 0 dropped for inconsistent energy/cell; 289,419 atoms outside the cell; Be→4, F→9 |
+| `filter_records` | 0.02 | 1,998 in, 1,998 out, 0 dropped |
+| `flag_force_outliers` | 0.02 | max \|F\| 41.8; 229 structures above 20; none dropped (no `max_force` set) |
+| `reference_energies` | 0.02 | per-element references fitted; not identifiable (one composition) |
+| `build_graphs` | 5.4 | 27,099,979 edges; periodic; 289,419 atoms wrapped into the cell; forces unchanged |
+| `assemble_pyg_data` | 8.4 | 1,998 structures, 401,598 atoms (PyG objects, only used by `-f pt`) |
+| `save_output` | 0.5 | 1,636 / 198 / 164 split by group |
+
+Rerunning with a different setting (say `max_force: 30.0`) shows up directly: `flag_force_outliers`
+then reports 36 dropped and every later step reports 1,962 structures.
 
 Things worth knowing about BeF2 specifically:
 
