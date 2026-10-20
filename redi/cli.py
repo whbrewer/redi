@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from .output_manifest import build_metadata
+
 # Colors for terminal output
 class Colors:
     HEADER = '\033[95m'
@@ -1091,14 +1093,7 @@ def run_pipeline(
         import json as json_module
         ctx.output_dir.mkdir(parents=True, exist_ok=True)
         metadata_path = ctx.output_dir / "metadata.json"
-        metadata_dict = {
-            "input_file": str(primary_path),
-            "domain": domain,
-            "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
-            "errors": ctx.errors,
-            **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))},
-            "provenance": provenance,
-        }
+        metadata_dict = build_metadata(ctx, primary_path, domain, provenance)
         with open(metadata_path, 'w') as f:
             json_module.dump(metadata_dict, f, indent=2, default=str)
         if "saved_files" not in ctx.metadata:
@@ -1147,14 +1142,7 @@ def run_pipeline(
 
             metadata_path = ctx.output_dir / "metadata.json"
             import json as json_module
-            metadata_dict = {
-                "input_file": str(primary_path),
-                "domain": domain,
-                "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
-                "errors": ctx.errors,
-                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))},
-                "provenance": provenance,
-            }
+            metadata_dict = build_metadata(ctx, primary_path, domain, provenance)
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
             ctx.metadata["saved_files"].append(str(metadata_path))
@@ -1198,14 +1186,7 @@ def run_pipeline(
 
             metadata_path = ctx.output_dir / "metadata.json"
             import json as json_module
-            metadata_dict = {
-                "input_file": str(primary_path),
-                "domain": domain,
-                "completed_stages": [s.value for s in ctx.completed_stages] if ctx.completed_stages else [],
-                "errors": ctx.errors,
-                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))},
-                "provenance": provenance,
-            }
+            metadata_dict = build_metadata(ctx, primary_path, domain, provenance)
             with open(metadata_path, 'w') as f:
                 json_module.dump(metadata_dict, f, indent=2, default=str)
             ctx.metadata["saved_files"].append(str(metadata_path))

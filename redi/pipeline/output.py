@@ -593,13 +593,8 @@ class SaveMetadata(PipelineStep):
 
             # Save metadata
             metadata_path = output_dir / "metadata.json"
-            metadata = {
-                "input_file": str(ctx.input_path),
-                "domain": ctx.domain,
-                "completed_stages": [s.value for s in ctx.completed_stages],
-                "errors": ctx.errors,
-                **{k: v for k, v in ctx.metadata.items() if isinstance(v, (str, int, float, bool, list, dict))}
-            }
+            from ..output_manifest import build_metadata
+            metadata = build_metadata(ctx, ctx.input_path, ctx.domain)
 
             logger.debug(f"     Input file: {ctx.input_path}")
             logger.debug(f"     Domain: {ctx.domain}")
