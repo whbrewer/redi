@@ -3553,7 +3553,7 @@ def _handle_run_command(args):
         output_dir=output_dir,
         input_paths=[str(p) for p in input_paths],
         domain=config.get('domain', args.domain),
-        stages=stages if args.stages else config.get('stages'),
+        stages=args.stages.split(",") if args.stages else config.get('stages'),
         array_mode=args.array if hasattr(args, 'array') else config.get('array_mode', False),
         normalize_method=args.normalize if hasattr(args, 'normalize') else config.get('normalize_method'),
         config_file=config_path,
