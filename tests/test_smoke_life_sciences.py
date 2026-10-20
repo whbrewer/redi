@@ -5,9 +5,16 @@ These tests verify that the life sciences pipeline handles
 biological sequence data (FASTA, PDB, etc.).
 """
 
+import importlib.util
+
 import pytest
 import numpy as np
 from pathlib import Path
+
+requires_biopython = pytest.mark.skipif(
+    importlib.util.find_spec("Bio") is None,
+    reason='biopython not installed (pip install -e ".[life_sciences]")',
+)
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +231,7 @@ MYC_HUMAN,439,48804,439
         assert "amino_acid_count" in feature_names or "protein_id" in feature_names
 
 
+@requires_biopython
 class TestOpenFoldParallelPipeline:
     """Tests for the parallel OpenFold preprocessing pipeline.
 
