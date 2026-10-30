@@ -335,6 +335,62 @@ def describe_outputs(output_dir, exclude: Iterable[str] = ("metadata.json",),
 
 
 # ---------------------------------------------------------------------------
+# record sets (fields + records) for downstream croissant export
+# ---------------------------------------------------------------------------
+
+def _croissant_type(dtype: str) -> str:
+    """Map an arrow/numpy dtype string to a Croissant (schema.org) data type."""
+    d = str(dtype).lower()
+    if d.startswith(("int", "uint")):
+        return "sc:Integer"
+    if d.startswith(("float", "double", "halffloat", "decimal")):
+        return "sc:Float"
+    if d.startswith("bool"):
+        return "sc:Boolean"
+    return "sc:Text"
+
+
+def build_record_sets(outputs: Dict[str, Any], config: Optional[dict] = None) -> List[Dict[str, Any]]:
+    """
+    One record set per tabular output file (Parquet/CSV), from the ``columns``
+    that ``describe_outputs`` already read from the file header. setgo picks
+    these up when writing the Croissant file.
+
+    Optional run config ``record_set``: ``description``, ``record_unit`` (what
+    one row is, e.g. "atom") and ``field_descriptions`` {column: text}.
+    """
+    cfg    = (config or {}).get("record_set") or {}
+    descs  = cfg.get("field_descriptions") or {}
+    sets: List[Dict[str, Any]] = []
+    for entry in (outputs or {}).get("files", []):
+        cols = entry.get("columns")
+        if not cols or "*" in entry["path"]:
+            continue
+        # parquet: {name: dtype}; csv: [names] (types not available from the header)
+        items = cols.items() if isinstance(cols, dict) else ((c, None) for c in cols)
+        fields = []
+        for name, dtype in items:
+            field = {"name": name, "data_type": _croissant_type(dtype) if dtype else "sc:Text"}
+            if dtype:
+                field["dtype"] = dtype
+            if name in descs:
+                field["description"] = descs[name]
+            fields.append(field)
+        rs = {
+            "name":        Path(entry["path"]).stem,
+            "source_file": entry["path"],
+            "n_records":   entry.get("n_records"),
+            "fields":      fields,
+        }
+        if cfg.get("description"):
+            rs["description"] = cfg["description"]
+        if cfg.get("record_unit"):
+            rs["record_unit"] = cfg["record_unit"]
+        sets.append(rs)
+    return sets
+
+
+# ---------------------------------------------------------------------------
 # metadata.json document
 # ---------------------------------------------------------------------------
 
@@ -360,6 +416,9 @@ def build_metadata(ctx, input_file, domain, provenance: Optional[dict] = None) -
             checksum=bool(config.get("manifest_checksums", True)),
             record_counts=ctx.metadata.get("output_records"),
         )
+        record_sets = build_record_sets(metadata["outputs"], config)
+        if record_sets:
+            metadata["record_sets"] = record_sets
     except Exception as exc:
         logger.warning("metadata.json: could not describe outputs: %s", exc)
         metadata["outputs"] = {"error": f"{type(exc).__name__}: {exc}"}
