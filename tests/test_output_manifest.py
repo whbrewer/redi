@@ -211,6 +211,6 @@ class TestPipelineWritesManifest:
         meta = json.loads((out / "metadata.json").read_text())
         files = {e["path"]: e for e in meta["outputs"]["files"]}
         assert "metadata.json" not in files
-        assert "READINESS_REPORT.md" in files
+        assert "redi_report.md" in files
         npz = [e for e in files.values() if e["format"] == "npz"]
         assert npz and all("arrays" in e and "sha256" in e for e in npz)

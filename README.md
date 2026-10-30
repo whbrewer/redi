@@ -578,7 +578,7 @@ redi run /path/to/hpc/ANL-ALCF-DJC-AURORA.csv -o ./hpc_output
 # ├── train.npz    (80% of data)
 # ├── val.npz      (10% of data)
 # ├── test.npz     (10% of data)
-# ├── READINESS_REPORT.md
+# ├── redi_report.md
 # └── metadata.json
 ```
 

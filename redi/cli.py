@@ -313,7 +313,7 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
 
 
 def _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance) -> str:
-    """Build a READINESS_REPORT.md string: readiness assessment + recommendations for this run.
+    """Build a redi_report.md string: readiness assessment + recommendations for this run.
 
     Unlike the old DATA_CARD.md, this describes what REDI did in this run
     (readiness level reached, transformations applied, recommended next steps)
@@ -1069,14 +1069,14 @@ def run_pipeline(
             data_card = _build_enriched_datacard(primary_path, domain, config, ctx, step_results)
 
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
-            readiness_report_path = ctx.output_dir / "READINESS_REPORT.md"
+            readiness_report_path = ctx.output_dir / "redi_report.md"
             readiness_report_path.write_text(
                 _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance)
             )
             if "saved_files" not in ctx.metadata:
                 ctx.metadata["saved_files"] = []
             ctx.metadata["saved_files"].append(str(readiness_report_path))
-            print(f"    📋 {Colors.BOLD}READINESS_REPORT.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
+            print(f"    📋 {Colors.BOLD}redi_report.md{Colors.END} {Colors.DIM}(saved){Colors.END}")
 
             if getattr(ctx, "with_flowcept", False):
                 from .provenance_card import render_provenance_summary
@@ -1203,14 +1203,14 @@ def run_pipeline(
                             if not check["passed"]:
                                 print(f"  - {check['name']}: {check.get('message', 'FAILED')}")
 
-        # Save metadata.json and READINESS_REPORT.md for simple mode too
+        # Save metadata.json and redi_report.md for simple mode too
         try:
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
             if "saved_files" not in ctx.metadata:
                 ctx.metadata["saved_files"] = []
 
-            readiness_report_path = ctx.output_dir / "READINESS_REPORT.md"
+            readiness_report_path = ctx.output_dir / "redi_report.md"
             readiness_report_path.write_text(
                 _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance)
             )
@@ -1247,14 +1247,14 @@ def run_pipeline(
                 print(f"  Output: {f}")
 
     elif style == "json":
-        # Save metadata.json and READINESS_REPORT.md for json mode too
+        # Save metadata.json and redi_report.md for json mode too
         try:
             ctx.output_dir.mkdir(parents=True, exist_ok=True)
 
             if "saved_files" not in ctx.metadata:
                 ctx.metadata["saved_files"] = []
 
-            readiness_report_path = ctx.output_dir / "READINESS_REPORT.md"
+            readiness_report_path = ctx.output_dir / "redi_report.md"
             readiness_report_path.write_text(
                 _generate_readiness_report(primary_path, domain, config, ctx, step_results, provenance)
             )

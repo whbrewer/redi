@@ -43,7 +43,7 @@ graph, and a split that does not leak.
 | Frames in a trajectory are nearly identical | Splits by trajectory, not at random, so train and test do not share near-duplicates |
 | Large force values | Reports the max \|F\| per structure; optionally drops structures above a threshold |
 | Total energies of about −115,000 eV | Fits per-element reference energies and stores `energy_referenced` |
-| No record of what was done | Writes `index.json`, `metadata.json` (with a file/record manifest), `READINESS_REPORT.md` and `repro.sh` |
+| No record of what was done | Writes `index.json`, `metadata.json` (with a file/record manifest), `redi_report.md` and `repro.sh` |
 
 ## 1. Set up
 
@@ -117,7 +117,7 @@ atomistic_out/
 ├── test.npz      164 structures
 ├── index.json              splits, which trajectories went where, data checks
 ├── metadata.json           run record + manifest of every output file
-├── READINESS_REPORT.md     data card
+├── redi_report.md     data card
 └── repro.sh                the command that produced this directory
 ```
 

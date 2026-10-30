@@ -78,9 +78,9 @@ echo "metadata.json:"
 show_metadata "$LUSTRE/xgc1/metadata.json"
 pause 2
 
-# ── READINESS_REPORT sample ──────────────────────────────────────────────────────────
-banner "READINESS_REPORT.md — OC22 / HydraGNN"
-head -60 "$LUSTRE/oc22/READINESS_REPORT.md"
+# ── redi_report sample ──────────────────────────────────────────────────────────
+banner "redi_report.md — OC22 / HydraGNN"
+head -60 "$LUSTRE/oc22/redi_report.md"
 pause 3
 
 echo
