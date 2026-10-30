@@ -352,9 +352,9 @@ def _croissant_type(dtype: str) -> str:
 
 def build_record_sets(outputs: Dict[str, Any], config: Optional[dict] = None) -> List[Dict[str, Any]]:
     """
-    One record set per tabular output file (Parquet/CSV), from the ``columns``
-    that ``describe_outputs`` already read from the file header. setgo picks
-    these up when writing the Croissant file.
+    One record set per Parquet/CSV (``columns``) or NPZ/HDF5 (``arrays``)
+    output file, from what ``describe_outputs`` already read from the file
+    header. setgo picks these up when writing the Croissant file.
 
     Optional run config ``record_set``: ``description``, ``record_unit`` (what
     one row is, e.g. "atom") and ``field_descriptions`` {column: text}.
@@ -363,19 +363,38 @@ def build_record_sets(outputs: Dict[str, Any], config: Optional[dict] = None) ->
     descs  = cfg.get("field_descriptions") or {}
     sets: List[Dict[str, Any]] = []
     for entry in (outputs or {}).get("files", []):
-        cols = entry.get("columns")
-        if not cols or "*" in entry["path"]:
+        cols, arrays = entry.get("columns"), entry.get("arrays")
+        if not (cols or arrays) or "*" in entry["path"]:
             continue
-        # parquet: {name: dtype}; csv: [names] (types not available from the header)
-        items = cols.items() if isinstance(cols, dict) else ((c, None) for c in cols)
         fields = []
-        for name, dtype in items:
-            field = {"name": name, "data_type": _croissant_type(dtype) if dtype else "sc:Text"}
-            if dtype:
-                field["dtype"] = dtype
-            if name in descs:
-                field["description"] = descs[name]
-            fields.append(field)
+        if cols:
+            # parquet: {name: dtype}; csv: [names] (types not available from the header)
+            items = cols.items() if isinstance(cols, dict) else ((c, None) for c in cols)
+            for name, dtype in items:
+                field = {"name": name, "data_type": _croissant_type(dtype) if dtype else "sc:Text"}
+                if dtype:
+                    field["dtype"] = dtype
+                fields.append(field)
+        else:
+            # npz/hdf5: one field per array. Shape is per record; an array whose
+            # leading dimension isn't the record count is ragged (e.g. per atom).
+            n = entry.get("n_records")
+            for name, a in arrays.items():
+                shape = a.get("shape") or []
+                if not shape:
+                    continue
+                field = {"name": name, "data_type": _croissant_type(a["dtype"]), "dtype": a["dtype"]}
+                if n is None or shape[0] == n:
+                    field["shape"] = shape[1:]
+                else:
+                    field["shape"] = [-1] + shape[1:]
+                    field["ragged"] = True
+                    if "natoms" in arrays:
+                        field["ragged_by"] = "natoms"
+                fields.append(field)
+        for field in fields:
+            if field["name"] in descs:
+                field["description"] = descs[field["name"]]
         rs = {
             "name":        Path(entry["path"]).stem,
             "source_file": entry["path"],
