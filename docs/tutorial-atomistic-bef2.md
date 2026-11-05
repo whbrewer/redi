@@ -246,7 +246,7 @@ With `max_force: 30.0`, 36 structures are dropped and 1,962 remain (the split be
 
 | Option | Default | Effect |
 |--------|---------|--------|
-| `output_format` / `-f` | `npz` | `npz` (flat arrays), `pt` (one PyG `Data` file per structure), `json` (HydraGNN native) |
+| `output_format` / `-f` | `npz` | `npz` (flat arrays), `parquet` (one row per structure, per-atom list columns), `pt` (one PyG `Data` file per structure), `json` (HydraGNN native) |
 | `max_force` | none | Drop structures whose max per-atom \|F\| exceeds this |
 | `pbc` | `true` if a cell is present | Wrap positions and build the periodic graph |
 | `normalize_forces` | `false` | Per-structure z-score of forces |
