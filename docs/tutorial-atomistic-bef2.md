@@ -81,7 +81,7 @@ Expected output (the time at the end is 10–40 s; reading the input is the slow
 
 ```
 Domain: atomistic
-Pipeline: 8 steps
+Pipeline: 9 steps
   [OK] load_atom_table
   [OK] filter_records
   [OK] flag_force_outliers
@@ -92,8 +92,8 @@ Pipeline: 8 steps
 Done: 7 ok, 0 warnings, 0 errors
 ```
 
-Eight steps are loaded and seven run. `load_ocp_lmdb` skips itself because the input is
-a table, not an LMDB shard. Each step decides whether it applies from its input, so the
+Nine steps are loaded and seven run. `load_ocp_lmdb` and `load_atom_h5` skip themselves
+because the input is a table, not an LMDB shard or an HDF5 store. Each step decides whether it applies from its input, so the
 same `-d atomistic` command also handles OC22/OC20 LMDB data.
 
 What the steps do:
@@ -304,6 +304,34 @@ pip install -e "./redi-atomistics[h5]"        # adds h5py
 redi run -d atomistic --style simple -o ./atomistic_out \
     /opt/data/redi/BeF2/hipnn/pbe-d3/h5store/*.h5
 ```
+
+Expected output (about 8 s on a workstation; the h5 files total 18.9 MB):
+
+```
+ReferenceEnergies: compositions have rank 1 < 2 elements; per-element references are not identifiable (fit is a constant shift)
+
+  BuildGraphs: 1,998 structures, num_workers=auto
+Input: 30 files (18.9 MB)
+Domain: atomistic
+Pipeline: 9 steps
+Processing...
+  [OK] load_atom_h5
+  [OK] filter_records
+  [OK] flag_force_outliers
+  [OK] reference_energies
+  BuildGraphs: 1,998 structures, 27,099,979 edges  (3.3s)
+  [OK] build_graphs
+  [OK] assemble_pyg_data
+  [OK] save_output
+Done: 7 ok, 0 warnings, 0 errors
+```
+
+The `ReferenceEnergies` notice is expected: every frame is Be₆₇F₁₃₄, so the two
+per-element references cannot be told apart and the fit is only a constant shift (see
+section 4). The output directory has the same layout and the same 1,636 / 198 / 164
+split as the Parquet run; `index.json` names `h5store` as the dataset and lists
+`n_files: 30`. The edge count depends on `radius_cutoff` (6 Å here; 7.5 Å gives about
+53.2 million).
 
 This gives the same 1,998 structures. The split group is the `_id` label with its
 trailing step removed, as for `frame_label`. Dataset names can be remapped with
