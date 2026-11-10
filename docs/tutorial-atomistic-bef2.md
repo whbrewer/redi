@@ -288,6 +288,25 @@ back to a random 80/10/10 split by structure, which leaks for MD data.
 If your data is OC22/OC20 LMDB shards instead, use the same command on the `.lmdb`
 file or a directory of them; the table steps skip themselves.
 
+### HDF5 stores
+
+The Parquet file above was exported from an HDF5 store (hippynn "h5store" layout: one
+group per composition, with per-frame `coordinates`, `forces`, `energy`, `cell`, `_id`
+and a per-composition `species`). REDI reads that layout directly, so you can skip the
+export. Pass the files (or a directory of them); `load_atom_h5` replaces
+`load_atom_table` and every later step is the same:
+
+```bash
+pip install -e "./redi-atomistics[h5]"        # adds h5py
+redi run -d atomistic --style simple -o ./atomistic_out \
+    /opt/data/redi/BeF2/hipnn/pbe-d3/h5store/*.h5
+```
+
+This gives the same 1,998 structures. The split group is the `_id` label with its
+trailing step removed, as for `frame_label`. Dataset names can be remapped with
+`h5_datasets:` in the config (keys: `coordinates`, `forces`, `energy`, `species`,
+`cell`, `label`).
+
 ## 7. Optional: describe the dataset for sharing
 
 `make_croissant.py` in the BeF2 directory writes a Croissant JSON-LD description of the
@@ -301,6 +320,7 @@ enrichment (see the redi skill for the hand-off).
 | Symptom | Cause / fix |
 |---------|-------------|
 | `Error loading LMDB … not an LMDB file` | You used an older REDI/plugin; table input needs `redi-atomistics` ≥ 0.3 and `.parquet`/`.csv` extension |
+| `Error loading LMDB … not an LMDB file` on `.h5` input | The plugin predates the HDF5 reader (`load_atom_h5`); update `redi-atomistics` and install its `h5` extra |
 | `LoadAtomTable: missing columns [...]` | Column names differ; add a `columns:` mapping |
 | `LoadAtomTable: unknown element symbols` | Species values are not element symbols; use symbols or atomic numbers |
 | Everything lands in train, or val/test are empty | Too few trajectory groups; check `split_groups` in `index.json` and `group_column` |
