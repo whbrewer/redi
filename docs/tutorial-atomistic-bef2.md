@@ -256,6 +256,9 @@ With `max_force: 30.0`, 36 structures are dropped and 1,962 remain (the split be
 | `energy_unit`, `length_unit` | `eV`, `Angstrom` | Recorded in `index.json`; no conversion |
 | `manifest_checksums` | `true` | Set `false` to skip SHA-256 in `metadata.json` for very large outputs |
 | `num_workers` | auto | Parallel graph building |
+| `radius_cutoff` | `6.0` | Graph radius in Å. The BeF2 paper's HIP-NN uses 7.5 Å (about 132 neighbours per atom here) |
+| `max_neighbours` | `100` | Cap on edges per atom; raise it with `radius_cutoff` (7.5 Å needs about 160 or more to avoid truncation) |
+| `h5_datasets` | see HDF5 section | Rename datasets when reading HDF5 stores |
 
 `-f pt` writes one file per structure (1,998 files, about 890 MB for BeF2) and records
 each directory as a single grouped entry in `metadata.json`. It needs `torch` and

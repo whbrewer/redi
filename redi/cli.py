@@ -269,6 +269,28 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
     data_card.detected_domain = card_domain
     data_card.characteristics.domain = card_domain
 
+    # analyze_dataset only saw the primary (first) file. For a multi-file run, describe
+    # the whole input: total size, a directory-level name, and the file count.
+    all_paths = [Path(p) for p in (getattr(ctx, "input_paths", None) or [])]
+    if len(all_paths) > 1:
+        existing = [p for p in all_paths if p.is_file()]
+        parents = {p.parent for p in all_paths}
+        where = parents.pop() if len(parents) == 1 else None
+        ov = data_card.overview
+        ov.name = f"{where.name} ({len(all_paths)} files)" if where else f"{len(all_paths)} files"
+        ov.size_bytes = sum(p.stat().st_size for p in existing)
+        ov.description = (
+            f"{len(all_paths)} files" + (f" in {where}" if where else "") +
+            f". Features below are from the first file ({primary_path.name}); "
+            f"files sharing a schema are not listed separately."
+        )
+
+    elif len(all_paths) == 1 and all_paths[0].is_dir():
+        # Directory input: the stat of the directory entry is meaningless; sum its files
+        data_card.overview.size_bytes = sum(
+            f.stat().st_size for f in all_paths[0].rglob("*") if f.is_file()
+        )
+
     n_records = (
         ctx.metadata.get("n_structures") or
         ctx.metadata.get("n_proteins") or
@@ -276,6 +298,8 @@ def _build_enriched_datacard(primary_path, domain, config, ctx, step_results):
         ctx.metadata.get("n_timesteps") or
         ctx.metadata.get("n_records") or
         ctx.metadata.get("assembled_structures") or
+        ctx.metadata.get("n_structures_out") or
+        ctx.metadata.get("n_structures_raw") or
         data_card.overview.num_records
     )
     if n_records:
