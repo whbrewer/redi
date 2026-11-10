@@ -40,12 +40,12 @@ class TestMaterialsSmoke:
         assert ctx is not None
         assert ctx.domain == "materials"
 
-    def test_materials_domain_detection(self, sample_materials_csv):
-        """Test that materials domain is auto-detected."""
+    def test_materials_csv_is_not_guessed(self, sample_materials_csv):
+        """Tabular files are not auto-detected; the domain is chosen with -d."""
         from redi.cli import detect_domain
 
         domain = detect_domain(Path(sample_materials_csv))
-        assert domain == "materials"
+        assert domain == "general"
 
     def test_materials_feature_columns(self, sample_materials_csv):
         """Test that materials features are detected."""

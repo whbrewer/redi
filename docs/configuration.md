@@ -12,7 +12,7 @@ redi run data.nc -c my_pipeline.yaml --domain hpc   # CLI overrides YAML
 
 | Key | Default | Description |
 |---|---|---|
-| `domain` | `null` | Scientific domain. One of `climate`, `materials`, `life_sciences`, `fusion`, `hpc`, `geospatial`, `nuclear_physics`, `general`. Auto-detected from file extension + column names if omitted. |
+| `domain` | `null` | Scientific domain. One of `climate`, `materials`, `life_sciences`, `fusion`, `hpc`, `geospatial`, `nuclear_physics`, `general`. Only detected for unambiguous formats if omitted (`.nc`, `.grib`, `.cif`, `.shp`, `.fasta`, AMReX plotfiles, ...); `.h5`/`.hdf5`, CSV, Parquet and JSON run the generic pipeline, so pass `-d` for those. |
 | `input_path` | `null` | Input file path. Can also be provided via `input_paths` (list) for multi-file runs. Overridden by positional CLI argument. |
 | `output_dir` | `./output` | Base output directory. When no explicit `-o` flag is given, a hash-based subdirectory is created here. |
 | `output_format` | `npz` | Output format. One of `npz`, `parquet`, `hdf5`, `csv`, `zarr`. |

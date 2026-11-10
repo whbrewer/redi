@@ -80,7 +80,7 @@ redi run <input> [options]
 redi <input> [options]                 # 'run' is implicit
 
 # Examples
-redi run data.csv                      # Auto-detect domain, run full pipeline
+redi run data.csv                      # Generic pipeline unless -d is given (only unambiguous formats are auto-detected)
 redi run data.csv --domain hpc         # Specify domain
 redi run data.csv -o ./processed       # Custom output directory
 redi run data.csv --stages ingest,preprocess  # Run specific stages

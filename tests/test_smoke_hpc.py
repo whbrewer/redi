@@ -61,12 +61,12 @@ class TestHPCSmoke:
         assert ctx is not None
         assert ctx.data is not None
 
-    def test_hpc_domain_detection(self, sample_hpc_csv):
-        """Test that HPC domain is auto-detected."""
+    def test_hpc_csv_is_not_guessed(self, sample_hpc_csv):
+        """Tabular files are not auto-detected; the domain is chosen with -d."""
         from redi.cli import detect_domain
 
         domain = detect_domain(Path(sample_hpc_csv))
-        assert domain == "hpc"
+        assert domain == "general"
 
     def test_hpc_feature_engineering(self, sample_hpc_csv, temp_dir):
         """Test HPC-specific feature engineering."""

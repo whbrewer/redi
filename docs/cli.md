@@ -67,7 +67,7 @@ usage: redi run [-h]
 
 | Flag | Description |
 |---|---|
-| `-d, --domain` | Scientific domain: `climate`, `materials`, `life_sciences`, `fusion`, `hpc`, `geospatial`, `nuclear_physics`, `combustion`, `general` (auto-detected if not specified) |
+| `-d, --domain` | Scientific domain: `climate`, `materials`, `life_sciences`, `fusion`, `hpc`, `geospatial`, `nuclear_physics`, `combustion`, `general`, or a plugin domain such as `atomistic` (detected only for unambiguous formats such as `.nc`, `.cif`, `.shp`, `.fasta`; otherwise the generic pipeline runs, so pass `-d`) |
 | `-o, --output` | Output directory (disables hash-based naming) |
 | `--unique` | Append timestamp to output dir for unique runs |
 | `--hash-content` | Hash file content (not just path+size) for output dir naming |
@@ -128,7 +128,7 @@ usage: redi run [-h]
 | `--slurm-output` | Final output directory (for copying from burst buffer) |
 
 ```bash
-redi run data.csv                      # Auto-detect and run full pipeline
+redi run data.csv                      # Generic pipeline (CSV is not auto-detected; add -d to pick a domain)
 redi run data.csv --domain hpc         # Specify domain
 redi run data.csv -o ./processed       # Custom output directory
 redi run data.csv --stages ingest,preprocess  # Run specific stages

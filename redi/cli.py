@@ -78,65 +78,29 @@ def print_metric(label: str, value: str, indent: int = 4):
     print(f"{' ' * indent}{Colors.DIM}{label}:{Colors.END} {Colors.BOLD}{value}{Colors.END}")
 
 
+# Formats shared by many scientific domains. A file with one of these extensions says
+# nothing about its contents (HDF5 holds fusion, atomistic, climate... data), so REDI does
+# not guess from them; pass -d/--domain. ".pdb" is listed under two domains.
+_AMBIGUOUS_EXTENSIONS = frozenset({".h5", ".hdf5", ".adios", ".bp", ".pdb"})
+
+
 def detect_domain(input_path: Path, columns: Optional[List[str]] = None) -> str:
-    """Auto-detect domain from file and content"""
-    from .domains import detect_domain as _detect_domain, DOMAIN_EXTENSIONS
+    """Auto-detect the domain only where the format identifies it unambiguously.
+
+    Detected from the extension: .nc/.grib (climate), .cif/.poscar/.vasp/.xyz
+    (materials), .fasta/.fastq/.mmcif/.bam/.vcf (life_sciences), .shp/.geojson/.gpkg/.kml
+    (geospatial), .zarr (climate), and AMReX plotfile directories (combustion).
+    Everything else, including generic containers (.h5, .hdf5, .pdb) and tabular
+    files (CSV, Parquet, JSON), returns "general"; use -d/--domain to choose.
+    ``columns`` is accepted for backwards compatibility and ignored.
+    """
+    from .domains import DOMAIN_EXTENSIONS
 
     ext = input_path.suffix.lower()
-    for domain, extensions in DOMAIN_EXTENSIONS.items():
-        if ext in extensions:
-            return domain.value
-
-    if ext in [".csv", ".tsv", ".parquet", ".json"]:
-        if columns is None:
-            try:
-                import pandas as pd
-                if ext == ".parquet":
-                    df = pd.read_parquet(input_path, columns=None)
-                    columns = list(df.columns)
-                elif ext == ".json":
-                    # Read JSON directly - pd.read_csv hangs on single-line JSON
-                    import json, re as _re
-                    with open(input_path, 'r') as f:
-                        # Read a small chunk to extract keys without loading the full file
-                        chunk = f.read(64 * 1024)
-                    try:
-                        # Try to parse as complete JSON (small files)
-                        data = json.loads(chunk)
-                    except json.JSONDecodeError:
-                        # Chunk was truncated; try to parse first record from array
-                        data = None
-                        if chunk.lstrip().startswith('['):
-                            # Find first complete object in array
-                            inner = chunk.lstrip()[1:].lstrip()
-                            if inner.startswith('{'):
-                                depth = 0
-                                for i, ch in enumerate(inner):
-                                    if ch == '{': depth += 1
-                                    elif ch == '}': depth -= 1
-                                    if depth == 0:
-                                        try:
-                                            data = json.loads(inner[:i+1])
-                                        except json.JSONDecodeError:
-                                            pass
-                                        break
-                    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-                        columns = [k.lower() for k in data[0].keys()]
-                    elif isinstance(data, dict):
-                        columns = [k.lower() for k in data.keys()]
-                    else:
-                        # Could not parse complete record; extract all JSON keys
-                        # from the chunk as potential column names for domain detection
-                        columns = _re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"(?:\s*:)', chunk)
-                        columns = list(dict.fromkeys(k.lower() for k in columns))
-                else:
-                    df = pd.read_csv(input_path, nrows=0)
-                    columns = list(df.columns)
-            except Exception:
-                columns = []
-
-        detected = _detect_domain(columns=columns, file_extension=ext)
-        return detected.value
+    if ext not in _AMBIGUOUS_EXTENSIONS:
+        for domain, extensions in DOMAIN_EXTENSIONS.items():
+            if ext in extensions:
+                return domain.value
 
     # Check for AMReX plotfile directories (HyperCLaw-V1.1)
     if input_path.is_dir():
@@ -594,13 +558,13 @@ def run_pipeline(
     if style == "rich":
         print_section("Domain Detection")
         if domain == "general" and domain_was_auto:
-            print(f"    {Colors.YELLOW}⚠ Could not auto-detect domain{Colors.END}")
+            print(f"    {Colors.YELLOW}⚠ Domain not auto-detected for {primary_path.suffix or 'this input'}; using the generic pipeline{Colors.END}")
             print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc, geospatial, combustion{Colors.END}")
         else:
             print(f"    {icon} Detected: {Colors.BOLD}{Colors.CYAN}{domain.upper()}{Colors.END}")
     elif style == "simple":
         if domain == "general" and domain_was_auto:
-            print(f"Warning: Could not auto-detect domain. Use -d to specify.")
+            print(f"Warning: Domain not auto-detected for {primary_path.suffix or 'this input'}; using the generic pipeline. Use -d to choose a domain.")
         print(f"Domain: {domain}")
 
     # Create context

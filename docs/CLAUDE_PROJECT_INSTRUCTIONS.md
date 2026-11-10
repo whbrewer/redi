@@ -24,7 +24,7 @@ INGEST → PREPROCESS → TRANSFORM → STRUCTURE → OUTPUT
 - **Structure** (`pipeline/structure.py`): Convert to NumPy arrays, PyTorch tensors, time-series sequences, or graph structures.
 - **Output** (`pipeline/output.py`): Train/val/test split, sharding, format writers (NPZ, HDF5, Parquet, CSV, Zarr, TFRecord), metadata/Data Card export.
 
-Each domain module (`redi/domains/<name>.py`) provides specialized step implementations via factory functions: `get_ingest_steps()`, `get_preprocess_steps()`, etc. Domain auto-detection uses file extensions first, then keyword scoring on column names (`domains/__init__.py`).
+Each domain module (`redi/domains/<name>.py`) provides specialized step implementations via factory functions: `get_ingest_steps()`, `get_preprocess_steps()`, etc. `redi run` auto-detects a domain only from unambiguous extensions (`.nc`, `.cif`, `.shp`, `.fasta`, AMReX plotfiles); `.h5`/`.hdf5`, CSV, Parquet and JSON need `-d` (`detect_domain` in `cli.py`). `redi assess` and `redi discover` have their own content-based detection.
 
 ### Key Supporting Modules
 
