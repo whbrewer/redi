@@ -47,26 +47,23 @@ graph, and a split that does not leak.
 
 ## 1. Set up
 
-You need Python ≥ 3.9 and a virtual environment containing REDI and the atomistics plugin:
+You need Python ≥ 3.9 and a virtual environment containing REDI. The atomistic domain is built in:
 
 ```bash
-# from the directory that holds the redi and redi-atomistics checkouts
-pip install -e ./redi
-git clone git@code.ornl.gov:drai/redi-atomistics.git   # the plugin
-pip install -e "./redi-atomistics[table]"     # adds pandas + pyarrow for Parquet/CSV input
+pip install -e "./redi[atomistic]"            # adds lmdb, pandas + pyarrow for LMDB and Parquet/CSV input
 pip install torch torch_geometric             # only needed for -f pt output
 ```
 
 On OLCF systems the interpreter for a project may be registered with `afx env which`.
 
-Check the plugin is visible:
+Check the domain is available:
 
 ```bash
-redi plugins
+redi run --help | grep -A1 -e "--domain"
 ```
 
-You should see `atomistic` (and `hydragnn`, an alias of the same pipeline, kept from the
-plugin's earlier name `redi-hydragnn`).
+You should see `atomistic` in the list (and `hydragnn`, an alias of the same pipeline, kept
+from its earlier name `redi-hydragnn`).
 
 ## 2. Run the pipeline
 
@@ -300,7 +297,7 @@ export. Pass the files (or a directory of them); `load_atom_h5` replaces
 `load_atom_table` and every later step is the same:
 
 ```bash
-pip install -e "./redi-atomistics[h5]"        # adds h5py
+pip install -e "./redi[atomistic,hdf5]"      # adds h5py
 redi run -d atomistic --style simple -o ./atomistic_out \
     /opt/data/redi/BeF2/hipnn/pbe-d3/h5store/*.h5
 ```
@@ -350,11 +347,11 @@ enrichment (see the redi skill for the hand-off).
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `Error loading LMDB … not an LMDB file` | You used an older REDI/plugin; table input needs `redi-atomistics` ≥ 0.3 and `.parquet`/`.csv` extension |
-| `Error loading LMDB … not an LMDB file` on `.h5` input | The plugin predates the HDF5 reader (`load_atom_h5`); update `redi-atomistics` and install its `h5` extra |
+| `Error loading LMDB … not an LMDB file` | You used an older REDI; table input needs a REDI release with the atomistic domain and a `.parquet`/`.csv` extension |
+| `Error loading LMDB … not an LMDB file` on `.h5` input | Your REDI predates the HDF5 reader (`load_atom_h5`); update REDI and install the `hdf5` extra |
 | `LoadAtomTable: missing columns [...]` | Column names differ; add a `columns:` mapping |
 | `LoadAtomTable: unknown element symbols` | Species values are not element symbols; use symbols or atomic numbers |
 | Everything lands in train, or val/test are empty | Too few trajectory groups; check `split_groups` in `index.json` and `group_column` |
 | `-s output` skips steps | `--stages` only auto-includes `ingest`; list every stage you want, or omit `-s` |
 | `.pt` output fails with an import error | Install `torch` and `torch_geometric` |
-| `metadata.json` says a record count is missing | Arrays in the file have different lengths and the step did not report a count; the atomistics plugin does report them |
+| `metadata.json` says a record count is missing | Arrays in the file have different lengths and the step did not report a count; the atomistic domain does report them |

@@ -12,7 +12,7 @@ domains and operates in four primary modes:
 ## User Guide
 
 * [Quick Start](quickstart.md)
-* [Tutorial: atomistic data (BeF2)](tutorial-atomistic-bef2.md)
+* [Tutorial: atomistic domain, built-in (BeF2)](tutorial-atomistic-bef2.md)
 * [CLI Reference](cli.md)
 * [Configuration Reference](configuration.md)
 

@@ -44,6 +44,11 @@ materials = [
     "pymatgen>=2023.1.1",
     "matminer>=0.8.0",
 ]
+atomistic = [
+    "lmdb>=1.4",
+    "pandas>=1.5",
+    "pyarrow>=10",
+]
 life_sciences = [
     "biopython>=1.80",
 ]

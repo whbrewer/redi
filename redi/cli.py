@@ -559,7 +559,7 @@ def run_pipeline(
         print_section("Domain Detection")
         if domain == "general" and domain_was_auto:
             print(f"    {Colors.YELLOW}⚠ Domain not auto-detected for {primary_path.suffix or 'this input'}; using the generic pipeline{Colors.END}")
-            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc, geospatial, combustion{Colors.END}")
+            print(f"    {Colors.DIM}Tip: Use -d/--domain to specify: climate, materials, life_sciences, fusion, hpc, geospatial, combustion, atomistic{Colors.END}")
         else:
             print(f"    {icon} Detected: {Colors.BOLD}{Colors.CYAN}{domain.upper()}{Colors.END}")
     elif style == "simple":
@@ -659,6 +659,10 @@ def run_pipeline(
             pass  # falls through to plugin/generic lookup below
         elif domain == "combustion":
             from .domains.combustion import get_full_pipeline
+        elif domain in ("atomistic", "hydragnn"):
+            from .domains.atomistic import get_full_pipeline as _get_atom_pipeline
+            _atom_fmt = config.get("output_format", "npz") if config else "npz"
+            get_full_pipeline = lambda: _get_atom_pipeline(output_format=_atom_fmt)
         else:
             # Check installed plugins before falling back to generic pipeline
             try:
@@ -2780,7 +2784,7 @@ Download examples (climate domain)::
         """
     )
     run_parser.add_argument("input", nargs="*", help="Input file path(s) or glob pattern")
-    _builtin_domains = ["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "combustion", "general"]
+    _builtin_domains = ["climate", "materials", "life_sciences", "fusion", "hpc", "geospatial", "nuclear_physics", "combustion", "atomistic", "hydragnn", "general"]
     try:
         from .plugins import get_registry
         _plugin_domains = [p.domain for p in get_registry().values()]

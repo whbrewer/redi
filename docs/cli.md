@@ -67,7 +67,7 @@ usage: redi run [-h]
 
 | Flag | Description |
 |---|---|
-| `-d, --domain` | Scientific domain: `climate`, `materials`, `life_sciences`, `fusion`, `hpc`, `geospatial`, `nuclear_physics`, `combustion`, `general`, or a plugin domain such as `atomistic` (detected only for unambiguous formats such as `.nc`, `.cif`, `.shp`, `.fasta`; otherwise the generic pipeline runs, so pass `-d`) |
+| `-d, --domain` | Scientific domain: `climate`, `materials`, `life_sciences`, `fusion`, `hpc`, `geospatial`, `nuclear_physics`, `combustion`, `atomistic` (alias `hydragnn`), `general`, or a plugin domain (detected only for unambiguous formats such as `.nc`, `.cif`, `.shp`, `.fasta`; otherwise the generic pipeline runs, so pass `-d`) |
 | `-o, --output` | Output directory (disables hash-based naming) |
 | `--unique` | Append timestamp to output dir for unique runs |
 | `--hash-content` | Hash file content (not just path+size) for output dir naming |
