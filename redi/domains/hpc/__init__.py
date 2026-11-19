@@ -30,10 +30,49 @@ HPC_FIELDS = {
 CATEGORICAL_FIELDS = ["user", "project", "queue", "partition", "status", "state", "system", "machine"]
 
 
-def _parse_date_range(start_str, end_str):
+_TZ_WARNED: set = set()
+
+
+def _warn_once(key: str, msg: str) -> None:
+    if key not in _TZ_WARNED:
+        _TZ_WARNED.add(key)
+        logger.warning(msg)
+
+
+def _get_tz(name):
+    """IANA timezone from the config's ``timezone`` key (e.g. "America/Los_Angeles", "UTC"), or None."""
+    if not name:
+        return None
+    from zoneinfo import ZoneInfo
+    return ZoneInfo(str(name))
+
+
+def _naive_to_epoch(dt, tz) -> float:
+    """Epoch seconds of a naive datetime read as wall-clock time in ``tz``.
+
+    With no ``timezone`` configured the legacy behaviour applies: the *host's* local zone, which
+    makes the epoch (and which jobs a date window selects) depend on the machine.  Warn once."""
+    if tz is None:
+        _warn_once("host_tz", "naive timestamps are being read in the HOST's local timezone, so epochs and "
+                              "date windows depend on the machine; set `timezone:` (e.g. UTC or America/Los_Angeles) "
+                              "in the config for reproducible results")
+        return dt.timestamp()
+    return dt.replace(tzinfo=tz).timestamp()
+
+
+def _epoch_to_naive(ts, tz):
+    """Inverse of _naive_to_epoch: naive wall-clock datetime in ``tz`` (host-local if None)."""
+    from datetime import datetime
+    if tz is None:
+        return datetime.fromtimestamp(ts)
+    return datetime.fromtimestamp(ts, tz).replace(tzinfo=None)
+
+
+def _parse_date_range(start_str, end_str, tz=None):
     """Parse start/end strings to Unix epoch seconds (floats).
 
-    Accepts ISO format (2017-10-03T00:00, 2017-10-03, 20170328) or bare floats.
+    Accepts ISO format (2017-10-03T00:00, 2017-10-03, 20170328) or bare floats (epoch seconds, which
+    are timezone-free).  Date strings are read as wall-clock time in ``tz`` (host-local if None).
     Returns (ts_start, ts_end) where either may be None if the input was None.
     """
     from datetime import datetime
@@ -44,7 +83,7 @@ def _parse_date_range(start_str, end_str):
         s = str(s).strip().strip('"').strip("'")
         for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d", "%Y%m%d"):
             try:
-                return datetime.strptime(s, fmt).timestamp()
+                return _naive_to_epoch(datetime.strptime(s, fmt), tz)
             except ValueError:
                 pass
         try:
@@ -347,6 +386,7 @@ def get_ingest_steps():
         description = "Load Philly GPU cluster traces"
 
         _DATE_FMT = "%Y-%m-%d %H:%M:%S"
+        _tz = None   # set from the config's `timezone` in execute()
 
         def validate(self, ctx: PipelineContext) -> bool:
             return ctx.metadata.get("file_format") == "philly"
@@ -360,7 +400,7 @@ def get_ingest_steps():
             val = val.replace(" PST", "").replace(" PDT", "")
             try:
                 from datetime import datetime
-                return datetime.strptime(val, self._DATE_FMT).timestamp()
+                return _naive_to_epoch(datetime.strptime(val, self._DATE_FMT), self._tz)
             except ValueError:
                 return None
 
@@ -400,6 +440,7 @@ def get_ingest_steps():
                 import pandas as pd
                 from datetime import datetime, timedelta
 
+                self._tz = _get_tz(ctx.config.get("timezone"))
                 trace_dir = ctx.input_path
                 job_log_path = trace_dir / "cluster_job_log"
 
@@ -459,7 +500,7 @@ def get_ingest_steps():
                 ts0, ts1 = None, None
                 if _ds or _de:
                     try:
-                        ts0, ts1 = _parse_date_range(_ds, _de)
+                        ts0, ts1 = _parse_date_range(_ds, _de, self._tz)
                         filter_col = "submitted_time" if "submitted_time" in df.columns else "start_time"
                         pre = len(df)
                         if ts0 is not None:
@@ -485,14 +526,14 @@ def get_ingest_steps():
                     _ts0 = ts0 if (_ds or _de) else None
                     _ts1 = ts1 if (_ds or _de) else None
                     if _ts0 is not None:
-                        _min_date = datetime.fromtimestamp(_ts0).date() - _td(days=1)
+                        _min_date = _epoch_to_naive(_ts0, self._tz).date() - _td(days=1)
                     else:
-                        _min_date = (datetime.fromtimestamp(df["start_time"].min()).date()
+                        _min_date = (_epoch_to_naive(df["start_time"].min(), self._tz).date()
                                      - _td(days=1))
                     if _ts1 is not None:
-                        _max_date = datetime.fromtimestamp(_ts1).date() + _td(days=1)
+                        _max_date = _epoch_to_naive(_ts1, self._tz).date() + _td(days=1)
                     else:
-                        _max_date = (datetime.fromtimestamp(df["end_time"].max()).date()
+                        _max_date = (_epoch_to_naive(df["end_time"].max(), self._tz).date()
                                      + _td(days=1))
                     logger.debug(
                         f"     Loading CPU/GPU daily traces "
@@ -534,8 +575,8 @@ def get_ingest_steps():
                     cpu_traces, gpu_traces = [], []
                     for _, row in df.iterrows():
                         machines = row["_machine_ids"]
-                        start_dt = datetime.fromtimestamp(row["start_time"])
-                        end_dt   = datetime.fromtimestamp(row["end_time"])
+                        start_dt = _epoch_to_naive(row["start_time"], self._tz)
+                        end_dt   = _epoch_to_naive(row["end_time"], self._tz)
                         cpu_traces.append(extract_trace(cpu_by_machine, "cpu_util",
                                                         machines, start_dt, end_dt))
                         gpu_traces.append(extract_trace(gpu_by_machine, "gpu_util",
@@ -1183,7 +1224,8 @@ def _get_date_filter_step():
                 return ctx
 
             try:
-                ts0, ts1 = _parse_date_range(_ds, _de)
+                _tz = _get_tz(ctx.config.get("timezone"))
+                ts0, ts1 = _parse_date_range(_ds, _de, _tz)
             except Exception as e:
                 ctx.add_error(f"Date filter: {e}")
                 return ctx
@@ -1202,15 +1244,28 @@ def _get_date_filter_step():
                         return orig
                 return None
 
+            def _dt_to_epoch(s):
+                """Epoch seconds of a datetime Series: timezone-aware values are exact; naive
+                values are read in the configured `timezone` (legacy fallback: as UTC)."""
+                utc_epoch = pd.Timestamp("1970-01-01", tz="UTC")
+                if s.dt.tz is not None:
+                    return (s.dt.tz_convert("UTC") - utc_epoch) / pd.Timedelta(seconds=1)
+                if _tz is not None:
+                    s = s.dt.tz_localize(_tz, ambiguous="NaT", nonexistent="shift_forward")
+                    return (s.dt.tz_convert("UTC") - utc_epoch) / pd.Timedelta(seconds=1)
+                _warn_once("filter_naive", "date filter: naive timestamps are compared as UTC but the window "
+                                           "strings were read in the host's local timezone; set `timezone:` "
+                                           "in the config")
+                return (s - pd.Timestamp("1970-01-01")) / pd.Timedelta(seconds=1)
+
             def _to_epoch_seconds(series):
-                epoch = pd.Timestamp("1970-01-01")
                 if pd.api.types.is_datetime64_any_dtype(series):
                     # Unit-agnostic: pandas datetime64 resolution varies
                     # (ns/us/s depending on pandas version and how the column
                     # was parsed), so a fixed int64/1e9 divisor silently gives
                     # wrong epoch seconds when the unit isn't ns (e.g.
                     # datetime64[us]).
-                    return (series - epoch) / pd.Timedelta(seconds=1)
+                    return _dt_to_epoch(series)
                 numeric = pd.to_numeric(series, errors="coerce")
                 if numeric.notna().sum() == 0:
                     # Not numeric (epoch) -- try parsing as a datetime string
@@ -1219,7 +1274,7 @@ def _get_date_filter_step():
                     # which is where such strings would normally get parsed).
                     parsed = pd.to_datetime(series, errors="coerce")
                     if parsed.notna().any():
-                        numeric = (parsed - epoch) / pd.Timedelta(seconds=1)
+                        numeric = _dt_to_epoch(parsed)
                 return numeric
 
             mode = ctx.config.get("date_filter_mode", "point")

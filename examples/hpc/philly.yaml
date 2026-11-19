@@ -15,6 +15,10 @@
 # gpu_by_day/ if those directories exist (created by parse_philly_traces.py).
 
 domain: hpc
+# Optional: `timezone: America/Los_Angeles` reads the job log's naive timestamps (and the start/end window)
+# as Pacific wall-clock time. Outputs are the same either way (times are written relative to the
+# first job and the window is read in the same zone as the data); the key only makes the epochs
+# REDI uses internally reproducible across machines.
 input_path: /opt/data/philly/trace-data
 output_dir: ./output/philly_raps
 start: "2017-10-03T00:00"
