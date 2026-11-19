@@ -30,6 +30,18 @@ HPC_FIELDS = {
 CATEGORICAL_FIELDS = ["user", "project", "queue", "partition", "status", "state", "system", "machine"]
 
 
+def _is_categorical_text(s) -> bool:
+    """True for a text-like column that can be encoded: object or string dtype, with hashable cells.
+
+    ``dtype == 'object'`` alone (a) misses pandas 3's string dtype and (b) wrongly accepts columns of
+    lists/arrays (e.g. node lists), whose cells are unhashable."""
+    import numpy as np
+    import pandas as pd
+    if not (pd.api.types.is_object_dtype(s) or pd.api.types.is_string_dtype(s)):
+        return False
+    return not s.map(lambda v: isinstance(v, (list, tuple, set, dict, np.ndarray))).any()
+
+
 _TZ_WARNED: set = set()
 
 
@@ -762,8 +774,12 @@ def get_preprocess_steps():
                             if "exit" in col.lower():
                                 df = df[df[col] == 0]
 
-                # Remove duplicates
-                df = df.drop_duplicates()
+                # Remove duplicates.  Array/list cells are unhashable and make drop_duplicates() raise
+                # (the step then silently did nothing), so compare on the hashable columns only.
+                import numpy as _np
+                _hashable = [c for c in df.columns
+                             if not df[c].map(lambda v: isinstance(v, (list, tuple, set, dict, _np.ndarray))).any()]
+                df = df.drop_duplicates(subset=_hashable) if _hashable else df
 
                 ctx.data = df
                 ctx.metadata["rows_removed"] = initial_count - len(df)
@@ -794,7 +810,7 @@ def get_preprocess_steps():
                 parsed = []
                 for col in df.columns:
                     if any(kw in col.lower() for kw in timestamp_keywords):
-                        if df[col].dtype == 'object':
+                        if _is_categorical_text(df[col]):
                             try:
                                 df[col] = pd.to_datetime(df[col], errors='coerce')
                                 parsed.append(col)
@@ -905,10 +921,11 @@ def get_transform_steps():
 
                 df = ctx.data
                 encoded_cols = []
+                encoded_names = []   # resulting column names; the normalizer must leave these alone
 
-                for col in df.columns:
-                    # Check if it's a categorical column
-                    if df[col].dtype == 'object':
+                for col in list(df.columns):
+                    # Check if it's a categorical column (object or string dtype, hashable cells)
+                    if _is_categorical_text(df[col]):
                         n_unique = df[col].nunique()
 
                         if n_unique > self.max_categories:
@@ -917,16 +934,20 @@ def get_transform_steps():
                             df[f"{col}_freq"] = df[col].map(freq)
                             df = df.drop(columns=[col])
                             encoded_cols.append(f"{col}_freq (frequency)")
+                            encoded_names.append(f"{col}_freq")
                         elif self.method == "label":
                             df[col], _ = pd.factorize(df[col])
                             encoded_cols.append(f"{col} (label)")
+                            encoded_names.append(col)
                         elif self.method == "onehot" and n_unique <= 20:
                             dummies = pd.get_dummies(df[col], prefix=col)
                             df = pd.concat([df.drop(columns=[col]), dummies], axis=1)
                             encoded_cols.append(f"{col} (onehot)")
+                            encoded_names.extend(dummies.columns.tolist())
 
                 ctx.data = df
                 ctx.metadata["encoded_categoricals"] = encoded_cols
+                ctx.metadata["encoded_column_names"] = encoded_names
                 logger.info(f"Encoded {len(encoded_cols)} categorical columns")
 
             except Exception as e:
@@ -958,8 +979,11 @@ def get_transform_steps():
 
                 # Exclude datetime-derived features from normalization
                 exclude_patterns = ["_hour", "_dayofweek", "_month", "exit"]
+                # Label codes / frequencies / one-hot columns are identifiers, not magnitudes: a z-score
+                # of a first-appearance label code turns an arbitrary order into a fake ordinal feature.
+                _encoded = set(ctx.metadata.get("encoded_column_names", []))
                 feature_cols = [c for c in numeric_cols
-                               if not any(p in c.lower() for p in exclude_patterns)]
+                               if c not in _encoded and not any(p in c.lower() for p in exclude_patterns)]
 
                 stats = {}
                 for col in feature_cols:

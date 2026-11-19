@@ -881,6 +881,7 @@ class JobDictBuilder:
                                                 clamp_negative=clamp_negative)
         self.account_source = account_source
         self.state_encoding = state_encoding
+        self.negative_counts: Dict[str, int] = {}   # canonical field -> rows whose negative count became 0
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
         self.jobprofile_df = jobprofile_df
@@ -1094,6 +1095,11 @@ class JobDictBuilder:
             # Strip dot-suffix from id field when requested (e.g. "1242841.aurora" → "1242841")
             if canon == "id" and self.id_strip_suffix and isinstance(value, str) and "." in value:
                 value = value.rsplit(".", 1)[0]
+            # A negative resource count is a sentinel for "unknown" (Aurora reports GPUS_REQUESTED = -1 on
+            # every row), not a negative number of devices: store 0 and count it for the report.
+            if canon in ("cpu_cores_required", "gpu_units_required") and isinstance(value, (int, float)) and value < 0:
+                self.negative_counts[canon] = self.negative_counts.get(canon, 0) + 1
+                value = 0
             job[canon] = value
 
         # RAPS reads the person from the ``account`` slot; keep the canonical
@@ -1948,6 +1954,10 @@ class BuildJobDicts(PipelineStep):
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
         ctx.metadata.setdefault("field_sanity", []).extend(builder.trace_normalizer.sanity)
+        for _f, _n in builder.negative_counts.items():
+            ctx.metadata["field_sanity"].append({
+                "field": _f, "issue": "negative count (sentinel for unknown, e.g. -1) replaced with 0",
+                "rows": int(_n), "total_rows": int(len(ctx.data))})
 
         ctx.data = jobs
         ctx.metadata["raps_job_count"] = len(jobs)
