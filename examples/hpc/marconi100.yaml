@@ -21,6 +21,14 @@ raps_jobs:
   system_name: marconi100
   trace_quanta: 20
 
+  column_scalars:
+    time_limit: 60          # SLURM stores time_limit in minutes; convert to seconds
+                             # (same convention as mit_supercloud.yaml's timelimit;
+                             # confirmed via raw value distribution -- 1440/720/240/60/30
+                             # etc. are only sensible as minutes, e.g. 1440min = 24h, the
+                             # standard Slurm walltime cap. Left unconverted, wallt_norm =
+                             # time_limit/max_walltime_s collapsed every job into [0, 0.017].)
+
   column_overrides:
     # SLURM-style columns
     job_id: id
