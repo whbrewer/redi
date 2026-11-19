@@ -137,7 +137,8 @@ class TestColumnMapper:
         mapped = result.mapped
 
         assert mapped["id"] == "primary_job_id"
-        assert mapped["account"] in ("user_name", "account")
+        assert mapped["user"] == "user_name"      # the person
+        assert mapped["account"] == "account"     # the project/allocation
         assert mapped["nodes_required"] == "num_nodes"
         assert mapped["submit_time"] == "time_submit"
         assert mapped["start_time"] == "time_start"
@@ -150,7 +151,8 @@ class TestColumnMapper:
         mapped = result.mapped
 
         assert mapped["id"] == "jid"
-        assert mapped["account"] == "usr"
+        assert mapped["user"] == "usr"
+        assert "account" not in mapped            # Fugaku has no project column
         assert mapped["nodes_required"] == "nnumr"
 
     def test_manual_overrides(self):
@@ -162,7 +164,7 @@ class TestColumnMapper:
     def test_case_insensitive(self, mapper):
         result = mapper.map_columns(["JOB_ID", "User", "NUM_NODES"])
         assert "id" in result.mapped
-        assert "account" in result.mapped
+        assert "user" in result.mapped
         assert "nodes_required" in result.mapped
 
     def test_unmapped_columns_tracked(self, mapper):

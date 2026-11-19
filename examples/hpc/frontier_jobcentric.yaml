@@ -1,0 +1,62 @@
+# REDI RAPS Job Extraction: public OLCF Frontier Job-Centric Telemetry Dataset
+#
+# Dataset: Huk et al., "Constructing a Job-Centric Frontier Telemetry Dataset to
+#          Accelerate HPC Operations, System Optimization, and AI Research", 2026.
+#          DOI 10.13139/OLCF/3013979 (public).
+# Layout:  <root>/frontier-completed-job-info.parquet   one row per job (152,400)
+#          <root>/job-telemetry/<end date>/<job_idx>/<job_idx>-cleaned-power.parquet
+#          1 s CPU/GPU power summed over the job's nodes, partitioned by the date
+#          the job ended (135 partitions, 2024-01-17 to 2025-12-31).
+#
+# Jobs are a filtered sample (COMPLETED/TIMEOUT/CANCELLED, about 17% of eligible
+# jobs), so a single day under-fills the machine.  Pick one or more partitions with
+# `date_dir`.  Ground truth for validation: RAPS's own loader,
+#   raps run --system frontier --dataloader raps.dataloaders.frontier_jobcentric \
+#       -f <root>/frontier-completed-job-info.parquet,<root>/job-telemetry/<date> -t 1m
+#
+# Both a user (`user_id`) and a project (`project_id`) are present, so this is the
+# first HPC config that fills REDI's canonical `user` and `account` separately.
+domain: hpc
+input_path: /opt/data/hpc/frontier/telemetry
+output_dir: ./output/frontier_jobcentric_raps
+date_dir: "2024-01-17"
+
+raps_jobs:
+  enabled: true
+  system_name: frontier
+  trace_quanta: 15
+  priority_policy: frontier
+
+  # RAPS's job-centric loader keeps utilization below Frontier's configured idle
+  # signed (negative); do the same so the traces match it exactly.
+  clamp_negative_utilization: false
+
+  # The RAPS job dict has one `account` slot, which RAPS fills with the USER here
+  # (account=user_id); the canonical project is kept in the extra `project` key.
+  account_source: user
+
+  # Used when RAPS is not installed; overridden by the RAPS system config otherwise.
+  power_config:
+    cpu: {idle: 90, max: 280, per_node: 1}
+    gpu: {idle: 88, max: 560, per_node: 4}   # MI250X modules, as in RAPS frontier.yaml
+
+  topology:
+    sc_shape: [25, 3, 128]
+    blades_per_chassis: 8
+    nodes_per_blade: 2
+
+  column_overrides:
+    job_id: id
+    name: name
+    user_id: user
+    project_id: account
+    node_count: nodes_required
+    submit_time: submit_time
+    start_time: start_time
+    end_time: end_time
+    time_limit: time_limit            # seconds already (max(wall_time*60, run time), as RAPS)
+    completion_state: end_state
+    queue: partition
+    node_list: scheduled_nodes
+    cpu_agg_total_power: cpu_trace
+    gpu_agg_total_power: gpu_trace

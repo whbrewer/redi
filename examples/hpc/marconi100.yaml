@@ -24,7 +24,7 @@ raps_jobs:
   column_overrides:
     # SLURM-style columns
     job_id: id
-    user_id: account
+    user_id: user
     num_nodes_alloc: nodes_required
     submit_time: submit_time
     start_time: start_time

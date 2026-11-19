@@ -31,6 +31,10 @@ raps_jobs:
   # https://docs.olcf.ornl.gov/systems/frontier_user_guide.html#job-priority-by-node-count
   priority_policy: frontier
 
+  # RAPS's private-Frontier dataloader puts the project in the job dict's `account`
+  # slot (not the user), so keep that here.
+  account_source: account
+
   # Power config for trace normalization (from RAPS frontier.yaml)
   # Used when RAPS is not installed; overridden by RAPS system config when available
   power_config:
@@ -54,6 +58,7 @@ raps_jobs:
     job_id: id
     name: name
     account: account
+    user: user                # the person; the project stays in `account` (RAPS slot, see account_source)
     node_count: nodes_required
     time_submission: submit_time
     time_start: start_time

@@ -23,7 +23,7 @@ raps_jobs:
     # Fugaku's abbreviated field names → RAPS canonical fields
     jid: id
     jnam: name
-    usr: account
+    usr: user
     nnumr: nodes_required         # Number of nodes requested
     adt: submit_time              # Arrival date/time
     sdt: start_time               # Start date/time

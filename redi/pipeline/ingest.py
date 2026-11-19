@@ -141,6 +141,16 @@ class DetectFormat(PipelineStep):
 
         return None
 
+    def _detect_frontier_jobcentric_format(self, path: Path) -> Optional[str]:
+        """Detect the OLCF Frontier Job-Centric Telemetry Dataset root directory
+        (DOI 10.13139/OLCF/3013979): a job-info parquet plus a job-telemetry/ tree."""
+        if not path.is_dir():
+            return None
+        if ((path / "frontier-completed-job-info.parquet").exists()
+                and (path / "job-telemetry").is_dir()):
+            return "frontier-jobcentric"
+        return None
+
     def _detect_philly_format(self, path: Path) -> Optional[str]:
         """Detect Philly GPU cluster trace directory layout."""
         if not path.is_dir():
@@ -241,9 +251,13 @@ class DetectFormat(PipelineStep):
                 detected_format = "zarr"
                 logger.debug(f"     Found zarr markers, format set to zarr")
             else:
-                # Check for Philly GPU cluster traces
+                # Check for the public Frontier job-centric dataset, then Philly traces
+                jobcentric_format = self._detect_frontier_jobcentric_format(path)
                 philly_format = self._detect_philly_format(path)
-                if philly_format:
+                if jobcentric_format:
+                    detected_format = jobcentric_format
+                    logger.debug(f"     Detected Frontier job-centric dataset")
+                elif philly_format:
                     detected_format = philly_format
                     logger.debug(f"     Detected Philly trace format")
                 # Check for PBS/Torque formats

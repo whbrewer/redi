@@ -567,8 +567,117 @@ def get_ingest_steps():
     from .swf_loader import LoadSWFData
     from .sacct_loader import LoadAdastraSacctDump
 
+
+    class LoadFrontierJobCentric(PipelineStep):
+        """Load the public OLCF Frontier Job-Centric Telemetry Dataset.
+
+        DOI 10.13139/OLCF/3013979.  ``input_path`` is the dataset root, holding
+        ``frontier-completed-job-info.parquet`` and ``job-telemetry/<date>/<job_idx>/
+        <job_idx>-cleaned-power.parquet``.  Jobs are partitioned by the date they
+        ended, so the config must name one or more partitions with ``date_dir``
+        (a string or a list).  Jobs without a telemetry file are skipped, as in
+        RAPS's own ``raps.dataloaders.frontier_jobcentric`` dataloader.
+
+        Output columns include the per-quantum aggregate CPU and GPU power summed
+        over the job's nodes (``cpu_agg_total_power``, ``gpu_agg_total_power``);
+        the TraceNormalizer later converts them to utilization.  ``time_limit`` is
+        in seconds and, as in RAPS, never shorter than the recorded run time
+        (rounded up to the trace quantum) because Slurm lets TIMEOUT jobs run a
+        little past their limit.
+        """
+
+        name = "load_frontier_jobcentric"
+        stage = PipelineStage.INGEST
+        description = "Load OLCF Frontier job-centric telemetry dataset"
+        SOURCE_BIN_SECONDS = 1   # telemetry is binned at 1 s
+        CPU_COL = "cpu_agg_total_power"
+        GPU_COL = "gpu_agg_total_power"
+
+        def validate(self, ctx: PipelineContext) -> bool:
+            return ctx.metadata.get("file_format") == "frontier-jobcentric"
+
+        def _read_trace(self, path: Path, quanta: int):
+            import numpy as np
+            import pandas as pd
+            df = pd.read_parquet(path, columns=[self.CPU_COL, self.GPU_COL])
+            step = max(1, quanta // self.SOURCE_BIN_SECONDS)
+            out = []
+            for col in (self.CPU_COL, self.GPU_COL):
+                vals = df[col].to_numpy(dtype=float)
+                pad = (-len(vals)) % step
+                if pad:  # average the trailing partial interval over the bins it has
+                    vals = np.concatenate([vals, np.full(pad, np.nan)])
+                out.append(np.nanmean(vals.reshape(-1, step), axis=1))
+            return out[0], out[1]
+
+        def execute(self, ctx: PipelineContext) -> PipelineContext:
+            try:
+                import numpy as np
+                import pandas as pd
+
+                root = Path(ctx.input_path)
+                jobs_df = pd.read_parquet(root / "frontier-completed-job-info.parquet")
+                dates = ctx.config.get("date_dir") or ctx.config.get("date_dirs")
+                if not dates:
+                    avail = sorted(jobs_df["date_dir"].unique())
+                    ctx.add_error("frontier-jobcentric needs 'date_dir' (a partition or "
+                                  f"list of partitions) in the config; {len(avail)} available, "
+                                  f"{avail[0]} to {avail[-1]}")
+                    return ctx
+                dates = [dates] if isinstance(dates, str) else list(dates)
+                raps_cfg = ctx.config.get("raps_jobs") or {}
+                quanta = int(raps_cfg.get("trace_quanta") or 15)
+                jobs_df = jobs_df[jobs_df["date_dir"].isin(dates)]
+                if jobs_df.empty:
+                    ctx.add_error(f"No jobs with date_dir in {dates}")
+                    return ctx
+
+                records = []
+                n_missing = 0
+                for row in jobs_df.sort_values("start_time").itertuples(index=False):
+                    path = root / "job-telemetry" / row.date_dir / row.job_idx / f"{row.job_idx}-cleaned-power.parquet"
+                    if not path.exists():
+                        n_missing += 1
+                        continue
+                    cpu_p, gpu_p = self._read_trace(path, quanta)
+                    if gpu_p.size == 0:
+                        n_missing += 1
+                        continue
+                    run_s = (row.end_time - row.start_time).total_seconds()
+                    records.append({
+                        "job_id": int(row.job_idx),
+                        "name": f"{row.project_id}/{row.job_idx}",
+                        "user_id": row.user_id,
+                        "project_id": row.project_id,
+                        "node_count": int(row.node_count),
+                        "submit_time": row.submit_time,
+                        "start_time": row.start_time,
+                        "end_time": row.end_time,
+                        "time_limit": max(int(row.wall_time) * 60, int(np.ceil(run_s / quanta)) * quanta),
+                        "completion_state": row.completion_state,
+                        "queue": row.queue,
+                        "node_list": list(row.node_list),
+                        self.CPU_COL: cpu_p,
+                        self.GPU_COL: gpu_p,
+                    })
+                if not records:
+                    ctx.add_error(f"No telemetry files found for {dates} under {root / 'job-telemetry'}")
+                    return ctx
+                ctx.data = pd.DataFrame(records)
+                ctx.metadata["num_rows"] = len(ctx.data)
+                ctx.metadata["num_columns"] = len(ctx.data.columns)
+                ctx.metadata["frontier_jobcentric"] = {
+                    "date_dir": dates, "jobs_in_partition": int(len(jobs_df)),
+                    "jobs_without_telemetry": n_missing, "trace_quanta": quanta}
+                logger.info(f"Loaded Frontier job-centric {dates}: {len(records)} jobs "
+                            f"({n_missing} of {len(jobs_df)} without telemetry skipped)")
+            except Exception as e:
+                ctx.add_error(f"Error loading Frontier job-centric data: {str(e)}")
+            return ctx
+
     return [DetectFormat(), LoadHPCData(), LoadTorqueData(), LoadGCloudV2Data(),
-            LoadPhillyData(), LoadSWFData(), LoadAdastraSacctDump()]
+            LoadPhillyData(), LoadSWFData(), LoadAdastraSacctDump(),
+            LoadFrontierJobCentric()]
 
 
 def get_preprocess_steps():
@@ -1189,7 +1298,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
                       output_format="npz", system_name="unknown",
                       jobprofile_path=None, topology=None, priority_policy=None,
                       id_strip_suffix=False, column_scalars=None,
-                      gpu_residual_config=None):
+                      gpu_residual_config=None, clamp_negative=True,
+                      account_source="user"):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -1225,7 +1335,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
         BuildJobDicts(power_config=power_config, trace_quanta=trace_quanta,
                       topology=topology, system_name=system_name,
                       priority_policy=priority_policy, id_strip_suffix=id_strip_suffix,
-                      gpu_residual_config=gpu_residual_config),
+                      gpu_residual_config=gpu_residual_config,
+                      clamp_negative=clamp_negative, account_source=account_source),
         SaveJobDicts(output_format=output_format, system_name=system_name),
         WriteChecksums(),
     ]

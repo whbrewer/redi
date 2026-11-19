@@ -31,7 +31,7 @@ raps_jobs:
     # PBS/Torque field names → RAPS canonical fields
     # Note: LoadTorqueData lowercases all keys, so overrides must use lowercase too.
     jobid: id
-    user: account
+    user: user
     "resource_list.nodect": nodes_required      # was Resource_List.nodect (wrong case)
     qtime: submit_time
     start: start_time

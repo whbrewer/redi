@@ -635,6 +635,8 @@ def run_pipeline(
             _id_strip_suffix = bool(_raps_cfg.get("id_strip_suffix")) if isinstance(_raps_cfg, dict) else False
             _col_scalars = _raps_cfg.get("column_scalars") if isinstance(_raps_cfg, dict) else None
             _gpu_residual_cfg = _raps_cfg.get("gpu_power_residual") if isinstance(_raps_cfg, dict) else None
+            _clamp_neg = bool(_raps_cfg.get("clamp_negative_utilization", True)) if isinstance(_raps_cfg, dict) else True
+            _account_source = str(_raps_cfg.get("account_source", "user")) if isinstance(_raps_cfg, dict) else "user"
             get_full_pipeline = lambda: _get_hpc_pipeline(
                 raps_jobs=raps_jobs,
                 column_overrides=_col_overrides,
@@ -648,6 +650,8 @@ def run_pipeline(
                 id_strip_suffix=_id_strip_suffix,
                 column_scalars=_col_scalars,
                 gpu_residual_config=_gpu_residual_cfg,
+                clamp_negative=_clamp_neg,
+                account_source=_account_source,
             )
         elif domain == "geospatial":
             from .domains.geospatial import get_full_pipeline as _get_geo_pipeline

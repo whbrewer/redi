@@ -21,6 +21,6 @@ raps_jobs:
     num_nodes_alloc: nodes_required
     num_cores_alloc: cpu_cores_required
     num_gpus_alloc: gpu_units_required
-    user_id: account
+    user_id: user
     job_state: end_state
     nodes: scheduled_nodes

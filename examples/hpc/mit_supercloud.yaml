@@ -31,7 +31,7 @@ raps_jobs:
   column_overrides:
     # MIT Supercloud SLURM log field names
     id_job: id
-    id_user: account
+    id_user: user
     nodes_alloc: nodes_required
     time_submit: submit_time
     time_start: start_time

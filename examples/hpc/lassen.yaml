@@ -28,7 +28,7 @@ raps_jobs:
     # Lassen CSM uses IBM-specific field names
     allocation_id: id
     primary_job_id: id            # alternative ID — use whichever is preferred
-    hashed_user_id: account
+    hashed_user_id: user
     num_nodes: nodes_required
     job_submit_time: submit_time
     begin_time: start_time

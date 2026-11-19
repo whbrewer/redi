@@ -21,7 +21,7 @@ raps_jobs:
     # Aurora uses COBALT scheduler, not SLURM — different naming conventions
     # JOB_NAME used for id (suffix stripped to match RAPS GT) and name (full value)
     JOB_NAME: id
-    USERNAME_GENID: account
+    USERNAME_GENID: user
     NODES_USED: nodes_required
     QUEUED_TIMESTAMP: submit_time
     START_TIMESTAMP: start_time

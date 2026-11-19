@@ -96,9 +96,23 @@ FIELD_REGISTRY: List[FieldSpec] = [
         default="",
     ),
     FieldSpec(
+        canonical_name="user",
+        aliases=["user", "user_id", "id_user", "usr", "hashed_user_id",
+                 "user_name", "username", "userid"],
+        field_type="str",
+        required=False,
+        default="",
+    ),
+    FieldSpec(
         canonical_name="account",
-        aliases=["account", "user", "user_id", "id_user", "usr",
-                 "hashed_user_id", "user_name"],
+        # The project / allocation / group a job is charged to, NOT the person
+        # (that is ``user``).  RAPS's own job dict has only an ``account``
+        # slot, which its dataloaders fill with the user ID; see
+        # ``account_source`` in JobDictBuilder.
+        # ``project_id`` is deliberately NOT an alias: the token matcher would then
+        # pair it with any ``*_id`` column (e.g. Slurm's ``group_id``) through the
+        # shared generic token "id".  Map project-ID columns explicitly in the config.
+        aliases=["account", "project", "project_name", "allocation"],
         field_type="str",
         required=False,
         default="unknown",
@@ -551,7 +565,8 @@ class TraceNormalizer:
     clamped to ``[0, 1]`` — RAPS allows >1 values for GPU utilization.
     """
 
-    def __init__(self, power_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, power_config: Optional[Dict[str, Any]] = None,
+                 clamp_negative: bool = True):
         """
         Args:
             power_config: Dict like::
@@ -559,8 +574,12 @@ class TraceNormalizer:
                 {"cpu": {"idle": 90, "max": 280, "per_node": 1},
                  "gpu": {"idle": 44, "max": 238, "per_node": 8},
                  "nics_per_node": 4, "power_nic": 20}
+            clamp_negative: Clamp utilization below idle to 0 (REDI's historic
+                behaviour).  Set False to keep the signed value, as RAPS's
+                Frontier job-centric dataloader does for a Frontier-sized target.
         """
         self.power_config = power_config or {}
+        self.clamp_negative = clamp_negative
 
     def normalize_trace(self, value: Any, canonical_name: str, col_name: str,
                         wall_time: float = 0, nodes_required: int = 1) -> Any:
@@ -677,10 +696,11 @@ class TraceNormalizer:
                 # Full RAPS formula
                 watts = value / nodes_required
                 util = (watts / idle - per_node) / (max_p / idle - 1.0)
-                return max(0.0, float(util))
+                return max(0.0, float(util)) if self.clamp_negative else float(util)
             elif max_p > idle > 0:
                 # Simple linear normalization (no per_node info)
-                return max(0.0, float((value - idle) / (max_p - idle)))
+                v = float((value - idle) / (max_p - idle))
+                return max(0.0, v) if self.clamp_negative else v
             else:
                 return 0.0
 
@@ -793,8 +813,20 @@ class JobDictBuilder:
                  system_name: str = "unknown",
                  priority_policy: Optional[str] = None,
                  id_strip_suffix: bool = False,
-                 gpu_residual_config: Optional[Dict[str, Any]] = None):
-        self.trace_normalizer = TraceNormalizer(power_config=power_config)
+                 gpu_residual_config: Optional[Dict[str, Any]] = None,
+                 clamp_negative: bool = True,
+                 account_source: str = "user"):
+        """
+        account_source: which canonical field fills the job dict's ``account``
+            slot, which RAPS reads.  ``"user"`` (default) matches RAPS's own
+            dataloaders, which put the user ID there; when no ``user`` column is
+            mapped the ``account`` field is used unchanged (legacy behaviour).
+            ``"account"`` always keeps the canonical project/account.  When the
+            slot carries the user, the canonical project is kept in ``project``.
+        """
+        self.trace_normalizer = TraceNormalizer(power_config=power_config,
+                                                clamp_negative=clamp_negative)
+        self.account_source = account_source
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
         self.jobprofile_df = jobprofile_df
@@ -1009,6 +1041,13 @@ class JobDictBuilder:
             if canon == "id" and self.id_strip_suffix and isinstance(value, str) and "." in value:
                 value = value.rsplit(".", 1)[0]
             job[canon] = value
+
+        # RAPS reads the person from the ``account`` slot; keep the canonical
+        # project available as ``project`` so no information is lost.
+        if self.account_source == "user" and job.get("user"):
+            if "account" in mapped:
+                job["project"] = job.get("account")
+            job["account"] = job["user"]
 
         # Apply priority policy when the source data has no priority column
         if self._priority_fn is not None and not job.get("priority"):
@@ -1743,8 +1782,12 @@ class BuildJobDicts(PipelineStep):
                  system_name: str = "unknown",
                  priority_policy: Optional[str] = None,
                  id_strip_suffix: bool = False,
-                 gpu_residual_config: Optional[Dict[str, Any]] = None):
+                 gpu_residual_config: Optional[Dict[str, Any]] = None,
+                 clamp_negative: bool = True,
+                 account_source: str = "user"):
         super().__init__()
+        self.clamp_negative = clamp_negative
+        self.account_source = account_source
         self.power_config = power_config
         self.trace_quanta = trace_quanta
         self.topology = topology
@@ -1775,6 +1818,8 @@ class BuildJobDicts(PipelineStep):
             priority_policy=self.priority_policy,
             id_strip_suffix=self.id_strip_suffix,
             gpu_residual_config=self.gpu_residual_config,
+            clamp_negative=self.clamp_negative,
+            account_source=self.account_source,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
 

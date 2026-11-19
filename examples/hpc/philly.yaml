@@ -28,7 +28,7 @@ raps_jobs:
   column_overrides:
     # Philly JSON field names → RAPS canonical
     jobid: id
-    user: account
+    user: user
     submitted_time: submit_time
     status: end_state
     vc: partition                  # virtual cluster → partition

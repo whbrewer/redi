@@ -39,7 +39,7 @@ raps_jobs:
     walltime_limit: time_limit
     runtime: expected_run_time
     nodes_required_canonical: nodes_required   # D7-corrected node count, not nodes_numeric_raw
-    user_id: account
+    user_id: user
     used_gpus: gpu_units_required
 
     # The auto-mapper's token/fuzzy matching (redi/domains/hpc/job_mapper.py
