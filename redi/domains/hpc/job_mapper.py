@@ -1536,12 +1536,23 @@ def _xname_to_index(xname: str, topology: Dict[str, Any]) -> int:
 _NODE_CONVERTERS = {"frontier": _xname_to_index}
 
 
+def _stable_node_id(name: str) -> int:
+    """Deterministic integer id for a node name (0 <= id < 1e9).
+
+    Replaces ``hash()``, which Python salts per process (PYTHONHASHSEED), so the same node list
+    gave different ids on every run.  This is only an *identifier*: it is not a physical node index
+    and is usually far larger than the system's node count, so it is not usable for RAPS node
+    placement.  Systems with a real name-to-index rule (Frontier's xnames) have a dedicated converter.
+    """
+    return int.from_bytes(hashlib.blake2b(str(name).encode(), digest_size=4).digest(), "big") % (10 ** 9)
+
+
 def convert_node_names(names: List[Any], system_name: str,
                        topology: Optional[Dict[str, Any]] = None) -> List[int]:
     """Convert node name strings to integer indices.
 
     Uses a system-specific converter when available (e.g. Frontier xname),
-    otherwise falls back to stable hashing.
+    otherwise falls back to a deterministic hash (see ``_stable_node_id``).
     """
     fn = _NODE_CONVERTERS.get(system_name)
     result: List[int] = []
@@ -1555,12 +1566,12 @@ def convert_node_names(names: List[Any], system_name: str,
             try:
                 result.append(fn(s, topology))
             except (IndexError, ValueError):
-                result.append(abs(hash(s)) % (10**9))
+                result.append(_stable_node_id(s))
         else:
             try:
                 result.append(int(float(s)))
             except (ValueError, TypeError):
-                result.append(abs(hash(s)) % (10**9))
+                result.append(_stable_node_id(s))
     return result
 
 
@@ -1617,7 +1628,7 @@ def _parse_node_list(val: Any) -> List[int]:
             result.append(int(float(item)))
         except (ValueError, TypeError):
             # Hash hostname to a stable positive int
-            result.append(abs(hash(str(item))) % (10**9))
+            result.append(_stable_node_id(str(item)))
     return result
 
 
