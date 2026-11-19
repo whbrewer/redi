@@ -18,6 +18,7 @@ import logging
 import re
 import sys
 import time
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -424,6 +425,14 @@ def _tokenize(s: str) -> List[str]:
 # 3. FieldDeriver
 # ---------------------------------------------------------------------------
 
+# Largest value accepted as a job duration/limit in seconds (about 3.2 years).  Larger
+# numbers are epoch timestamps or "unlimited" sentinels, not durations.
+MAX_PLAUSIBLE_DURATION_S = 1e8
+# Values schedulers use for "no limit": SLURM stores UNLIMITED as UINT32_MAX, some
+# systems use INT32_MAX.
+DURATION_SENTINELS = (4294967295, 2147483647)
+
+
 class FieldDeriver:
     """Derives missing canonical fields from available data."""
 
@@ -431,8 +440,10 @@ class FieldDeriver:
         """Add derived columns and update the mapping.
 
         Returns:
-            Updated (df, mapping) with derived columns added.
+            Updated (df, mapping) with derived columns added.  ``self.sanity`` collects
+            data-quality notes about values that were replaced.
         """
+        self.sanity: List[Dict[str, Any]] = []
         mapped = dict(mapping.mapped)
         conf = dict(mapping.confidence)
 
@@ -471,31 +482,42 @@ class FieldDeriver:
             conf["expected_run_time"] = 0.9
             logger.info("Derived expected_run_time from end_time - start_time")
 
-        # time_limit ← clean up SLURM UINT32_MAX sentinel (4294967295 = unlimited).
-        # sacct stores "no limit" as 2^32-1; treat those as 0 (RAPS default for unlimited).
-        _UINT32_MAX = 4294967295
+        # time_limit ← values that are not durations become 0 (= unknown / unlimited, RAPS's
+        # default): "no limit" sentinels (SLURM stores UNLIMITED as UINT32_MAX) and epoch-sized
+        # numbers (e.g. a column that actually holds a submit timestamp).  Sources scaled by
+        # ApplyColumnScalars have their sentinels removed there, before the scaling turns them
+        # into ordinary-looking large numbers.
         if "time_limit" in mapped:
             _tl_col = mapped["time_limit"]
             if _tl_col in df.columns:
                 _tl_vals = pd.to_numeric(df[_tl_col], errors="coerce")
-                _n_sentinel = (_tl_vals == _UINT32_MAX).sum()
-                if _n_sentinel > 0:
+                _is_sentinel = _tl_vals.isin(DURATION_SENTINELS)
+                _is_epoch = (_tl_vals > MAX_PLAUSIBLE_DURATION_S) & ~_is_sentinel
+                _bad = _is_sentinel | _is_epoch
+                if _bad.any():
                     derived_col = "_derived_time_limit"
-                    df[derived_col] = _tl_vals.where(_tl_vals != _UINT32_MAX, other=0.0)
+                    df[derived_col] = _tl_vals.where(~_bad, other=0.0)
                     mapped["time_limit"] = derived_col
                     conf["time_limit"] = 0.9
-                    logger.info(
-                        f"time_limit column '{_tl_col}' has {_n_sentinel} UINT32_MAX sentinel "
-                        f"values (SLURM 'unlimited'); replaced with 0"
-                    )
+                    _note = {"field": "time_limit", "source_column": _tl_col,
+                             "issue": "values are not durations; replaced with 0 (unknown)",
+                             "sentinel_rows": int(_is_sentinel.sum()), "epoch_sized_rows": int(_is_epoch.sum()),
+                             "total_rows": int(len(df)), "example_values": [float(v) for v in _tl_vals[_bad].head(3)]}
+                    self.sanity.append(_note)
+                    logger.warning(f"time_limit column '{_tl_col}': {int(_is_sentinel.sum())} sentinel and "
+                                   f"{int(_is_epoch.sum())} epoch-sized values (> {MAX_PLAUSIBLE_DURATION_S:.0e} s) "
+                                   f"replaced with 0")
 
-        # name ← uuid4[:6] (matches RAPS convention)
+        # name ← 6 hex characters (RAPS convention is a random uuid4[:6]); derived from a hash of
+        # the job id so that two runs on the same input give the same names.
         if "name" not in mapped:
             derived_col = "_derived_name"
-            df[derived_col] = [uuid.uuid4().hex[:6] for _ in range(len(df))]
+            _id_col = mapped.get("id")
+            _keys = df[_id_col].astype(str) if _id_col in df.columns else pd.Series(df.index.astype(str), index=df.index)
+            df[derived_col] = [hashlib.blake2b(k.encode(), digest_size=3).hexdigest() for k in _keys]
             mapped["name"] = derived_col
             conf["name"] = 0.8
-            logger.info("Derived name as uuid4[:6]")
+            logger.info("Derived name as a hash of the job id")
 
         # nodes_required ← len(scheduled_nodes)
         if "nodes_required" not in mapped and "scheduled_nodes" in mapped:
@@ -580,6 +602,8 @@ class TraceNormalizer:
         """
         self.power_config = power_config or {}
         self.clamp_negative = clamp_negative
+        self.sanity: List[Dict[str, Any]] = []   # data-quality notes (e.g. power traces that could not be converted)
+        self._warned: set = set()
 
     def normalize_trace(self, value: Any, canonical_name: str, col_name: str,
                         wall_time: float = 0, nodes_required: int = 1) -> Any:
@@ -702,6 +726,15 @@ class TraceNormalizer:
                 v = float((value - idle) / (max_p - idle))
                 return max(0.0, v) if self.clamp_negative else v
             else:
+                # Power-valued trace but no usable power config: the result is 0, which looks
+                # like real data.  Say so, once per column.
+                if (trace_type, col_name) not in self._warned:
+                    self._warned.add((trace_type, col_name))
+                    note = {"field": canonical_name, "source_column": col_name,
+                            "issue": f"power-valued trace but no power_config for '{trace_type}' "
+                                     "(RAPS not installed and none in the yaml): every value set to 0"}
+                    self.sanity.append(note)
+                    logger.warning(f"data quality: {note}")
                 return 0.0
 
         elif fmt == "percentage":
@@ -1697,7 +1730,17 @@ class ApplyColumnScalars(PipelineStep):
         for col, factor in self.scalars.items():
             if col in df.columns:
                 df = df.copy() if df is ctx.data else df  # avoid in-place on original
-                df[col] = pd.to_numeric(df[col], errors="coerce") * factor
+                vals = pd.to_numeric(df[col], errors="coerce")
+                # "No limit" sentinels (SLURM UNLIMITED = UINT32_MAX) must go before the multiplication,
+                # which would turn 4294967295 minutes into a plausible-looking 2.6e11 seconds.
+                sent = vals.isin(DURATION_SENTINELS)
+                if sent.any():
+                    vals = vals.mask(sent)
+                    ctx.metadata.setdefault("field_sanity", []).append({
+                        "field": col, "source_column": col, "issue": "sentinel values removed before unit scaling (become unknown)",
+                        "sentinel_rows": int(sent.sum()), "total_rows": int(len(vals)), "example_values": [float(v) for v in df[col][sent].head(1)]})
+                    logger.warning(f"Column '{col}': {int(sent.sum())} 'no limit' sentinel values removed before scaling")
+                df[col] = vals * factor
                 logger.info(f"Applied scalar ×{factor} to column '{col}'")
         ctx.data = df
         return ctx
@@ -1757,6 +1800,8 @@ class DeriveJobFields(PipelineStep):
 
         deriver = FieldDeriver()
         ctx.data, new_mapping = deriver.derive(ctx.data, mapping)
+        if deriver.sanity:
+            ctx.metadata.setdefault("field_sanity", []).extend(deriver.sanity)
 
         ctx.metadata["raps_column_mapping"] = new_mapping.mapped
         ctx.metadata["raps_mapping_confidence"] = new_mapping.confidence
@@ -1767,6 +1812,38 @@ class DeriveJobFields(PipelineStep):
             logger.warning(f"Still missing required fields after derivation: {new_mapping.missing_required}")
 
         return ctx
+
+
+def field_sanity_report(jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Data-quality notes about the finished job dicts: fields that are constant, all zero,
+    negative, or epoch-sized.  These do not stop the run; they make a silently broken field
+    visible in the output manifest (and in the log) instead of in a downstream model."""
+    notes: List[Dict[str, Any]] = []
+    n = len(jobs)
+    if n < 10:
+        return notes
+    for f in ("nodes_required", "cpu_cores_required", "gpu_units_required", "time_limit",
+              "expected_run_time", "priority"):
+        v = np.array([float(j.get(f) or 0) for j in jobs])
+        if np.all(v == v[0]):
+            notes.append({"field": f, "issue": "constant" if v[0] else "all zero (field unavailable or unmapped)",
+                          "value": float(v[0]), "total_rows": n})
+        if (v < 0).any():
+            notes.append({"field": f, "issue": "negative values (sentinel for unknown?)", "rows": int((v < 0).sum()),
+                          "example": float(v[v < 0][0]), "total_rows": n})
+        if f in ("time_limit", "expected_run_time") and (v > MAX_PLAUSIBLE_DURATION_S).any():
+            notes.append({"field": f, "issue": f"epoch-sized values (> {MAX_PLAUSIBLE_DURATION_S:.0e} s)",
+                          "rows": int((v > MAX_PLAUSIBLE_DURATION_S).sum()), "total_rows": n})
+    for f in ("cpu_trace", "gpu_trace"):
+        peak = 0.0
+        for j in jobs:
+            t = j.get(f)
+            a = np.asarray(0.0 if t is None else t, dtype=float)
+            if a.size:
+                peak = max(peak, float(np.nanmax(np.abs(a))))
+        if peak == 0.0:
+            notes.append({"field": f, "issue": "all zero in every job (no usable signal)", "total_rows": n})
+    return notes
 
 
 class BuildJobDicts(PipelineStep):
@@ -1822,10 +1899,15 @@ class BuildJobDicts(PipelineStep):
             account_source=self.account_source,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
+        ctx.metadata.setdefault("field_sanity", []).extend(builder.trace_normalizer.sanity)
 
         ctx.data = jobs
         ctx.metadata["raps_job_count"] = len(jobs)
         ctx.metadata["_raps_ref_time"] = ref_time
+        report = field_sanity_report(jobs)
+        for note in report:
+            logger.warning(f"data quality: {note}")
+        ctx.metadata.setdefault("field_sanity", []).extend(report)
 
         return ctx
 
@@ -1897,6 +1979,7 @@ class SaveJobDicts(PipelineStep):
             "unmapped_columns": ctx.metadata.get("raps_unmapped_columns", []),
             "missing_required": ctx.metadata.get("raps_missing_required", []),
             "job_count": ctx.metadata.get("raps_job_count", 0),
+            "field_sanity": ctx.metadata.get("field_sanity", []),
             "telemetry_start": telemetry_start,
             "telemetry_end": telemetry_end,
         }

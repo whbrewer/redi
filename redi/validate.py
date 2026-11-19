@@ -460,6 +460,20 @@ def raps_sample_comparison(
     return results
 
 
+_TL_MASK_WARNED = False
+
+
+def _warn_masked_time_limit() -> None:
+    """validate treats an epoch/sentinel time_limit as 'unknown' on both sides, so the time_limit
+    agreement it reports is then really an expected_run_time agreement.  Say so once."""
+    global _TL_MASK_WARNED
+    if not _TL_MASK_WARNED:
+        _TL_MASK_WARNED = True
+        logger.warning("validate: time_limit values above 1e8 s (epoch timestamps or 'unlimited' sentinels) "
+                       "are masked to 0 and compared via expected_run_time; time_limit agreement is not "
+                       "evidence for those jobs")
+
+
 _RAPS_STAT_FIELDS = [
     "nodes_required", "time_limit", "expected_run_time",
     "priority", "wait_time", "run_time", "trace_quanta",
@@ -500,6 +514,7 @@ def _get_job_field_value(job: dict, field: str) -> float:
         # UINT32_MAX=4294967295 stored in minutes then ×60 by RAPS → 2.58e11).
         # Treat as "no limit" → 0 so both sides compare the same quantity.
         if fval > 1e8:
+            _warn_masked_time_limit()
             fval = 0.0
     # time_limit=0 means it was not available in the source data (e.g. Philly).
     # Fall back to expected_run_time so both sides compare the same quantity.
