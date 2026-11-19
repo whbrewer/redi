@@ -1299,7 +1299,7 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
                       jobprofile_path=None, topology=None, priority_policy=None,
                       id_strip_suffix=False, column_scalars=None,
                       gpu_residual_config=None, clamp_negative=True,
-                      account_source="user"):
+                      account_source="user", state_encoding=None):
     """Get the RAPS Job extraction pipeline.
 
     Args:
@@ -1336,7 +1336,8 @@ def get_raps_pipeline(column_overrides=None, power_config=None, trace_quanta=Non
                       topology=topology, system_name=system_name,
                       priority_policy=priority_policy, id_strip_suffix=id_strip_suffix,
                       gpu_residual_config=gpu_residual_config,
-                      clamp_negative=clamp_negative, account_source=account_source),
+                      clamp_negative=clamp_negative, account_source=account_source,
+                      state_encoding=state_encoding),
         SaveJobDicts(output_format=output_format, system_name=system_name),
         WriteChecksums(),
     ]

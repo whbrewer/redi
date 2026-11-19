@@ -25,6 +25,9 @@ raps_jobs:
   system_name: mit_supercloud
   trace_quanta: 10          # part-cpu trace resolution (part-gpu uses 20, but CPU partition dominates)
 
+  # `state` holds SLURM job-state numbers (3 COMPLETED, 4 CANCELLED, 5 FAILED, 6 TIMEOUT, 11 OUT_OF_MEMORY)
+  state_encoding: slurm_code
+
   column_scalars:
     timelimit: 60           # SLURM stores timelimit in minutes; convert to seconds
 
@@ -37,9 +40,9 @@ raps_jobs:
     time_start: start_time
     time_end: end_time
     timelimit: time_limit
-    state: end_state
+    state: end_state             # SLURM job-state code (see state_encoding); NOT exit_code: SLURM records
+                                 # CANCELLED/TIMEOUT jobs with exit_code 0, which would read as COMPLETED
     partition: partition
     priority: priority
     cpus_req: cpu_cores_required
     nodelist: scheduled_nodes
-    exit_code: end_state         # fallback if 'state' is unavailable

@@ -331,6 +331,9 @@ class ColumnMapper:
         # Phase 1: manual overrides
         for col, canonical in self.overrides.items():
             if col in columns:
+                if canonical in mapped:
+                    logger.warning(f"Two overrides map to '{canonical}': '{mapped[canonical]}' and '{col}'; "
+                                   f"using '{col}'. Remove one of them if that is not intended.")
                 mapped[canonical] = col
                 confidence[canonical] = 1.0
                 used_columns.add(col)
@@ -811,6 +814,20 @@ _STATE_MAP = {
     "out_of_memory": "OUT_OF_MEMORY",
     "running": "RUNNING",
     "pending": "PENDING",
+    # Philly (Microsoft) job status: Pass / Failed / Killed ("Killed" = stopped by the user or
+    # the scheduler, the closest RAPS state is CANCELLED)
+    "pass": "COMPLETED",
+    "killed": "CANCELLED",
+}
+
+# SLURM's numeric job-state enum (slurm/slurm.h, enum job_states), as stored in the integer
+# `state` column of e.g. the MIT Supercloud slurm log.  Mapped into REDI's state vocabulary;
+# the rarer states (preempted, boot failure, deadline) go to their nearest equivalent.  Only
+# used when a config says `state_encoding: slurm_code`: a bare number is otherwise read as an
+# exit code (0 = COMPLETED, anything else FAILED).
+_SLURM_STATE_CODES = {
+    0: "PENDING", 1: "RUNNING", 2: "RUNNING", 3: "COMPLETED", 4: "CANCELLED", 5: "FAILED",
+    6: "TIMEOUT", 7: "NODE_FAIL", 8: "CANCELLED", 9: "NODE_FAIL", 10: "TIMEOUT", 11: "OUT_OF_MEMORY",
 }
 
 
@@ -848,8 +865,11 @@ class JobDictBuilder:
                  id_strip_suffix: bool = False,
                  gpu_residual_config: Optional[Dict[str, Any]] = None,
                  clamp_negative: bool = True,
-                 account_source: str = "user"):
+                 account_source: str = "user",
+                 state_encoding: Optional[str] = None):
         """
+        state_encoding: how a numeric end-state column is read: None (exit code) or
+            ``"slurm_code"`` (SLURM job-state enum).
         account_source: which canonical field fills the job dict's ``account``
             slot, which RAPS reads.  ``"user"`` (default) matches RAPS's own
             dataloaders, which put the user ID there; when no ``user`` column is
@@ -860,6 +880,7 @@ class JobDictBuilder:
         self.trace_normalizer = TraceNormalizer(power_config=power_config,
                                                 clamp_negative=clamp_negative)
         self.account_source = account_source
+        self.state_encoding = state_encoding
         self.power_config = power_config or {}
         self.trace_quanta = trace_quanta
         self.jobprofile_df = jobprofile_df
@@ -1350,7 +1371,7 @@ class JobDictBuilder:
                 raw, fs.canonical_name, col_name)
 
         if fs.field_type == "state":
-            return _normalize_state(raw)
+            return _normalize_state(raw, self.state_encoding)
 
         if fs.field_type == "list":
             return _parse_node_list(raw)
@@ -1451,12 +1472,25 @@ def _parse_duration(val: Any) -> float:
     return 0.0
 
 
-def _normalize_state(val: Any) -> str:
-    """Normalize job state to RAPS format."""
+def _normalize_state(val: Any, encoding: Optional[str] = None) -> str:
+    """Normalize job state to RAPS format.
+
+    ``encoding="slurm_code"``: numbers are SLURM job-state codes (3 = COMPLETED, 4 = CANCELLED,
+    5 = FAILED, 6 = TIMEOUT, ...), not exit codes; an unknown code or a flags-only value
+    counts as FAILED.  Default (None): a number is an exit code.
+    """
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return "COMPLETED"
 
     s = str(val).strip().lower()
+
+    if encoding == "slurm_code":
+        try:
+            code = int(float(s))
+        except (ValueError, TypeError):
+            code = None
+        if code is not None:
+            return _SLURM_STATE_CODES.get(code, "FAILED")
 
     # Direct lookup
     if s in _STATE_MAP:
@@ -1861,10 +1895,12 @@ class BuildJobDicts(PipelineStep):
                  id_strip_suffix: bool = False,
                  gpu_residual_config: Optional[Dict[str, Any]] = None,
                  clamp_negative: bool = True,
-                 account_source: str = "user"):
+                 account_source: str = "user",
+                 state_encoding: Optional[str] = None):
         super().__init__()
         self.clamp_negative = clamp_negative
         self.account_source = account_source
+        self.state_encoding = state_encoding
         self.power_config = power_config
         self.trace_quanta = trace_quanta
         self.topology = topology
@@ -1897,6 +1933,7 @@ class BuildJobDicts(PipelineStep):
             gpu_residual_config=self.gpu_residual_config,
             clamp_negative=self.clamp_negative,
             account_source=self.account_source,
+            state_encoding=self.state_encoding,
         )
         jobs, ref_time = builder.build_jobs(ctx.data, mapping)
         ctx.metadata.setdefault("field_sanity", []).extend(builder.trace_normalizer.sanity)
